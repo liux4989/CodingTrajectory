@@ -37,10 +37,11 @@ jobs:
       - name: Check Python sources
         run: |
           uv run python -m compileall -q packages/core/src packages/cli/src
-          scripts/check-datahub-static.sh
+          uv run ruff check packages/plugins/loop/loop_plugin scripts/check-loop.py scripts/prepare-loop-demo.py
 
       - name: Validate repository contracts
         run: |
+          uv run python scripts/check-core-protocol.py
           uv run python scripts/validate-local-first-source-selection.py
           uv run python scripts/qualify-canonical-repository.py
           uv run python scripts/qualify-connection-workflows.py
@@ -81,24 +82,20 @@ jobs:
         run: |
           uv sync --all-packages --frozen
           npm --prefix cloudflare/control-plane ci
-          bun --cwd packages/plugins/datahub/web ci
+          bun --cwd packages/plugins/loop/web ci
 
       - name: Check control plane
         run: npm --prefix cloudflare/control-plane run check
 
-      - name: Check and build Datahub
-        working-directory: packages/plugins/datahub/web
+      - name: Check and build Loop
+        working-directory: packages/plugins/loop/web
         run: |
-          bun run check:api
-          bun run types:worker
-          git diff --exit-code -- worker/worker-configuration.d.ts
-          bun run check:worker
-          bun run build:hosted
+          bun run check
+          bun run build
+
+      - name: Qualify local Loop integration
+        run: uv run python scripts/check-loop.py
 
       - name: Bundle control plane without deploying
         working-directory: cloudflare/control-plane
         run: npx wrangler deploy --dry-run --env="" --outdir ../../.artifacts/ci/control-plane
-
-      - name: Bundle Datahub without deploying
-        working-directory: packages/plugins/datahub/web
-        run: bunx wrangler deploy --dry-run --env="" --config ../wrangler.live.jsonc --outdir ../../../../.artifacts/ci/datahub

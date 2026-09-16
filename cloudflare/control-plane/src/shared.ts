@@ -115,3 +115,17 @@ export class State {
     this.sql.exec("INSERT INTO records VALUES(?,?,?,?) ON CONFLICT(kind,key,sequence) DO UPDATE SET payload=excluded.payload", kind, key, sequence, encoded);
   }
 }
+
+/** Bounded-content guard for chronicle/fact payloads retained remotely. */
+export function safeChronicle(value: any, field = "") {
+  if (typeof value === "string") {
+    requireThat(value.length <= 512, "unbounded_chronicle_string");
+    if (["content", "text_preview", "preview", "title"].includes(field)) { requireThat(value.length > 0 && value.length <= 280, "invalid_preview"); return; }
+    requireThat(!/^\s*data:/i.test(value) && !/(?:\/Users\/|\/home\/|[A-Za-z]:\\|~\/)/.test(value) && !(value.length >= 128 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)), "private_chronicle_content");
+  } else if (Array.isArray(value)) for (const child of value) safeChronicle(child, field);
+  else if (value && typeof value === "object") for (const [key, child] of Object.entries(value)) {
+    const empty = child == null || child === "" || (Array.isArray(child) && child.length === 0) || (typeof child === "object" && Object.keys(child as object).length === 0);
+    requireThat(empty || !/(data_uri|blob|media)/.test(key.toLowerCase().replace(/-/g, "_")), "embedded_chronicle_content");
+    safeChronicle(child, key);
+  }
+}

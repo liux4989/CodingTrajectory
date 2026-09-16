@@ -4,10 +4,17 @@ set -euo pipefail
 if (($#)); then
   changed_paths="$(git diff --name-only "$@")"
 else
-  changed_paths="$(git status --porcelain=v1 --untracked-files=all | sed -E 's/^...//' | sed -E 's/.* -> //')"
-  if [[ -z "$changed_paths" ]] && git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-    changed_paths="$(git diff --name-only HEAD^ HEAD)"
+  working_paths="$(git status --porcelain=v1 --untracked-files=all | sed -E 's/^...//' | sed -E 's/.* -> //')"
+  base_ref="${CT_METRICS_BASE_REF:-origin/main}"
+  if git rev-parse --verify "$base_ref^{commit}" >/dev/null 2>&1; then
+    merge_base="$(git merge-base HEAD "$base_ref")"
+    committed_paths="$(git diff --name-only "$merge_base" HEAD)"
+  elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+    committed_paths="$(git diff --name-only HEAD^ HEAD)"
+  else
+    committed_paths=""
   fi
+  changed_paths="$(printf '%s\n%s\n' "$committed_paths" "$working_paths" | sed '/^$/d' | sort -u)"
 fi
 
 trigger_pattern='^(packages/core/src/coding_trajectory/(ingestion|metrics|analysis)/|packages/core/src/coding_trajectory/(contracts|service|runtime)\.py$|docs/token-usage-glossary\.md$|validation/metrics/|scripts/validate-metrics-baselines\.py$)'

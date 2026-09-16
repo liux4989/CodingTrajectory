@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.ingestion.models import Session, Vendor
-from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
+from coding_trajectory.ingestion.provenance import (
+    RecordSpan,
+    SessionProvenance,
+    SourceOccurrence,
+    SourceOccurrenceDisposition,
+)
 
 if TYPE_CHECKING:
     from coding_trajectory.ingestion.retention import CanonicalRetention
@@ -35,6 +41,24 @@ class BaseAdapter(ABC):
     def _reset_ingest_state(self) -> None:
         pass
 
+    def _reset_source_provenance(self) -> None:
+        self.last_provenance: SessionProvenance | None = None
+        self._source_occurrences: list[SourceOccurrence] = []
+
+    def _finish_source_provenance(
+        self, path: Path, *, session_id: UUID | None = None
+    ) -> None:
+        provenance = self.last_provenance
+        if provenance is None:
+            provenance = SessionProvenance(
+                session_id=session_id,
+                vendor=self.vendor,
+                source_path=str(path),
+            )
+        self.last_provenance = replace(
+            provenance, occurrences=tuple(self._source_occurrences)
+        )
+
     def _iter_records(self, path: Path) -> Iterator[dict]:
         for record, _span in self._iter_record_spans(path):
             yield record
@@ -45,28 +69,49 @@ class BaseAdapter(ABC):
         The digest covers the exact stripped line bytes that ``json.loads``
         parsed, so hydration can verify it re-read the same record bytes.
         """
-        import hashlib
-
+        if not hasattr(self, "_source_occurrences"):
+            self._source_occurrences = []
         with path.open("rb") as fh:
             offset = 0
-            for raw_line in fh:
+            for ordinal, raw_line in enumerate(fh):
                 end = offset + len(raw_line)
                 stripped = raw_line.strip()
+                digest = hashlib.sha256(stripped).hexdigest()
+                occurrence_id = uuid5(
+                    NAMESPACE_URL,
+                    f"coding-trajectory:source-occurrence:{path.resolve()}:{ordinal}:{offset}:{end}:{digest}",
+                )
+                span = RecordSpan(
+                    occurrence_id=occurrence_id,
+                    ordinal=ordinal,
+                    byte_offset=offset,
+                    byte_end=end,
+                    digest=digest,
+                )
+                disposition: SourceOccurrenceDisposition = "blank"
+                obj = None
                 if stripped:
                     try:
                         obj = json.loads(stripped.decode("utf-8"))
+                    except UnicodeDecodeError:
+                        disposition = "invalid_encoding"
                     except json.JSONDecodeError:
-                        offset = end
-                        continue
-                    if isinstance(obj, dict):
-                        yield (
-                            obj,
-                            RecordSpan(
-                                byte_offset=offset,
-                                byte_end=end,
-                                digest=hashlib.sha256(stripped).hexdigest(),
-                            ),
+                        disposition = "invalid_json"
+                    else:
+                        disposition = (
+                            "parsed" if isinstance(obj, dict) else "non_object"
                         )
+                self._source_occurrences.append(
+                    SourceOccurrence(
+                        occurrence_id=occurrence_id,
+                        ordinal=ordinal,
+                        span=span,
+                        disposition=disposition,
+                    )
+                )
+                if disposition == "parsed":
+                    assert isinstance(obj, dict)
+                    yield obj, span
                 offset = end
 
     def _load_records(self, path: Path) -> list[dict]:
@@ -90,13 +135,16 @@ class BaseAdapter(ABC):
         carries canonical-id -> source-byte-span mappings.
         """
         self._reset_ingest_state()
-        self.last_provenance: SessionProvenance | None = None
-        records: Iterable[tuple[dict, RecordSpan | None]] = (
-            self._iter_record_spans(path)
-            if retention == "measurements"
-            else ((record, None) for record in self._load_records(path))
-        )
-        return self._build_session(path, records, retention=retention)
+        self._reset_source_provenance()
+        try:
+            session = self._build_session(
+                path, self._iter_record_spans(path), retention=retention
+            )
+        except Exception:
+            self._finish_source_provenance(path)
+            raise
+        self._finish_source_provenance(path, session_id=session.session_id)
+        return session
 
     def build_canonical_session(
         self,
@@ -118,7 +166,7 @@ class BaseAdapter(ABC):
         cutting needs it (Codex overrides this method).
         """
         self._reset_ingest_state()
-        self.last_provenance: SessionProvenance | None = None
+        self._reset_source_provenance()
         return self._build_session(
             source,
             ((record, None) for record in records),

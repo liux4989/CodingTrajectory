@@ -13,17 +13,16 @@ from uuid import UUID
 from coding_trajectory.contracts import command_schema
 from coding_trajectory.contracts.envelope import CORE_PROTOCOL
 from coding_trajectory.control_plane.authority import MethodAuthority
-from coding_trajectory.control_plane.remote import (
-    CloudflareHistoricalRepository,
-    CloudflareRpcClient,
+from coding_trajectory.control_plane.fact_repository import (
+    CloudflareFactRepository,
+    FactRepository,
 )
-from coding_trajectory.control_plane.remote_catalog import CloudflareCatalogRepository
-from coding_trajectory.control_plane.remote_estimation import RemoteEstimationAuthority
+from coding_trajectory.control_plane.remote import CloudflareRpcClient
 from coding_trajectory.control_plane.remote_inventory import (
     CloudflareProjectInventoryRepository,
 )
 from coding_trajectory.control_plane.remote_living import CloudflareLivingAuthority
-from coding_trajectory.runtime import HistoricalRepository, ServiceRuntime
+from coding_trajectory.runtime import ServiceRuntime
 
 
 class RemoteRuntimeFactory:
@@ -38,14 +37,12 @@ class RemoteRuntimeFactory:
         access_token: str,
         *,
         snapshot_sequence: int | None = None,
-        local_evidence: bool = False,
         current_dir: Path | None = None,
     ) -> ServiceRuntime:
         return ServiceRuntime(
             **self.runtime_options(
                 access_token,
                 snapshot_sequence=snapshot_sequence,
-                local_evidence=local_evidence,
                 current_dir=current_dir,
             )
         )
@@ -55,10 +52,9 @@ class RemoteRuntimeFactory:
         access_token: str,
         *,
         snapshot_sequence: int | None = None,
-        local_evidence: bool = False,
         current_dir: Path | None = None,
     ) -> dict[str, Any]:
-        """Resolve the same database authorities for every client surface."""
+        """Resolve the same fact authorities for every client surface."""
         if not access_token:
             raise ValueError("access token must not be empty")
         if snapshot_sequence is not None and (
@@ -68,15 +64,12 @@ class RemoteRuntimeFactory:
         ):
             raise ValueError("snapshot_sequence must be a non-negative integer")
         client = CloudflareRpcClient(url=self._url, access_token=access_token)
-        catalog = None
         if snapshot_sequence is None:
-            catalog = CloudflareCatalogRepository(
-                client=client, workspace_id=self.workspace_id
+            pinned = client.call(
+                "ct_workspace_snapshot",
+                {"workspace_id": str(self.workspace_id)},
             )
-            # Select the catalog heads and the separate compatibility/estimation
-            # fence in one authority transaction, not two racing metadata reads.
-            selected = catalog.page(kind="status").selection
-            sequence = selected.workspace_sequence
+            sequence = pinned.get("snapshot_sequence")
         else:
             pinned = client.call(
                 "ct_workspace_snapshot",
@@ -88,20 +81,11 @@ class RemoteRuntimeFactory:
             sequence = pinned.get("snapshot_sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("remote workspace returned an invalid snapshot sequence")
-        historical: HistoricalRepository = CloudflareHistoricalRepository(
+        historical: FactRepository = CloudflareFactRepository(
             client=client,
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
-            catalog=catalog,
         )
-        if local_evidence:
-            from coding_trajectory.control_plane.local_evidence import (
-                LocalEvidenceRepository,
-            )
-
-            historical = LocalEvidenceRepository(
-                historical, current_dir=current_dir or Path.cwd()
-            )
         inventory = CloudflareProjectInventoryRepository(
             client=client,
             workspace_id=self.workspace_id,
@@ -117,20 +101,15 @@ class RemoteRuntimeFactory:
             snapshot_sequence=snapshot_sequence,
         )
         handlers: dict[MethodAuthority, Callable[..., Any]] = {
-            MethodAuthority.PROJECT_INVENTORY: catalog.call if catalog else inventory,
+            MethodAuthority.PROJECT_INVENTORY: inventory,
             MethodAuthority.LIVING: living,
-            MethodAuthority.ESTIMATION: RemoteEstimationAuthority(
-                client=client,
-                workspace_id=self.workspace_id,
-                snapshot_sequence=sequence,
-            ),
         }
         metadata = {
             "workspace_id": str(self.workspace_id),
             "snapshot_sequence": sequence,
             "source": "remote",
             "freshness": "authoritative",
-            "content_scope": "chronicle",
+            "content_scope": "facts",
         }
         return {
             "global_scope": True,

@@ -112,9 +112,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _counts(graphs: list[SessionGraph]) -> tuple[int, int, int]:
     sessions = sum(len(graph.sessions) for graph in graphs)
-    turns = sum(
-        len(session.turns) for graph in graphs for session in graph.sessions
-    )
+    turns = sum(len(session.turns) for graph in graphs for session in graph.sessions)
     items = sum(
         len(turn.items)
         for graph in graphs
@@ -212,9 +210,7 @@ def _validate_narrative_previews(
     graph: SessionGraph, artifact: ChronicleGraphArtifact
 ) -> tuple[int, int]:
     index = build_session_graph_index(graph)
-    artifact_sessions = {
-        session.session_id: session for session in artifact.sessions
-    }
+    artifact_sessions = {session.session_id: session for session in artifact.sessions}
     user_requests = 0
     assistant_responses = 0
     for session in graph.sessions:
@@ -241,9 +237,7 @@ def _validate_narrative_previews(
                     continue
                 measurements = item.measurements or extract_item_measurements(item)
                 expected_response = _preview(measurements.text_preview)
-                actual_response = (
-                    artifact_items[item.item_id].measurements.text_preview
-                )
+                actual_response = artifact_items[item.item_id].measurements.text_preview
                 if actual_response != expected_response:
                     raise ValueError("assistant-response preview parity failed")
                 assistant_responses += expected_response is not None
@@ -251,12 +245,13 @@ def _validate_narrative_previews(
 
 
 def _api_params(method: str, graph: SessionGraph) -> dict[str, Any]:
+    # Clean-break contract: graph.* methods are rooted by root_session_id,
+    # session.* methods by session_id, and include flags no longer exist.
     if method == "project.sessions":
-        return {"include": ["usage", "runtime"]}
-    params: dict[str, Any] = {"session_id": str(graph.root_session_id)}
-    if method == "session.items":
-        params["include_content"] = False
-    return params
+        return {}
+    if method.startswith("graph."):
+        return {"root_session_id": str(graph.root_session_id)}
+    return {"session_id": str(graph.root_session_id)}
 
 
 def _dispatch(
@@ -337,21 +332,20 @@ def _validate_vendor(
 
             for method in API_METHODS:
                 params = _api_params(method, graph)
-                chronicle_result = _dispatch(
-                    method, params, replay_graph, project_root
-                )
+                chronicle_result = _dispatch(method, params, replay_graph, project_root)
                 report.api_calls += 1
                 if method in NUMERIC_PARITY_METHODS:
-                    canonical_result = _dispatch(
-                        method, params, graph, project_root
-                    )
+                    canonical_result = _dispatch(method, params, graph, project_root)
                     expected_numbers = _numeric_values(canonical_result)
                     actual_numbers = _numeric_values(chronicle_result)
                     if expected_numbers != actual_numbers:
                         raise ValueError(f"numeric API parity failed for {method}")
                     report.numeric_values_checked += len(expected_numbers)
 
-        if any(total > MAX_CHRONICLE_PUBLICATION_BYTES for total in publication_bytes.values()):
+        if any(
+            total > MAX_CHRONICLE_PUBLICATION_BYTES
+            for total in publication_bytes.values()
+        ):
             raise ValueError("one project publication exceeded its byte limit")
     except Exception as exc:  # noqa: BLE001 - keep private evidence out of output
         report.failures.append(f"qualification failed: {type(exc).__name__}")

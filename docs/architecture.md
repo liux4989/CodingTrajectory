@@ -1,93 +1,57 @@
 # Architecture
 
-CodingTrajectory reconstructs coding-agent logs into canonical session graphs
-and exposes versioned Pydantic contracts through a shared service runtime.
+CodingTrajectory reconstructs host-local coding-agent records into canonical
+`DocumentStore`/`SessionGraph` models and exposes versioned Pydantic contracts
+through one shared service runtime.
 
-## Data flow
+## Historical data flow
 
 ```text
-Host-local vendor logs (immutable evidence)
-  → vendor adapters → normalized transcript → Session → Turn → Item
-  → SessionGraph + DocumentStore
-      → local evidence handlers (content, events, search)
-      → locally assembled ct.chronicle_graph.v2
-          → shared historical handlers
-          → authenticated collector → Cloudflare workspace revisions + R2 artifacts
-              → snapshot-pinned DocumentStore → shared historical handlers
+immutable provider JSONL
+  → occurrence-aware ingestion and canonical reconstruction
+  → DocumentStore / SessionGraph with exact measurements
+  → private in-memory ChronicleGraphArtifact v3
+  → bounded PublishedFactSet
+      ├─→ local FactRepository ─┐
+      └─→ collector → Durable Object SQLite → remote FactRepository
+                                └──────────────→ shared historical handlers
 ```
 
-Local ingestion owns graph reconstruction and numeric measurements. Remote
-historical reads deserialize a validated artifact for the existing handlers;
-they do not ingest vendor logs or run the retired historical projector.
+Ingestion owns source occurrence identity, provenance, reconstruction, and exact
+pre-retention accounting. Chronicle publication consumes only the canonical
+graph. It projects allowlisted, bounded facts and never reparses raw provider
+payloads. The collector stages fact rows and checkpoints without changing their
+meaning. Cloudflare validates, versions, selects, and pages facts; shared Python
+handlers own historical summary and metric semantics.
 
-The [chronicle history contract](chronicle-history.md) defines exact coverage,
-privacy, digest, and size bounds. `session.search`, `session.events`, and
-`session.items` with content remain local. Metadata-only items are chronicle.
-Operational details must not be presented as complete transcript evidence.
+Raw records and occurrence inventories remain local. Remote historical state is
+queryable fact rows in Durable Object SQLite, not a whole-document store, chunk
+graph, reconstruction cache, or backup. Standard local and remote methods use
+the same fact representation and response contract.
 
-## Code ownership
+Living observations are a separate authority. Local/Core estimation under
+`packages/core/src/coding_trajectory/estimation/` is also separate; Cloudflare
+does not host estimation jobs or semantics.
+
+## Ownership
 
 | Location | Responsibility |
 | --- | --- |
-| `packages/core/src/coding_trajectory/ingestion/` | Vendor adapters, transcript assembly, retention, canonical resources |
-| `packages/core/src/coding_trajectory/discovery.py` | Source discovery, fenced loading, graph assembly |
-| `packages/core/src/coding_trajectory/contracts/` | Public request/response contracts |
-| `packages/core/src/coding_trajectory/service/` | Runtime, handlers, store resolution, index cache |
-| `packages/core/src/coding_trajectory/analysis/` | Evidence and activity projections |
-| `packages/core/src/coding_trajectory/metrics/` | Usage, attribution, context, and runtime measurements |
-| `packages/core/src/coding_trajectory/control_plane/` | Authority routing, strict sharing contracts, collector, remote repositories, HTTP service |
-| `packages/core/src/coding_trajectory/estimation/` | Forecast ledger, prediction, calibration, and backfill |
-| `packages/cli/src/coding_trajectory_cli/` | CLI commands, schema inspection, API calls, plugin dispatch |
-| `packages/plugins/datahub/datahub_plugin/` | Datahub backend and enrichment |
-| `packages/plugins/datahub/web/` | Datahub React frontend |
-| `cloudflare/control-plane/` | Native Worker, SQLite workspace authority, private R2 artifacts |
-| `validation/metrics/` | Committed evidence, audits, pinned pricing, and expected results |
-| `scripts/`, `benchmarks/` | Validation and benchmark tools |
+| `ingestion/`, `discovery.py` | Source occurrences, canonical reconstruction, exact accounting |
+| `control_plane/chronicle.py` | Private bounded Chronicle model and evidence projector |
+| `control_plane/published_facts.py` | Published fact identities, bounds, and reconstruction |
+| `control_plane/fact_repository.py` | Shared local/remote historical store boundary |
+| `control_plane/collector.py` | Checkpoint and fact-set staging/publication |
+| `cloudflare/control-plane/src/facts.ts` | Fact validation, atomic revisions, selection, cursors |
+| `contracts/`, `service/` | Stable public contracts and shared semantics |
+| `estimation/` | Local/Core forecast authority |
+| `validation/metrics/` | Source-backed metric expectations and audits |
 
-## Authorities and state
+See [Chronicle history](chronicle-history.md), the [collector handoff](local-collector-handoff.md),
+and the [Cloudflare design](remote-ct-control-plane-design.md).
 
-Historical artifacts, portable project inventory, living observations, and
-estimation records have separate authority handlers behind the same public
-contract registry. The [control-plane design](remote-ct-control-plane-design.md)
-is the detailed authority map. Discover the current methods with `ct api schema`.
+## Validation
 
-Raw logs remain evidence authority on their originating host. Collector SQLite
-stores delivery sequences, outboxes, and receipts. Its recovery rules preserve
-exact retries and reconcile source/publication watermarks. The local index and
-Datahub read models accelerate reads; they do not replace source evidence.
-
-Cloudflare stores versioned workspace state in a SQLite Durable Object and
-immutable compressed artifacts in private R2. The Access-protected Datahub Worker
-serves its web assets and reads live committed workspace data through the control
-plane. Publishing data does not rebuild or redeploy the website. See the
-control-plane design for credential scope, transaction boundaries, and deployment
-instructions.
-
-## API and plugin boundaries
-
-`ServiceRuntime` validates requests and responses for dedicated CLI commands,
-`ct api call`, and `ct api batch`. Dedicated commands may present compact JSON;
-API calls return the canonical versioned contract. Ordinary forks and spawned
-agent runs have distinct scopes; graph totals never imply one shared context
-window across agents.
-
-Plugins are source-dispatched executables discovered through `plugin.toml`.
-They consume CLI JSON contracts rather than importing core implementation.
-Datahub owns pricing enrichment and presentation; canonical fields remain
-agent-agnostic facts. See [plugin design](plugin.md).
-
-## Development and validation
-
-Use `uv sync` for the Python workspace. The core dependencies are declared in
-`packages/core/pyproject.toml`; do not infer them from historical design notes.
-
-```sh
-uv run ruff check .
-scripts/check-datahub-static.sh
-scripts/check-metrics-quality-gate.sh
-uv run python scripts/validate-metrics-baselines.py
-```
-
-Do not derive new expected metric values from a run alone. Intentional changes
-require reconstruction from committed source evidence and an updated audit.
-See the [metrics quality gate](metrics-validation-quality-gate.md).
+Use `uv sync --all-packages`. Metric-sensitive changes require both the metrics
+quality gate and the direct baseline validator. Never derive expected metric
+values from current output alone.

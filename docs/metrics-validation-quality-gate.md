@@ -6,13 +6,14 @@ Implemented on 2026-07-15. The recurring gate, path-aware wrapper, pinned pricin
 
 ## Purpose
 
-CodingTrajectory deliberately does not use unit tests in this repository, but core metric changes still need a repeatable correctness gate. The gate will use audited historical coding sessions from multiple providers as immutable baseline evidence and compare current `ct` metric projections against independently reconstructed expectations.
+CodingTrajectory deliberately does not use unit tests in this repository, but canonical ingestion and core metric changes still need a repeatable correctness gate. The gate uses audited historical coding sessions from multiple providers as immutable evidence for two outputs: canonical session/tree/graph reconstruction and public session/graph metrics.
 
 The gate is not a snapshot test that records whatever the current code emits. A coding agent must first inspect the source JSONL and independently derive the expected values. Only an audited expectation can become an active baseline.
 
 ## Goals
 
-- Detect semantic regressions in token usage, cost evidence, runtime, turn counts, graph aggregation, and model attribution when the core ingestion or metric layer changes.
+- Detect structural regressions in session identity, graph membership, relationships, turns, and source tool linkage.
+- Detect semantic regressions in token usage, cost evidence, runtime, graph aggregation, and model attribution when the core ingestion or metric layer changes.
 - Exercise real historical behaviors from Codex CLI, Claude Code, and Pi instead of synthetic one-field examples.
 - Preserve the distinction between provider evidence, normalized canonical facts, and public `ct` projections.
 - Produce an actionable field-level diff instead of a generic pass or fail.
@@ -34,12 +35,11 @@ For every active baseline case, the same immutable source evidence and pinned pr
 
 ```text
 historical JSONL evidence
-  -> provider adapter
-  -> canonical session graph
-  -> metric analysis
-  -> public ct contract
-  -> normalized comparison
-  -> pass or field-level regression report
+  -> production two-pass ingestion (including inherited-history cutting)
+  -> canonical sessions and connected graph
+     -> canonical structure + public session.tree / graph.overview checks
+     -> session.* + graph.* metric checks
+  -> source-linked field-level regression report
 ```
 
 The recurring gate verifies deterministic transformation of evidence. It does not claim that the historical provider log is complete beyond the fields actually present in that log.
@@ -78,17 +78,20 @@ validation/metrics/
       source/
         *.jsonl
       expected/
+        structure.json
         session-overview.json
         session-stats.json
         session-usage.json
         session-model-usage.json
+        graph-stats.json       # when the case establishes graph aggregation
+        graph-usage.json       # when the case establishes graph aggregation
       audit.md
 scripts/
   validate-metrics-baselines.py
   check-metrics-quality-gate.sh
 ```
 
-Expected files contain source-linked JSON-path assertions for stable public facts instead of copying whole presentation payloads. This keeps the separation between source evidence, expected projections, provenance, and audit reasoning while producing the smallest useful failure path.
+Expected files contain source-linked JSON-path assertions instead of copying whole internal models or presentation payloads. `structure.json` is deliberately limited to stable canonical identity, hierarchy, linkage, and public tree/graph facts. Metric files contain stable public facts. This keeps source evidence, reconstruction, metrics, provenance, and audit reasoning separate while producing the smallest useful failure path.
 
 ### Provenance
 
@@ -130,7 +133,9 @@ A fresh coding-agent thread receives:
 It does not receive the current `ct` output during the first pass. The agent reconstructs:
 
 - session and graph membership;
+- parent relationships, relationship type/provenance, and conversation-tree versus orchestration-run boundaries;
 - turn boundaries and statuses;
+- canonical tool-call/result linkage where the source establishes it;
 - provider usage observations;
 - normalized token buckets;
 - graph, session, and turn totals;
@@ -205,7 +210,7 @@ It performs the following steps:
 
 1. Validate the baseline manifest and every evidence bundle.
 2. Load only the committed evidence paths, never the user's live discovery roots.
-3. Run the current core ingestion and public service projections.
+3. Run the production two-pass ingestion core, graph assembly, `DocumentStore`, and contract-validating public service dispatch.
 4. Normalize only fields declared non-semantic by the baseline contract.
 5. Compare actual and expected values.
 6. Verify cross-field invariants.
@@ -214,7 +219,8 @@ It performs the following steps:
 
 Required invariants include:
 
-- graph token totals reconcile with their canonical session and turn sources according to the documented aggregation rule;
+- graph token totals reconcile with the distinct session sections returned by `graph.usage`;
+- graph turn counts reconcile with those session sections;
 - main and subagent sections remain distinct from the graph aggregate;
 - processed-token accounting uses canonical uncached, cached, cache-write, completion, and reasoning semantics;
 - cost is absent when required pricing evidence is absent;
@@ -293,8 +299,18 @@ Only active cases participate in the required gate. Superseded cases remain avai
 | `codex-fork-runtime` | Codex CLI | Ordinary two-branch conversation fork, branch-local cached/uncached/reasoning usage, provider runtime, pinned estimated cost |
 | `claude-stream-cache` | Claude Code | Repeated stream events for one provider response, cache reads, successful tool lifecycle, pinned estimated cost |
 | `pi-reported-cost` | Pi | Five provider calls, four successful tools, cached usage, provider-reported cost |
+| `codex-interagent-turn` | Codex CLI | Multi-session spawned-agent graph, lifecycle-delimited turns without user messages, orphan-marker rejection, graph token aggregation |
 
-Each case has committed sanitized JSONL, SHA-256 provenance, source-only arithmetic in `audit.md`, and source-linked assertions for `session.overview`, `session.stats`, `session.usage`, and `session.model_usage`.
+Each case has committed sanitized JSONL, SHA-256 provenance, source-only derivation in `audit.md`, and source-linked structural plus session-metric assertions. `codex-interagent-turn` additionally asserts `graph.stats` and `graph.usage`, because its two-session orchestration run provides non-redundant graph aggregation evidence. The original 107 audited session-metric assertions remain unchanged.
+
+## Contract Boundaries and Known Gaps
+
+- `session.tree` describes the full connected conversation lineage. `graph.*` selects the orchestration run containing the entrypoint, so an ordinary conversation fork is a second tree branch rather than part of the parent's graph aggregate. A spawned subagent remains in the same graph.
+- Graph runtime duration and latency fields are rooted in the primary session to avoid presenting overlapping subagent work as user elapsed time. Graph token, model-active, turn, and session sections aggregate the run according to their public field semantics.
+- The recurring gate uses trajectory retention. Measurements retention promises hierarchy, stable IDs, timing, and accounting fields while dropping bodies, but compact ingestion with reattached measurements can still omit Claude/Pi `provider_usage_buckets`; universal compact/full metric parity is not asserted.
+- Chronicle's v2 artifact explicitly promises body-free topology, usage, measurements, operational details, hierarchy ownership, and bounded size. The gate does not add a duplicate Chronicle round-trip assertion where no public contract requires it.
+- Existing committed Codex parent/fork evidence reaches the production inherited-history-cutting path, but does not contain a copied parent prefix. A future source case is warranted only when sanitized committed evidence directly establishes that format; this redesign does not invent one.
+- The evidence does not establish universal correctness for legacy/native matching, collaboration recipient matching, Claude team prose heuristics, or unknown-tool enrichment. Those remain separate ingestion concerns rather than silently blessed baseline contracts.
 
 ## Rollout Plan
 

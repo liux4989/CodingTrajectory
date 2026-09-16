@@ -27,8 +27,8 @@ if [[ ! -x .venv/bin/python ]]; then
   exit 1
 fi
 
-if [[ ! -d packages/plugins/datahub/web/node_modules ]]; then
-  echo "resume: Datahub web dependencies missing — rerun .agents/setup" >&2
+if [[ ! -d packages/plugins/loop/web/node_modules ]]; then
+  echo "resume: Loop web dependencies missing — rerun .agents/setup" >&2
   exit 1
 fi
 

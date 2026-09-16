@@ -8,8 +8,6 @@ only metadata checkpoints and bounded chronicle graphs are queued remotely.
 
 from __future__ import annotations
 
-import base64
-import gzip
 import hashlib
 import json
 import sqlite3
@@ -29,8 +27,6 @@ from coding_trajectory.control_plane.chronicle import (
     build_chronicle_segments,
 )
 from coding_trajectory.control_plane.collector_protocol import (
-    ArtifactPublicationRequest,
-    ChronicleArtifactPublication,
     CollectorRecoveryRequest,
     CollectorRecoveryResponse,
     LeaseHeartbeatRequest,
@@ -46,6 +42,19 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationResponse,
     SourceVectorEntry,
 )
+from coding_trajectory.control_plane.fact_protocol import (
+    FACT_ROW_BATCH_MAX,
+    FactGraphPublication,
+    FactPublicationRequest,
+    MissingFactRowsRequest,
+    MissingFactRowsResponse,
+    StageFactRowsRequest,
+    StageFactRowsResponse,
+)
+from coding_trajectory.control_plane.published_facts import (
+    PublishedFactSet,
+    derive_published_fact_set,
+)
 from coding_trajectory.control_plane.remote import cloudflare_endpoint
 from coding_trajectory.discovery import (
     DiscoveryCandidate,
@@ -57,7 +66,7 @@ from coding_trajectory.ingestion.common import canonical_json, last_complete_lin
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session
 
-_PARSER_VERSION = "ct-local-collector-v9"
+_PARSER_VERSION = "ct-local-collector-v10"
 _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 _SNAPSHOT_STATE_VERSION = f"{_SOURCE_SCHEMA_VERSION}:{_PARSER_VERSION}"
 
@@ -81,8 +90,16 @@ class CollectorRemote(Protocol):
         self, request: ObservationRequest, *, idempotency_key: str
     ) -> ObservationReceipt: ...
 
-    def publish_artifacts(
-        self, request: ArtifactPublicationRequest, *, idempotency_key: str
+    def stage_fact_rows(
+        self, request: StageFactRowsRequest
+    ) -> StageFactRowsResponse: ...
+
+    def missing_fact_rows(
+        self, request: MissingFactRowsRequest
+    ) -> MissingFactRowsResponse: ...
+
+    def publish_facts(
+        self, request: FactPublicationRequest, *, idempotency_key: str
     ) -> ObservationReceipt: ...
 
     def heartbeat(self, request: LeaseHeartbeatRequest) -> LeaseHeartbeatResponse: ...
@@ -110,11 +127,7 @@ class CollectorRemoteError(RuntimeError):
 class CloudflareCollectorRemote:
     """Call the committed Cloudflare RPC ingress contract over HTTPS."""
 
-    def __init__(
-        self, *, url: str, access_token: str, timeout: float = 20, chunked: bool = False
-    ) -> None:
-        self.chunked = chunked
-        self._resource_projections: bool | None = None
+    def __init__(self, *, url: str, access_token: str, timeout: float = 20) -> None:
         self._url = cloudflare_endpoint(url)
         self._access_token = access_token
         self._timeout = timeout
@@ -166,129 +179,35 @@ class CloudflareCollectorRemote:
             )
         )
 
-    def publish_artifacts(
-        self, request: ArtifactPublicationRequest, *, idempotency_key: str
-    ) -> ObservationReceipt:
-        for artifact in request.artifacts:
-            self.stage_artifact_payload(
-                workspace_id=request.workspace_id,
-                agent_id=request.agent_id,
-                artifact=artifact.payload,
-                content_sha256=artifact.content_sha256,
+    def stage_fact_rows(self, request: StageFactRowsRequest) -> StageFactRowsResponse:
+        return StageFactRowsResponse.model_validate(
+            self._rpc(
+                "ct_collector_stage_fact_rows",
+                request.model_dump(mode="json"),
             )
-        return self.commit_artifact_manifest(
-            request.reference_payload(), idempotency_key=idempotency_key
         )
 
-    def commit_artifact_manifest(
-        self, request: dict[str, Any], *, idempotency_key: str
+    def missing_fact_rows(
+        self, request: MissingFactRowsRequest
+    ) -> MissingFactRowsResponse:
+        return MissingFactRowsResponse.model_validate(
+            self._rpc(
+                "ct_collector_missing_fact_rows",
+                request.model_dump(mode="json"),
+            )
+        )
+
+    def publish_facts(
+        self, request: FactPublicationRequest, *, idempotency_key: str
     ) -> ObservationReceipt:
-        """Commit a previously staged frozen manifest without retransferring it."""
+        """Commit staged fact sets as one atomic workspace publication."""
+
         return ObservationReceipt.model_validate(
             self._rpc(
-                "ct_collector_publish_artifacts",
-                request,
+                "ct_collector_publish_facts",
+                request.wire_payload(),
                 idempotency_key=idempotency_key,
             )
-        )
-
-    def stage_artifact_payload(
-        self,
-        *,
-        workspace_id: UUID,
-        agent_id: UUID,
-        artifact: ChronicleGraphArtifact,
-        content_sha256: str,
-    ) -> None:
-        """Idempotently stage one compressed canonical body and read projections."""
-
-        if self._resource_projections is None:
-            from coding_trajectory.control_plane.catalog_protocol import (
-                ProjectionCapabilities,
-            )
-
-            try:
-                capabilities = ProjectionCapabilities.model_validate(
-                    self._rpc(
-                        "ct_projection_capabilities",
-                        {"workspace_id": str(workspace_id), "agent_id": str(agent_id)},
-                    )
-                )
-                if capabilities.workspace_id != workspace_id:
-                    raise CollectorRemoteError(
-                        "projection capability workspace mismatch"
-                    )
-                self._resource_projections = (
-                    2 in capabilities.resource_projection_versions
-                )
-            except CollectorRemoteError as error:
-                if error.status_code != 404 or error.code != "not_found":
-                    raise
-                self._resource_projections = False
-        canonical = artifact.canonical_bytes()
-        if hashlib.sha256(canonical).hexdigest() != content_sha256:
-            raise ValueError("chronicle artifact digest mismatch before staging")
-        if self.chunked:
-            from coding_trajectory.control_plane.upload_chunks import (
-                MAX_GRAPH_BYTES,
-                build_chunks,
-                chunk_batches,
-            )
-
-            if len(canonical) > MAX_GRAPH_BYTES:
-                raise ValueError(
-                    "canonical graph exceeds the supported 8 MiB revision limit"
-                )
-            root, chunks = build_chunks(artifact.wire_payload())
-            identity = {"workspace_id": str(workspace_id), "agent_id": str(agent_id)}
-            for batch in chunk_batches(chunks):
-                missing = set(
-                    self._rpc(
-                        "ct_collector_missing_chunks",
-                        {
-                            **identity,
-                            "digests": [entry["content_sha256"] for entry in batch],
-                        },
-                    )["missing"]
-                )
-                pending = [
-                    entry for entry in batch if entry["content_sha256"] in missing
-                ]
-                if pending:
-                    self._rpc(
-                        "ct_collector_upload_chunks", {**identity, "chunks": pending}
-                    )
-            self._rpc(
-                "ct_collector_stage_chunk_manifest",
-                {
-                    **identity,
-                    "schema_version": artifact.schema_version,
-                    "root_sha256": root,
-                    "content_sha256": content_sha256,
-                    "uncompressed_bytes": len(canonical),
-                    "projections": _project_session_list_variants(
-                        artifact, include_resources=self._resource_projections
-                    ),
-                },
-            )
-            return
-        compressed = gzip.compress(canonical, compresslevel=3, mtime=0)
-        projections = _project_session_list_variants(
-            artifact, include_resources=self._resource_projections
-        )
-        self._rpc(
-            "ct_collector_stage_artifact_payload",
-            {
-                "workspace_id": str(workspace_id),
-                "agent_id": str(agent_id),
-                "schema_version": artifact.schema_version,
-                "content_sha256": content_sha256,
-                "encoding": "gzip",
-                "uncompressed_bytes": len(canonical),
-                "compressed_bytes": len(compressed),
-                "payload_base64": base64.b64encode(compressed).decode("ascii"),
-                "projections": projections,
-            },
         )
 
     def heartbeat(self, request: LeaseHeartbeatRequest) -> LeaseHeartbeatResponse:
@@ -315,10 +234,10 @@ class CloudflareCollectorRemote:
             else None
         )
         try:
-            # Artifact bodies are staged separately; the manifest commits atomically.
+            # Fact rows are staged separately; the manifest commits atomically.
             timeout = (
                 max(self._timeout, 90)
-                if name == "ct_collector_publish_artifacts"
+                if name == "ct_collector_publish_facts"
                 else self._timeout
             )
             response = self._client.post(
@@ -372,50 +291,6 @@ class CloudflareCollectorRemote:
         return result
 
 
-def _project_session_list_variants(
-    artifact: ChronicleGraphArtifact,
-    *,
-    include_resources: bool = True,
-) -> dict[str, dict[str, Any]]:
-    """Build small exact read projections while the canonical graph is local."""
-
-    from coding_trajectory.control_plane.read_projections import (
-        build_read_projections,
-        build_resource_projections,
-    )
-    from coding_trajectory.query import DocumentStore
-    from coding_trajectory.service import IndexCache, dispatch
-
-    store = DocumentStore.from_session_graphs([artifact.to_session_graph()])
-    cache = IndexCache()
-    variants = {
-        "default": [],
-        "runtime": ["runtime"],
-        "usage": ["usage"],
-        "runtime_usage": ["runtime", "usage"],
-    }
-    projections = {
-        name: dispatch(
-            "project.sessions",
-            {"include": include},
-            store=store,
-            global_scope=True,
-            current_dir=Path.cwd(),
-            discovery_note="collector projection",
-            cache=cache,
-        )
-        for name, include in variants.items()
-    }
-    projections["canonical"] = build_read_projections(
-        artifact, store=store, cache=cache
-    )
-    if include_resources:
-        projections["resources"] = build_resource_projections(
-            artifact, store=store, cache=cache
-        )
-    return projections
-
-
 @dataclass(frozen=True, slots=True)
 class CollectorIdentity:
     workspace_id: UUID
@@ -434,11 +309,11 @@ class CollectorRunResult:
     pending: int
     heartbeat_sequence: int | None
     failed: int = 0
-    artifacts_queued: int = 0
-    artifacts_accepted: int = 0
-    artifacts_rejected: int = 0
-    artifact_scope_incomplete: bool = False
-    target_artifact_digest: str | None = None
+    facts_queued: int = 0
+    facts_accepted: int = 0
+    facts_rejected: int = 0
+    fact_scope_incomplete: bool = False
+    target_fact_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,7 +358,7 @@ class LocalCollector:
             "update observation_outbox set state = 'pending' where state = 'in_flight'"
         )
         self._connection.execute(
-            "update artifact_outbox set state = 'pending' where state = 'in_flight'"
+            "update publication_outbox set state = 'pending' where state = 'in_flight'"
         )
         self._reject_invalid_observations()
         self._connection.commit()
@@ -507,7 +382,7 @@ class LocalCollector:
         remote: CollectorRemote | None = None,
         heartbeat: bool = True,
         target_session_id: UUID | None = None,
-        known_artifact_digests: set[str] | None = None,
+        known_fact_digests: set[str] | None = None,
         candidate_paths: set[Path] | None = None,
     ) -> CollectorRunResult:
         """Discover, fence, publish checkpoints, and publish local graph artifacts."""
@@ -614,7 +489,7 @@ class LocalCollector:
                 (source.candidate.vendor.value, source.header.session_id), []
             ).append(source)
         normalized: dict[tuple[str, UUID], ChronicleGraphArtifact] = {}
-        target_artifact_digest: str | None = None
+        target_fact_digest: str | None = None
         if target_session_id is not None:
             if failed:
                 raise CollectorRemoteError(
@@ -661,13 +536,13 @@ class LocalCollector:
             grouped = {
                 key: group for key, group in grouped.items() if key[1] in selected_ids
             }
-            target_artifact_digest = _body_free_artifact(
+            target_fact_digest = derive_published_fact_set(
                 build_chronicle_graph_artifact(selected)
-            ).digest()
+            ).fact_set_digest
             if (
                 not self.pending_count()
-                and not self._artifact_publication_blocked()
-                and target_artifact_digest in (known_artifact_digests or set())
+                and not self._fact_publication_blocked()
+                and target_fact_digest in (known_fact_digests or set())
             ):
                 return CollectorRunResult(
                     discovered=len(candidates),
@@ -676,7 +551,7 @@ class LocalCollector:
                     rejected=0,
                     pending=0,
                     heartbeat_sequence=None,
-                    target_artifact_digest=target_artifact_digest,
+                    target_fact_digest=target_fact_digest,
                 )
         queued = 0
         collected: list[_CollectedSource] = []
@@ -695,18 +570,18 @@ class LocalCollector:
                 continue
         self.prepared_sources = collected
         accepted, rejected = self.flush(remote) if remote is not None else (0, 0)
-        artifacts_accepted = 0
-        artifacts_rejected = 0
-        artifacts_queued = 0
+        facts_accepted = 0
+        facts_rejected = 0
+        facts_queued = 0
         if remote is not None:
             # Drain an older exact request before assigning the next monotonic
             # project publication sequence.
-            prior_accepted, prior_rejected = self._flush_artifacts(remote)
-            artifacts_accepted += prior_accepted
-            artifacts_rejected += prior_rejected
+            prior_accepted, prior_rejected = self._flush_facts(remote)
+            facts_accepted += prior_accepted
+            facts_rejected += prior_rejected
             if (
                 prior_rejected == 0
-                and not self._artifact_publication_blocked()
+                and not self._fact_publication_blocked()
                 and failed == 0
                 and collected
                 and all(self._source_delivery_accepted(source) for source in collected)
@@ -719,14 +594,14 @@ class LocalCollector:
                     )
                 )
                 self._set_meta(
-                    f"artifact_publication:{self.identity.project_id}:next_sequence",
+                    f"fact_publication:{self.identity.project_id}:next_sequence",
                     str(recovery.next_publication_sequence),
                 )
                 self._connection.commit()
-                artifacts_queued = self._queue_artifact_publication(collected)
-                current_accepted, current_rejected = self._flush_artifacts(remote)
-                artifacts_accepted += current_accepted
-                artifacts_rejected += current_rejected
+                facts_queued = self._queue_fact_publication(collected)
+                current_accepted, current_rejected = self._flush_facts(remote)
+                facts_accepted += current_accepted
+                facts_rejected += current_rejected
         heartbeat_sequence: int | None = None
         if remote is not None and heartbeat:
             try:
@@ -736,11 +611,11 @@ class LocalCollector:
                 # local source appear terminal when the network is unavailable.
                 heartbeat_sequence = None
         latest_publication = self._connection.execute(
-            "select state from artifact_outbox where project_id = ? order by publication_sequence desc limit 1",
+            "select state from publication_outbox where project_id = ? order by publication_sequence desc limit 1",
             (str(self.identity.project_id),),
         ).fetchone()
         return CollectorRunResult(
-            target_artifact_digest=target_artifact_digest,
+            target_fact_digest=target_fact_digest,
             discovered=len(candidates),
             queued=queued,
             accepted=accepted,
@@ -748,10 +623,10 @@ class LocalCollector:
             pending=self.pending_count(),
             heartbeat_sequence=heartbeat_sequence,
             failed=failed,
-            artifacts_queued=artifacts_queued,
-            artifacts_accepted=artifacts_accepted,
-            artifacts_rejected=artifacts_rejected,
-            artifact_scope_incomplete=bool(
+            facts_queued=facts_queued,
+            facts_accepted=facts_accepted,
+            facts_rejected=facts_rejected,
+            fact_scope_incomplete=bool(
                 latest_publication and latest_publication["state"] == "rejected_scope"
             ),
         )
@@ -809,10 +684,10 @@ class LocalCollector:
             self._connection.commit()
         return accepted, rejected
 
-    def _artifact_publication_blocked(self) -> bool:
+    def _fact_publication_blocked(self) -> bool:
         return (
             self._connection.execute(
-                "select 1 from artifact_outbox where state in ('pending', 'rejected') limit 1"
+                "select 1 from publication_outbox where state in ('pending', 'rejected') limit 1"
             ).fetchone()
             is not None
         )
@@ -842,9 +717,9 @@ class LocalCollector:
             and recovered.content_sha256 == source.content_sha256
         )
 
-    def _queue_artifact_publication(self, sources: list[_CollectedSource]) -> int:
+    def _queue_fact_publication(self, sources: list[_CollectedSource]) -> int:
         if self.identity.project_id is None:
-            raise ValueError("chronicle publication requires a project_id")
+            raise ValueError("fact publication requires a project_id")
         session_sources: dict[UUID, tuple[Session, list[_CollectedSource]]] = {}
         for source in sources:
             graph = source.artifact.to_session_graph()
@@ -878,22 +753,25 @@ class LocalCollector:
             and source.content_sha256 is not None
         ]
         if len(source_vector) != len(sources):
-            raise ValueError("chronicle publication has an incomplete source vector")
+            raise ValueError("fact publication has an incomplete source vector")
 
-        artifacts: list[ChronicleArtifactPublication] = []
+        publications: list[FactGraphPublication] = []
+        fact_sets: list[PublishedFactSet] = []
         for graph in sorted(graphs, key=lambda entry: str(entry.root_session_id)):
             graph_sources = [
                 source
                 for session in graph.sessions
                 for source in session_sources[session.session_id][1]
             ]
-            artifact = _body_free_artifact(build_chronicle_graph_artifact(graph))
-            artifacts.append(
-                ChronicleArtifactPublication(
-                    artifact_id=artifact.graph.root_session_id,
-                    payload=artifact,
-                    content_sha256=artifact.digest(),
-                    serialized_bytes=len(artifact.canonical_bytes()),
+            # Chronicle v3 is already bounded; the fact set is the publication.
+            fact_set = derive_published_fact_set(build_chronicle_graph_artifact(graph))
+            fact_sets.append(fact_set)
+            publications.append(
+                FactGraphPublication(
+                    graph_id=fact_set.graph_id,
+                    fact_set_digest=fact_set.fact_set_digest,
+                    fact_count=len(fact_set.rows),
+                    kind_counts=fact_set.kind_counts,
                     source_ids=sorted(
                         (
                             source.source_id
@@ -911,29 +789,30 @@ class LocalCollector:
                 entry.model_dump(mode="json", exclude_none=True)
                 for entry in source_vector
             ],
-            "artifacts": [
+            "graphs": [
                 {
-                    "artifact_id": str(artifact.artifact_id),
-                    "content_sha256": artifact.content_sha256,
-                    "serialized_bytes": artifact.serialized_bytes,
-                    "source_ids": [str(value) for value in artifact.source_ids],
-                    "observed_at": artifact.observed_at.isoformat(),
+                    "graph_id": str(graph.graph_id),
+                    "fact_set_digest": graph.fact_set_digest,
+                    "fact_count": graph.fact_count,
+                    "kind_counts": graph.kind_counts,
+                    "source_ids": [str(value) for value in graph.source_ids],
+                    "observed_at": graph.observed_at.isoformat(),
                 }
-                for artifact in artifacts
+                for graph in publications
             ],
         }
         publication_digest = _sha256(canonical_json(basis).encode())
-        meta_prefix = f"artifact_publication:{self.identity.project_id}"
+        meta_prefix = f"fact_publication:{self.identity.project_id}"
         if self._get_meta(f"{meta_prefix}:last_digest", "") == publication_digest:
             return 0
         sequence = int(self._get_meta(f"{meta_prefix}:next_sequence", "0"))
-        request = ArtifactPublicationRequest(
+        request = FactPublicationRequest(
             workspace_id=self.identity.workspace_id,
             agent_id=self.identity.agent_id,
             project_id=self.identity.project_id,
             publication_sequence=sequence,
             source_vector=source_vector,
-            artifacts=artifacts,
+            graphs=publications,
         )
         idempotency_key = _sha256(
             (
@@ -941,14 +820,22 @@ class LocalCollector:
                 f"{sequence}:{publication_digest}"
             ).encode()
         )
+        staged = {
+            "publication": request.wire_payload(),
+            "fact_sets": [
+                fact_set.model_dump(mode="json", exclude_none=True)
+                for fact_set in fact_sets
+            ],
+        }
+        encoded = json.dumps(staged, separators=(",", ":"), sort_keys=True)
         self._connection.execute(
-            "insert or ignore into artifact_outbox (idempotency_key, project_id, publication_sequence, content_sha256, request_json, state, attempts, created_at) values (?, ?, ?, ?, ?, 'pending', 0, ?)",
+            "insert or ignore into publication_outbox (idempotency_key, project_id, publication_sequence, content_sha256, request_json, state, attempts, created_at) values (?, ?, ?, ?, ?, 'pending', 0, ?)",
             (
                 idempotency_key,
                 str(self.identity.project_id),
                 sequence,
                 publication_digest,
-                request.wire_json(),
+                encoded,
                 datetime.now(UTC).isoformat(),
             ),
         )
@@ -957,26 +844,32 @@ class LocalCollector:
         self._connection.commit()
         return 1
 
-    def _flush_artifacts(self, remote: CollectorRemote) -> tuple[int, int]:
+    def _flush_facts(self, remote: CollectorRemote) -> tuple[int, int]:
         accepted = 0
         rejected = 0
         rows = self._connection.execute(
-            "select * from artifact_outbox where state = 'pending' or (state = 'rejected' and last_error = 'conflict') order by publication_sequence, created_at"
+            "select * from publication_outbox where state = 'pending' or (state = 'rejected' and last_error = 'conflict') order by publication_sequence, created_at"
         ).fetchall()
         for row in rows:
             self._connection.execute(
-                "update artifact_outbox set state = 'in_flight', attempts = attempts + 1 where idempotency_key = ?",
+                "update publication_outbox set state = 'in_flight', attempts = attempts + 1 where idempotency_key = ?",
                 (row["idempotency_key"],),
             )
             self._connection.commit()
             try:
-                receipt = remote.publish_artifacts(
-                    ArtifactPublicationRequest.model_validate_json(row["request_json"]),
-                    idempotency_key=row["idempotency_key"],
+                staged = json.loads(row["request_json"])
+                request = FactPublicationRequest.model_validate(staged["publication"])
+                fact_sets = [
+                    PublishedFactSet.model_validate(fact_set)
+                    for fact_set in staged["fact_sets"]
+                ]
+                self._stage_fact_rows(remote, request, fact_sets)
+                receipt = remote.publish_facts(
+                    request, idempotency_key=row["idempotency_key"]
                 )
             except (CollectorRemoteError, OSError, ValueError):
                 self._connection.execute(
-                    "update artifact_outbox set state = 'pending', last_error = ? where idempotency_key = ?",
+                    "update publication_outbox set state = 'pending', last_error = ? where idempotency_key = ?",
                     ("remote delivery failed", row["idempotency_key"]),
                 )
                 self._connection.commit()
@@ -984,7 +877,7 @@ class LocalCollector:
             if receipt.details.get("publication_outcome") == "superseded":
                 state = "superseded"
                 self._set_meta(
-                    f"artifact_publication:{self.identity.project_id}:last_digest", ""
+                    f"fact_publication:{self.identity.project_id}:last_digest", ""
                 )
             elif (
                 receipt.outcome == "rejected"
@@ -1004,13 +897,13 @@ class LocalCollector:
             ):
                 state = "superseded"
                 self._set_meta(
-                    f"artifact_publication:{self.identity.project_id}:last_digest", ""
+                    f"fact_publication:{self.identity.project_id}:last_digest", ""
                 )
             else:
                 state = "rejected"
                 rejected += 1
             self._connection.execute(
-                "update artifact_outbox set state = ?, last_error = ? where idempotency_key = ?",
+                "update publication_outbox set state = ?, last_error = ? where idempotency_key = ?",
                 (
                     state,
                     None if state == "accepted" else receipt.outcome,
@@ -1032,9 +925,53 @@ class LocalCollector:
                 break
         return accepted, rejected
 
+    def _stage_fact_rows(
+        self,
+        remote: CollectorRemote,
+        request: FactPublicationRequest,
+        fact_sets: list[PublishedFactSet],
+    ) -> None:
+        """Idempotently stage every missing fact-row batch before commit."""
+
+        by_graph = {fact_set.graph_id: fact_set for fact_set in fact_sets}
+        for publication in request.graphs:
+            fact_set = by_graph.get(publication.graph_id)
+            if fact_set is None or (
+                fact_set.fact_set_digest != publication.fact_set_digest
+            ):
+                raise ValueError("publication fact set mismatch before staging")
+            batches = _fact_row_batches(fact_set)
+            missing = remote.missing_fact_rows(
+                MissingFactRowsRequest(
+                    workspace_id=request.workspace_id,
+                    agent_id=request.agent_id,
+                    graph_id=publication.graph_id,
+                    fact_set_digest=publication.fact_set_digest,
+                    batch_count=len(batches),
+                )
+            )
+            if missing.graph_id != publication.graph_id or (
+                missing.fact_set_digest != publication.fact_set_digest
+            ):
+                raise CollectorRemoteError("fact staging identity mismatch")
+            for index in missing.missing_batches:
+                if index < 0 or index >= len(batches):
+                    raise CollectorRemoteError("fact staging returned an invalid batch")
+                remote.stage_fact_rows(
+                    StageFactRowsRequest(
+                        workspace_id=request.workspace_id,
+                        agent_id=request.agent_id,
+                        graph_id=publication.graph_id,
+                        fact_set_digest=publication.fact_set_digest,
+                        batch_index=index,
+                        batch_count=len(batches),
+                        rows=batches[index],
+                    )
+                )
+
     def pending_count(self) -> int:
         row = self._connection.execute(
-            "select (select count(*) from observation_outbox where state = 'pending') + (select count(*) from artifact_outbox where state = 'pending') + (select count(*) from living_outbox where state = 'pending') as count"
+            "select (select count(*) from observation_outbox where state = 'pending') + (select count(*) from publication_outbox where state = 'pending') + (select count(*) from living_outbox where state = 'pending') as count"
         ).fetchone()
         return int(row["count"])
 
@@ -1591,7 +1528,7 @@ class LocalCollector:
               request_json text not null, state text not null, attempts integer not null,
               last_error text, created_at text not null
             );
-            create table if not exists artifact_outbox (
+            create table if not exists publication_outbox (
               idempotency_key text primary key, project_id text not null,
               publication_sequence integer not null, content_sha256 text not null,
               request_json text not null, state text not null, attempts integer not null,
@@ -1690,33 +1627,14 @@ def _expand_scoped_graph_candidates(
     return sorted(selected.values(), key=lambda value: str(value.path))
 
 
-def _body_free_artifact(artifact: ChronicleGraphArtifact) -> ChronicleGraphArtifact:
-    sessions = []
-    for session in artifact.sessions:
-        turns = []
-        for turn in session.turns:
-            user_request = (
-                turn.user_request.model_copy(update={"content": "[content omitted]"})
-                if turn.user_request is not None
-                else None
-            )
-            items = [
-                item.model_copy(
-                    update={
-                        "measurements": item.measurements.model_copy(
-                            update={"text_preview": None}
-                        )
-                    }
-                )
-                for item in turn.items
-            ]
-            turns.append(
-                turn.model_copy(update={"user_request": user_request, "items": items})
-            )
-        sessions.append(session.model_copy(update={"turns": turns}))
-    return ChronicleGraphArtifact.model_validate(
-        artifact.model_copy(update={"sessions": sessions}).model_dump(mode="python")
-    )
+def _fact_row_batches(fact_set: PublishedFactSet) -> list[list[Any]]:
+    """Split one validated fact set (never empty) into staging batches."""
+
+    rows = list(fact_set.rows)
+    return [
+        rows[offset : offset + FACT_ROW_BATCH_MAX]
+        for offset in range(0, len(rows), FACT_ROW_BATCH_MAX)
+    ]
 
 
 def _complete_prefix(source: Path, size: int) -> tuple[int, bytes]:

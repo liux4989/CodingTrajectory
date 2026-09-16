@@ -17,11 +17,16 @@ from coding_trajectory.analysis.activity_flow import (
     is_control_only_activity_cell,
     public_activity_outcome,
 )
+from coding_trajectory.analysis.item_details import _classify_item
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
-from coding_trajectory.contracts.session import DEFAULT_SEARCH_KINDS, SearchKind
+from coding_trajectory.contracts.session import (
+    DEFAULT_SEARCH_KINDS,
+    SEARCHABLE_FIELDS,
+    SearchKind,
+)
 from coding_trajectory.ingestion.common import format_datetime
 from coding_trajectory.ingestion.indexes import build_session_graph_index
 from coding_trajectory.ingestion.models import (
@@ -75,7 +80,13 @@ class _SearchDocument:
     fields: dict[str, str]
     references: dict[str, Any]
     structural_score: float
-    content_complete: bool
+    # Searchable completeness of this document's retained fields:
+    # complete (fully retained), preview (bounded redacted preview searched),
+    # facts_only (only structural/allowlisted facts searched).
+    searchable: Literal["complete", "preview", "facts_only"]
+
+
+_SEARCHABLE_ORDER = {"complete": 2, "preview": 1, "facts_only": 0}
 
 
 @dataclass(slots=True)
@@ -293,7 +304,9 @@ def build_session_summary(
     warnings = []
     if not content_complete:
         warnings.append(
-            "Some transcript bodies were not retained; the summary uses chronicle measurements and bounded semantic previews and may omit text-derived facts."
+            "Raw transcript bodies are not retained in the published facts "
+            "authority; the summary uses retained measurements, semantic facts, "
+            "and bounded previews and may omit text-derived facts."
         )
     return {
         "session_id": str(session.session_id),
@@ -304,12 +317,14 @@ def build_session_summary(
         "truncation": truncation,
         "projection": {
             "name": "session_summary",
-            "version": 1,
+            "version": 2,
             "strategy": "deterministic_structural",
         },
         "coverage": {
-            "retention": "trajectory" if content_complete else "measurements",
-            "content_complete": content_complete,
+            "retention": "complete" if content_complete else "preview",
+            "measurement": "complete",
+            "searchable": None,
+            "trimmed": any(section["truncated"] for section in truncation.values()),
         },
         "warnings": warnings,
     }
@@ -323,8 +338,16 @@ def search_session(
     kinds: list[SearchKind] | None = None,
     limit: int = 20,
     turn_id: str | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Search one session using bounded lexical matching and structural rank."""
+    """Search one session over retained processed fields only.
+
+    Matching never reads discarded raw bodies: documents are built from
+    retained text previews, portable paths, tool names/concepts/targets,
+    status/outcome tokens, and allowlisted output-evidence facts. The response
+    reports exactly which fields were searched and how complete that corpus
+    was, and pages deterministically by match rank offset.
+    """
 
     session = _only_session(session_graph)
     turns = _selected_turns(session, turn_id)
@@ -332,6 +355,7 @@ def search_session(
     query_text = " ".join(query.split())
     query_folded = query_text.casefold()
     query_terms = tuple(dict.fromkeys(_tokens(query_text)))
+    offset = _search_cursor_offset(cursor)
 
     documents = _search_documents(
         session_graph,
@@ -341,12 +365,12 @@ def search_session(
         kinds=selected_kinds,
     )
     matches: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-    retained_content_complete = _content_complete(session, turns)
-    content_complete = retained_content_complete
     searched_resources = 0
+    searchable = "complete"
     for document in documents:
         searched_resources += 1
-        content_complete = content_complete and document.content_complete
+        if _SEARCHABLE_ORDER[document.searchable] < _SEARCHABLE_ORDER[searchable]:
+            searchable = document.searchable
         lexical_score, matched_fields = _lexical_score(
             document,
             query_folded=query_folded,
@@ -374,17 +398,25 @@ def search_session(
         order = (-score, document.timestamp, str(stable_id))
         matches.append((order, value))
 
+    matches.sort(key=lambda entry: entry[0])
     total = len(matches)
-    selected = heapq.nsmallest(limit, matches, key=lambda entry: entry[0])
+    if offset > total:
+        raise ValueError("search cursor is beyond the retained result set")
+    selected = matches[offset : offset + limit]
     ranked = []
-    for rank, (_order, value) in enumerate(selected, start=1):
+    for rank, (_order, value) in enumerate(selected, start=offset + 1):
         value["rank"] = rank
         ranked.append(value)
+    next_cursor = (
+        f"search:{offset + len(selected)}" if offset + len(selected) < total else None
+    )
 
     warnings = []
-    if not content_complete:
+    if searchable != "complete":
         warnings.append(
-            "Some searchable fields were truncated or not retained; results may be incomplete."
+            "Search covers retained fields only (previews, paths, tool and "
+            "status facts, allowlisted evidence); discarded bodies were not "
+            "searched and matches within them are absent."
         )
     return {
         "session_id": str(session.session_id),
@@ -396,21 +428,48 @@ def search_session(
         },
         "matches": ranked,
         "total": total,
-        "truncated": total > len(ranked),
+        "truncated": next_cursor is not None,
+        "next_cursor": next_cursor,
+        "searchable_fields": list(SEARCHABLE_FIELDS),
         "projection": {
             "name": "session_search",
-            "version": 1,
+            "version": 2,
             "strategy": "structural_lexical",
         },
         "coverage": {
-            "retention": (
-                "trajectory" if retained_content_complete else "measurements"
-            ),
+            "retention": _retention_coverage(session, turns),
+            "measurement": "complete",
+            "searchable": searchable if searched_resources else "none",
             "searched_resources": searched_resources,
-            "content_complete": content_complete,
+            "trimmed": next_cursor is not None,
         },
         "warnings": warnings,
     }
+
+
+def _search_cursor_offset(cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    if not cursor.startswith("search:"):
+        raise ValueError("invalid search cursor")
+    try:
+        offset = int(cursor[len("search:") :])
+    except ValueError as exc:
+        raise ValueError("invalid search cursor") from exc
+    if offset < 0:
+        raise ValueError("invalid search cursor")
+    return offset
+
+
+def _retention_coverage(session: Session, turns: list[Turn]) -> str:
+    if _content_complete(session, turns):
+        return "complete"
+    previews = any(
+        item.measurements is not None and item.measurements.text_preview
+        for turn in turns
+        for item in turn.items
+    )
+    return "preview" if previews else "not_retained"
 
 
 def _only_session(session_graph: SessionGraph) -> Session:
@@ -819,13 +878,14 @@ def _search_documents(
             else None
         )
         if request and request.get("content"):
-            text, complete = _bounded_text(request["content"])
+            text = request["content"]
+            chars = _user_request_chars(index, turn)
             documents.append(
                 _SearchDocument(
                     kind="user_message",
                     timestamp=turn.started_at,
                     label="User request",
-                    fields={"text": text},
+                    fields={"text_preview": text},
                     references=_references(
                         session_id=session.session_id,
                         turn_id=turn.turn_id,
@@ -836,7 +896,9 @@ def _search_documents(
                         ),
                     ),
                     structural_score=18 + _recency_score(item_position, item_count),
-                    content_complete=complete,
+                    searchable=(
+                        "complete" if chars is not None and chars <= 280 else "preview"
+                    ),
                 )
             )
 
@@ -873,6 +935,44 @@ def _item_can_produce_search_kind(
     return mode == "text" and bool({"tool_call", "tool_result"} & kinds)
 
 
+def _text_searchable(item: Item, text: str) -> Literal["complete", "preview"]:
+    """Whether a retained text preview covers the item's full text."""
+
+    measurements = getattr(item, "measurements", None)
+    if measurements is None:
+        return "complete"
+    text_chars = getattr(measurements, "text_chars", 0)
+    if text_chars and text_chars <= 280:
+        return "complete"
+    return "preview"
+
+
+def _item_evidence(item: Item) -> dict[str, Any]:
+    vendor_data = getattr(item, "vendor_data", None) or {}
+    value = vendor_data.get("chronicle_output_evidence")
+    return value if isinstance(value, dict) else {}
+
+
+def _evidence_fields(evidence: dict[str, Any]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    facts = evidence.get("facts")
+    if isinstance(facts, dict):
+        fields["evidence_facts"] = " ".join(
+            f"{key}={value}" for key, value in sorted(facts.items())
+        )
+    preview = evidence.get("preview")
+    if isinstance(preview, str) and preview:
+        fields["preview"] = preview
+    outcome = evidence.get("outcome")
+    if isinstance(outcome, str) and outcome:
+        fields["outcome"] = outcome
+    return fields
+
+
+def _evidence_searchable(evidence: dict[str, Any]) -> Literal["preview", "facts_only"]:
+    return "preview" if evidence.get("preview") else "facts_only"
+
+
 def _documents_for_item(
     item: Item,
     *,
@@ -884,48 +984,55 @@ def _documents_for_item(
     references = _item_references(item)
     structural = signals.structural_score(item) + recency
     if isinstance(item, AgentMessageItem):
-        text, complete = _bounded_text(_item_text(item))
-        return (
-            [
-                _SearchDocument(
-                    kind="assistant_message",
-                    timestamp=item.started_at,
-                    label="Assistant response",
-                    fields={"text": text},
-                    references=references,
-                    structural_score=structural,
-                    content_complete=complete,
-                )
-            ]
-            if text
-            else []
-        )
+        text = _item_text(item)
+        if not text:
+            return []
+        return [
+            _SearchDocument(
+                kind="assistant_message",
+                timestamp=item.started_at,
+                label="Assistant response",
+                fields={"text_preview": text},
+                references=references,
+                structural_score=structural,
+                searchable=_text_searchable(item, text),
+            )
+        ]
 
-    input_value = (
-        item.command
-        if isinstance(item, CommandExecutionItem)
-        else getattr(item, "input", None)
-    )
-    output_value = getattr(item, "output", None)
-    tool_name = str(getattr(item, "tool_name", None) or "")
+    summary = signals.tool_summary(item) or {}
+    tool_name = str(getattr(item, "tool_name", None) or summary.get("name") or "")
+    target = str(summary.get("description") or summary.get("command") or "")
+    concept = str(_classify_item(item))
+    outcome = signals.outcome(item)
+    status = str(getattr(item, "status", None) or "")
+    semantics = _chronicle_semantics(item)
+    evidence = _item_evidence(item)
+    evidence_fields = _evidence_fields(evidence)
     documents: list[_SearchDocument] = []
 
     if isinstance(item, FileChangeItem):
-        path = item.path or _path_from_value(item.input) or ""
+        path = item.path or ""
         if mode == "path":
-            fields = {"path": path}
-            content_complete = True
-        else:
-            input_text, input_complete = _bounded_text(input_value)
-            output_text, output_complete = _bounded_text(output_value)
-            fields = {
-                "path": path,
-                "operation": item.operation or "",
-                "tool_name": tool_name,
-                "tool_input": input_text,
-                "tool_output": output_text,
-            }
-            content_complete = input_complete and output_complete
+            documents.append(
+                _SearchDocument(
+                    kind="file_change",
+                    timestamp=item.started_at,
+                    label=signals.label(item),
+                    fields={"path": path},
+                    references=references,
+                    structural_score=structural,
+                    searchable="complete",
+                )
+            )
+            return documents
+        fields = {
+            "path": path,
+            "operation": item.operation or "",
+            "tool_name": tool_name,
+            "status": status,
+            "outcome": outcome,
+            **evidence_fields,
+        }
         documents.append(
             _SearchDocument(
                 kind="file_change",
@@ -934,24 +1041,22 @@ def _documents_for_item(
                 fields=fields,
                 references=references,
                 structural_score=structural,
-                content_complete=content_complete,
+                searchable=_evidence_searchable(evidence),
             )
         )
         return documents
 
-    if "tool_call" in kinds:
-        input_text, input_complete = _bounded_text(input_value)
-    else:
-        input_text, input_complete = "", True
-    if "tool_result" in kinds:
-        output_text, output_complete = _bounded_text(output_value)
-    else:
-        output_text, output_complete = "", True
-
-    if "tool_call" in kinds and (input_text or tool_name):
-        fields = {"tool_name": tool_name, "tool_input": input_text}
-        if isinstance(item, CommandExecutionItem):
-            fields["command"] = input_text
+    if "tool_call" in kinds and (tool_name or target):
+        fields = {
+            "tool_name": tool_name,
+            "target": target,
+            "concept": concept,
+            "status": status,
+            "operation": str(getattr(item, "operation", None) or ""),
+        }
+        verification_kind = semantics.get("verification_kind")
+        if isinstance(verification_kind, str):
+            fields["verification_kind"] = verification_kind
         documents.append(
             _SearchDocument(
                 kind="tool_call",
@@ -960,20 +1065,20 @@ def _documents_for_item(
                 fields=fields,
                 references=references,
                 structural_score=structural,
-                content_complete=input_complete,
+                searchable="facts_only",
             )
         )
-    if "tool_result" in kinds and output_text:
+    if "tool_result" in kinds and evidence:
+        fields = {"tool_name": tool_name, **evidence_fields}
         documents.append(
             _SearchDocument(
                 kind="tool_result",
                 timestamp=item.completed_at or item.started_at,
                 label=f"{signals.label(item)} result",
-                fields={"tool_name": tool_name, "tool_output": output_text},
+                fields=fields,
                 references=references,
-                structural_score=structural
-                + (8 if signals.outcome(item) == "failed" else 0),
-                content_complete=output_complete,
+                structural_score=structural + (8 if outcome == "failed" else 0),
+                searchable=_evidence_searchable(evidence),
             )
         )
     return documents
@@ -994,6 +1099,25 @@ def _bounded_text(value: Any) -> tuple[str, bool]:
         return text, True
     half = (_SEARCH_FIELD_LIMIT - 5) // 2
     return f"{text[:half]} ... {text[-half:]}", False
+
+
+def _user_request_chars(index: Any, turn: Turn) -> int | None:
+    from coding_trajectory.analysis.content_size import CONTENT_SIZE_MEASUREMENT_KEY
+    from coding_trajectory.ingestion.indexes import event_for_turn_user_request
+
+    if index is None:
+        return None
+    event = event_for_turn_user_request(index, turn)
+    if event is None:
+        return None
+    measurement = event.payload.get(CONTENT_SIZE_MEASUREMENT_KEY)
+    if isinstance(measurement, dict) and isinstance(measurement.get("chars"), int):
+        return measurement["chars"]
+    # Unmeasured retained request text is already the bounded preview.
+    content = event.payload.get("text") or event.payload.get("team_request_summary")
+    if isinstance(content, str):
+        return len(content) if len(content) <= 280 else None
+    return None
 
 
 def _item_text(item: AgentMessageItem) -> str:
@@ -1036,12 +1160,16 @@ def _lexical_score(
 ) -> tuple[float, list[str]]:
     field_weights = {
         "path": 16.0,
-        "command": 9.0,
+        "target": 9.0,
         "tool_name": 6.0,
         "operation": 5.0,
-        "tool_input": 4.0,
-        "text": 4.0,
-        "tool_output": 2.0,
+        "text_preview": 4.0,
+        "concept": 3.0,
+        "verification_kind": 3.0,
+        "preview": 2.0,
+        "evidence_facts": 2.0,
+        "status": 2.0,
+        "outcome": 2.0,
     }
     matched_fields: list[str] = []
     score = 0.0
@@ -1070,11 +1198,16 @@ def _lexical_score(
 def _search_snippet(document: _SearchDocument, terms: tuple[str, ...]) -> str:
     preferred = (
         "path",
-        "command",
-        "text",
-        "tool_input",
-        "tool_output",
+        "target",
+        "text_preview",
+        "preview",
+        "evidence_facts",
         "tool_name",
+        "concept",
+        "operation",
+        "status",
+        "outcome",
+        "verification_kind",
     )
     for key in preferred:
         value = document.fields.get(key, "")

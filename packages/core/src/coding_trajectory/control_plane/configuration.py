@@ -27,18 +27,14 @@ class ApiConfiguration(BaseModel):
             workspace_id=credentials.profile.workspace_id,
         )
 
-    def runtime_options(
-        self, *, local_evidence: bool = False, current_dir: Path | None = None
-    ) -> dict[str, Any]:
+    def runtime_options(self, *, current_dir: Path | None = None) -> dict[str, Any]:
         from coding_trajectory.control_plane.http_service import RemoteRuntimeFactory
 
         factory = RemoteRuntimeFactory(
             url=str(self.url),
             workspace_id=self.workspace_id,
         )
-        options = factory.runtime_options(
+        return factory.runtime_options(
             self.access_token.get_secret_value(),
-            local_evidence=local_evidence,
             current_dir=current_dir,
         )
-        return options

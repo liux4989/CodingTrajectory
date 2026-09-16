@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import json
 import os
-import signal
-import sqlite3
 import sys
-import threading
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -23,9 +19,6 @@ from coding_trajectory.control_plane.collector import (
 from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
 )
-from coding_trajectory.control_plane.publication_lock import publication_lock
-from coding_trajectory.control_plane.upload_service import UploadService
-from coding_trajectory.control_plane.upload_state import default_upload_state_path
 from coding_trajectory.discovery import discover_source_candidates
 
 from coding_trajectory_cli._shared import (
@@ -85,150 +78,7 @@ def _remote_from_args(args: argparse.Namespace) -> CloudflareCollectorRemote:
     ]
     if missing:
         raise ValueError("collector run requires " + ", ".join(missing))
-    return CloudflareCollectorRemote(
-        url=url, access_token=access_token, chunked=getattr(args, "chunked", False)
-    )
-
-
-def _handle_sync(args: argparse.Namespace) -> dict[str, Any]:
-    _apply_credential_profile(args, require_token=False)
-    args.workspace_id = args.workspace_id or (
-        _uuid_arg(os.environ["CT_REMOTE_WORKSPACE_ID"])
-        if os.environ.get("CT_REMOTE_WORKSPACE_ID")
-        else None
-    )
-    args.agent_id = args.agent_id or (
-        _uuid_arg(os.environ["CT_COLLECTOR_AGENT_ID"])
-        if os.environ.get("CT_COLLECTOR_AGENT_ID")
-        else None
-    )
-    _require_identity(args)
-    if not args.project_name or args.session_id:
-        raise ValueError(
-            "sync requires --project-name and uses complete project graphs; --session-id is not supported"
-        )
-    state_path = (
-        Path(args.state_path).expanduser()
-        if args.state_path
-        else default_upload_state_path(
-            workspace_id=args.workspace_id,
-            agent_id=args.agent_id,
-            project_name=args.project_name,
-        )
-    )
-    identity = _identity_from_args(args, state_path, project_id=args.project_id)
-    args.chunked = True
-    stop = threading.Event()
-    errors: list[str] = []
-
-    def upload_loop():
-        # Independent SQLite connection: slow/retrying uploads do not stop local
-        # discovery. Retry delay is bounded, and no secret-bearing error is logged.
-        service = UploadService(state_path, identity)
-        failures = 0
-        try:
-            while not stop.is_set():
-                try:
-                    if service.should_flush():
-                        # Reload profile metadata and token for each delivery
-                        # cycle. Keychain/profile rotation is never hidden behind
-                        # a permanently cached revoked bearer token.
-                        remote = _remote_from_args(args)
-                        try:
-                            result = service.publish(
-                                remote, max_batches=args.batch_count, force=False
-                            )
-                            if result["authority_error"]:
-                                errors.append(result["authority_error"])
-                        finally:
-                            remote.close()
-                    failures = 0
-                except (RuntimeError, ValueError, OSError, sqlite3.Error):
-                    failures = min(failures + 1, 6)
-                    errors.append(
-                        "delivery_unavailable; batches retained; check connection or restart with refreshed environment token"
-                    )
-                stop.wait(min(60, args.poll_seconds * 2**failures))
-        finally:
-            service.close()
-
-    service = UploadService(state_path, identity)
-    try:
-        if args.mode == "status":
-            return service.status()
-        updates = {}
-        if args.automatic is not None:
-            updates["mode"] = "automatic" if args.automatic else "manual"
-        for key in (
-            "batch_seconds",
-            "batch_bytes",
-            "batch_resources",
-            "max_pending_bytes",
-            "max_disk_bytes",
-        ):
-            if getattr(args, key, None) is not None:
-                updates[key] = getattr(args, key)
-        if updates:
-            service.configure(**updates)
-        if args.mode == "pause":
-            return service.configure(paused=True)
-        if args.mode == "resume":
-            return service.resume()
-        if args.mode == "reconcile-local":
-            return service.reconcile_local()
-        if args.mode == "prepare":
-            return service.prepare(
-                current_dir=Path.cwd(),
-                agent_vendor=args.agent_vendor,
-                since_days=args.since_days,
-            )
-        if args.mode in {"publish", "reconcile-remote"}:
-            remote = _remote_from_args(args)
-            try:
-                return (
-                    service.reconcile_remote(remote)
-                    if args.mode == "reconcile-remote"
-                    else service.publish(remote, max_batches=args.batch_count)
-                )
-            finally:
-                remote.close()
-        with service.owner_lock("service"):
-            # Even manual mode checks persisted policy locally. It never resolves
-            # tokens or contacts the authority unless automatic mode is enabled.
-            uploader = threading.Thread(
-                target=upload_loop, name="ct-upload", daemon=True
-            )
-            previous_signal = signal.signal(signal.SIGTERM, lambda *_: stop.set())
-            uploader.start()
-            try:
-                while not stop.is_set():
-                    try:
-                        service.prepare(
-                            current_dir=Path.cwd(),
-                            agent_vendor=args.agent_vendor,
-                            since_days=args.since_days,
-                        )
-                    except (RuntimeError, ValueError, OSError, sqlite3.Error):
-                        errors.append(
-                            "preparation_incomplete; previous checkpoint retained"
-                        )
-                    if errors:
-                        print(
-                            json.dumps({"sync": errors[-1]}),
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                        errors.clear()
-                    stop.wait(args.poll_seconds)
-            except KeyboardInterrupt:
-                stop.set()
-            finally:
-                stop.set()
-                uploader.join(timeout=30)
-                signal.signal(signal.SIGTERM, previous_signal)
-            return {**service.status(), "shutdown_pending": uploader.is_alive()}
-    finally:
-        service.close()
+    return CloudflareCollectorRemote(url=url, access_token=access_token)
 
 
 def _identity_from_args(
@@ -349,12 +199,9 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
     if project_id is None:
         raise ValueError("collector run requires --project-id or --project-name")
     if not args.project_name:
-        raise ValueError("collector run requires --project-name for artifact identity")
+        raise ValueError("collector run requires --project-name for fact identity")
     identity = _identity_from_args(args, state_path, project_id=project_id)
-    with (
-        publication_lock(identity.workspace_id, identity.agent_id),
-        LocalCollector(database_path=state_path, identity=identity) as collector,
-    ):
+    with LocalCollector(database_path=state_path, identity=identity) as collector:
         result = collector.collect(
             current_dir=Path.cwd(),
             global_scope=args.global_scope,
@@ -373,13 +220,13 @@ def _handle_run(args: argparse.Namespace) -> dict[str, Any]:
         "pending": result.pending,
         "heartbeat_sequence": result.heartbeat_sequence,
         "failed": result.failed,
-        "artifacts_queued": result.artifacts_queued,
-        "artifacts_accepted": result.artifacts_accepted,
-        "artifacts_rejected": result.artifacts_rejected,
-        "artifact_scope_incomplete": result.artifact_scope_incomplete,
+        "facts_queued": result.facts_queued,
+        "facts_accepted": result.facts_accepted,
+        "facts_rejected": result.facts_rejected,
+        "fact_scope_incomplete": result.fact_scope_incomplete,
         "scope_remedy": (
             "Include all sources of overlapping published graphs within the authorized collection scope."
-            if result.artifact_scope_incomplete
+            if result.fact_scope_incomplete
             else None
         ),
     }
@@ -451,7 +298,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     run = commands.add_parser(
         "run",
-        help="Queue checkpoints and publish bounded chronicle graph artifacts.",
+        help="Queue checkpoints and publish bounded typed fact rows.",
         formatter_class=GhFormatter,
     )
     add_agent_vendor_flag(run)
@@ -496,62 +343,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Load a collector profile (defaults to CT_CREDENTIAL_PROFILE) before publishing.",
     )
     run.add_argument("--no-heartbeat", action="store_true")
-    run.add_argument(
-        "--chunked",
-        action="store_true",
-        help="Use additive chunk upload protocol (requires an upgraded authority).",
-    )
     run.set_defaults(
         _plugin_handler=_handle_run,
         _default_output="json",
         global_scope=False,
     )
-
-    sync = commands.add_parser(
-        "sync",
-        parents=[run],
-        add_help=False,
-        help="Prepare offline batches, explicitly publish, or run an opt-in sync service.",
-    )
-    sync.add_argument(
-        "--mode",
-        choices=(
-            "prepare",
-            "publish",
-            "serve",
-            "service",
-            "status",
-            "pause",
-            "resume",
-            "reconcile-local",
-            "reconcile-remote",
-        ),
-        default="prepare",
-    )
-    sync.add_argument(
-        "--automatic",
-        action="store_true",
-        default=None,
-        help="Persist automatic publication; manual is the initial default.",
-    )
-    sync.add_argument(
-        "--manual",
-        dest="automatic",
-        action="store_false",
-        help="Persist preparation-only mode.",
-    )
-    sync.add_argument("--poll-seconds", type=_positive_int, default=10)
-    sync.add_argument("--batch-seconds", type=_positive_int)
-    sync.add_argument("--batch-bytes", type=_positive_int)
-    sync.add_argument("--batch-resources", type=_positive_int)
-    sync.add_argument("--max-pending-bytes", type=_positive_int)
-    sync.add_argument("--max-disk-bytes", type=_positive_int)
-    sync.add_argument("--batch-count", type=_positive_int, default=16)
-    sync.set_defaults(_plugin_handler=_handle_sync, automatic=None)
-
-    from coding_trajectory_cli.collector_service import register_service
-
-    register_service(commands)
 
     status = commands.add_parser(
         "status",

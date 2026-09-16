@@ -1,21 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
-import { bounded, digest, DIGEST, encode, Fault, Json, MAX_ARTIFACT, Principal, requireThat, stable, State, uuid, validate } from "./shared";
-import { checkpoint, publication, recovery, registerProject, registerSource } from "./collector";
+import { digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
+import { checkpoint, recovery, registerProject, registerSource } from "./collector";
+import { commitPublication, factRead, initializeFacts, missingFactRows, preparePublication, verifyStageRows, writeStagedRows } from "./facts";
 import { livingRead, livingWrite } from "./living";
-import { estimation } from "./estimation";
-import { Descriptor, initializeUploads, missingChunks, uploadChunks, uploadRead } from "./upload";
-import { initializeCatalog, catalogRead, migrateCatalog } from "./catalog";
-import { catalogReadV2, initializeCatalogSelections } from "./catalog-v2";
 
 /** A workspace is the authorization, transaction and revision boundary. */
 export class Workspace extends DurableObject<Env> {
   private state: State;
+  private cursorSecret: string;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.state = new State(ctx.storage.sql);
-    initializeUploads(this.state);
-    initializeCatalog(this.state);
-    initializeCatalogSelections(this.state);
+    this.cursorSecret = env.CT_CURSOR_KEY;
+    initializeFacts(this.state);
   }
 
   async invoke(method: string, envelopeJson: string, principalJson: string): Promise<string> {
@@ -31,21 +28,24 @@ export class Workspace extends DurableObject<Env> {
       // Compute identity before schema defaults normalize the request.
       const identity = await digest(stable(request));
       validate(method, request);
-      if (method === "ct_catalog_migrate") {
-        requireThat(Object.keys(request).every(key => ["workspace_id", "agent_id"].includes(key)) && request.agent_id === principal.agent_id, "invalid_fields");
-        return { status: 200, body: this.ctx.storage.transactionSync(() => migrateCatalog(this.state)) };
+      if (method === "ct_fact_read") {
+        return { status: 200, body: await factRead(this.state, request, this.cursorSecret) };
+      }
+      if (method === "ct_collector_missing_fact_rows") return { status: 200, body: missingFactRows(this.state, request) };
+      if (method === "ct_collector_stage_fact_rows") {
+        await verifyStageRows(request);
+        return { status: 200, body: this.ctx.storage.transactionSync(() => writeStagedRows(this.state, request)) };
+      }
+      if (method === "ct_collector_publish_facts") {
+        // Hash verification is async (crypto.subtle); fencing and the atomic
+        // commit run inside the workspace transaction, which also re-verifies
+        // that the staged rows validated above are still the staged set.
+        const plan = await preparePublication(this.state, request);
+        return { status: 200, body: this.ctx.storage.transactionSync(() => commitPublication(this.state, request, plan)) };
       }
       if (method === "ct_collector_publish_observation") {
         requireThat(request.payload.source_checkpoint?.segments?.every((offset: unknown) => Number.isSafeInteger(offset) && Number(offset) > 0), "invalid_checkpoint_offsets");
         requireThat(await digest(stable(request.payload)) === request.content_sha256 && request.event_id === `checkpoint:${request.content_sha256}`, "checkpoint_digest_mismatch");
-      }
-      if (method === "ct_collector_upload_chunks") return { status: 200, body: await uploadChunks(this.state, this.env.ARTIFACTS, request) };
-      if (method === "ct_collector_missing_chunks") return { status: 200, body: await missingChunks(this.state, this.env.ARTIFACTS, request) };
-      if (["ct_publication_watermark", "ct_artifact_chunk_manifest", "ct_artifact_chunks"].includes(method)) return { status: 200, body: await uploadRead(this.state, this.env.ARTIFACTS, method, request) };
-      if (method === "ct_catalog_read_v2") return { status: 200, body: this.ctx.storage.transactionSync(() => catalogReadV2(this.state, request, principal)) };
-      if (["ct_published_catalog", "ct_publication_changes"].includes(method)) return { status: 200, body: catalogRead(this.state, method, request) };
-      if (["ct_historical_snapshot", "ct_historical_artifacts", "ct_project_sessions_projection"].includes(method)) {
-        return { status: 200, body: await this.historical(method, request) };
       }
       const body = this.ctx.storage.transactionSync(() => {
         const key = envelope.idempotency_key ? stable([principal.agent_id, method, envelope.idempotency_key]) : null;
@@ -71,142 +71,23 @@ export class Workspace extends DurableObject<Env> {
       case "ct_collector_register_source": return registerSource(this.state, request);
       case "ct_collector_recover": return recovery(this.state, request);
       case "ct_collector_publish_observation": validate("checkpoint", request.payload); return checkpoint(this.state, request);
-      case "ct_collector_publish_artifacts": return publication(this.state, request);
       case "ct_collector_heartbeat": case "ct_collector_publish_living_observation": return livingWrite(this.state, method, request);
       case "ct_remote_living": return livingRead(this.state, request);
       case "ct_workspace_snapshot": return { workspace_id: request.workspace_id, snapshot_sequence: this.state.pin(request.snapshot_sequence) };
       case "ct_project_inventory_snapshot": {
         const sequence = this.state.pin(request.snapshot_sequence);
-        const artifacts = this.state.all("artifact", sequence).filter(row => !row.deleted);
-        const projects = this.state.all("project", sequence).filter(row => !request.modified_since || Date.parse(row.modified_at) >= Date.parse(request.modified_since)).map((row): Json => ({
-          ...row, vendors: [...new Set(artifacts.filter(a => a.project_id === row.project_id).flatMap(a => a.vendors))].sort(),
-        })).filter(row => !request.agent_vendor || row.vendors.includes(request.agent_vendor)).sort((a, b) => a.display_name.localeCompare(b.display_name));
+        const graphs = this.state.all("graph_publication", sequence).filter(row => !row.deleted);
+        const projects = this.state.all("project", sequence)
+          .filter(row => !request.modified_since || Date.parse(row.modified_at) >= Date.parse(request.modified_since))
+          .map((row): Json => ({
+            ...row,
+            vendors: [...new Set(graphs.filter(graph => graph.project_id === row.project_id).flatMap(graph => graph.vendors))].sort(),
+          }))
+          .filter(row => !request.agent_vendor || row.vendors.includes(request.agent_vendor))
+          .sort((a, b) => a.display_name.localeCompare(b.display_name));
         return { workspace_id: request.workspace_id, snapshot_sequence: sequence, projects };
       }
-      default: return estimation(this.state, method, request, principal);
+      default: throw new Fault(404, "not_found");
     }
-  }
-
-  // These RPCs are private to the authenticated ingress Worker. They are absent
-  // from the public method allowlist. Full bodies and object-store I/O stay there.
-  async chunkDescriptors(agent: string, ids: string[]): Promise<Descriptor[]> {
-    uuid(agent);
-    requireThat(ids.length <= 128 && ids.every(id => DIGEST.test(id)), "invalid_chunk_selection");
-    return ids.flatMap(id => this.state.sql.exec<Descriptor>(
-      "SELECT * FROM upload_chunk_objects WHERE digest=? AND agent=?", id, agent).toArray());
-  }
-
-  async indexStage(encoded: string): Promise<void> {
-    const request = JSON.parse(encoded);
-    requireThat(DIGEST.test(request.content_sha256) && request.resources.length <= 128 && request.digests.length <= 128, "invalid_stage_page");
-    uuid(request.agent_id);
-    this.ctx.storage.transactionSync(() => {
-      for (const resource of request.resources) this.state.sql.exec("INSERT OR IGNORE INTO resources VALUES(?,?)", request.content_sha256, uuid(resource));
-      for (const id of request.digests) {
-        requireThat(DIGEST.test(id) && DIGEST.test(request.root_sha256), "invalid_stage_page");
-        this.state.sql.exec("INSERT OR IGNORE INTO upload_members VALUES(?,?,?)", request.root_sha256, id, request.agent_id);
-      }
-    });
-  }
-
-  async indexResourceProjections(encoded: string): Promise<void> {
-    requireThat(new TextEncoder().encode(encoded).length <= 260*1024, "resource_projection_budget", 413);
-    const request = JSON.parse(encoded);
-    requireThat(DIGEST.test(request.identity) && request.rows.length <= 128, "invalid_stage_page");
-    this.ctx.storage.transactionSync(() => {
-      for (const row of request.rows) this.state.sql.exec(
-        "INSERT OR IGNORE INTO resource_projection_pages(identity,kind,resource_id,page_index,page_count,coverage,payload) VALUES(?,?,?,?,?,?,?)", request.identity,
-        row.resource_kind, uuid(row.resource_id), row.page_index, row.page_count, row.coverage, row.payload == null ? null : stable(row.payload));
-    });
-  }
-
-  async completeStage(encoded: string): Promise<string> {
-    const request = JSON.parse(encoded);
-    try {
-      const body = this.ctx.storage.transactionSync(() => {
-        const count = this.state.sql.exec<{total: number}>("SELECT count(*) total FROM resources WHERE digest=?", request.content_sha256).one().total;
-        requireThat(count === request.resource_count, "stage_index_incomplete", 409);
-        if (request.resource_projection_identity) {
-          const total = this.state.sql.exec<{total: number}>(`SELECT
-            (SELECT count(*) FROM resource_projection_pages WHERE identity=?)+
-            (SELECT count(*) FROM resource_projections WHERE identity=? AND NOT EXISTS
-              (SELECT 1 FROM resource_projection_pages WHERE identity=?)) total`, request.resource_projection_identity,
-            request.resource_projection_identity, request.resource_projection_identity).one().total;
-          requireThat(total === request.resource_projection_count, "stage_index_incomplete", 409);
-        }
-        if (request.root_sha256) {
-          const members = this.state.sql.exec<{total: number}>("SELECT count(*) total FROM upload_members WHERE root=? AND agent=?", request.root_sha256, request.agent_id).one().total;
-          requireThat(members === request.chunk_count, "stage_index_incomplete", 409);
-        }
-        const variants = ["default", "runtime", "usage", "runtime_usage"];
-        const existingProjections = this.state.get("projections", request.content_sha256);
-        requireThat(!existingProjections || variants.every(variant => stable(existingProjections[variant]) === stable(request.projections[variant])), "projection_conflict", 409);
-        requireThat(!existingProjections?.canonical || !request.projections.canonical || stable(existingProjections.canonical) === stable(request.projections.canonical), "projection_conflict", 409);
-        const stageKey = `${request.agent_id}:${request.content_sha256}`;
-        const prior = this.state.get("staged", stageKey);
-        requireThat(!prior?.chunk_root_sha256 || !request.root_sha256 || prior.chunk_root_sha256 === request.root_sha256, "chunk_root_conflict", 409);
-        const previousVersion = prior?.resource_projection_version ?? 1;
-        const resourceUpgrade = request.resource_projection_identity && request.resource_projection_version > previousVersion;
-        const resourceDowngrade = prior?.resource_projection_identity && request.resource_projection_version < previousVersion;
-        requireThat(!prior?.resource_projection_identity || !request.resource_projection_identity || resourceUpgrade || resourceDowngrade || prior.resource_projection_identity === request.resource_projection_identity, "projection_conflict", 409);
-        const upgrade = resourceUpgrade || (!existingProjections?.canonical && request.projections.canonical) || (!prior?.resource_projection_identity && request.resource_projection_identity);
-        if (!prior || upgrade || (!prior.chunk_root_sha256 && request.root_sha256)) {
-          const sequence = this.state.next();
-          this.state.put("staged", stageKey, { ...prior, ...request.metadata, key: request.key, content_sha256: request.content_sha256,
-            compressed_bytes: request.compressed_bytes, uncompressed_bytes: request.uncompressed_bytes,
-            resource_projection_identity: resourceDowngrade ? prior.resource_projection_identity : request.resource_projection_identity ?? prior?.resource_projection_identity,
-            resource_projection_version: Math.max(previousVersion, request.resource_projection_version ?? 1),
-            projection_identity: request.projection_identity, chunk_root_sha256: request.root_sha256 ?? prior?.chunk_root_sha256 }, sequence);
-          this.state.put("projections", request.content_sha256, existingProjections?.canonical ? existingProjections : request.projections, sequence);
-        }
-        return { content_sha256: request.content_sha256, encoding: "gzip", uncompressed_bytes: request.uncompressed_bytes,
-          compressed_bytes: request.compressed_bytes, projection_version: 1,
-          ...(request.root_sha256 ? { root_sha256: request.root_sha256 } : {}) };
-      });
-      return JSON.stringify({ status: 200, body });
-    } catch (error) {
-      return JSON.stringify({ status: error instanceof Fault ? error.status : 503,
-        body: { error: { code: error instanceof Fault ? error.code : "authority_unavailable" } } });
-    }
-  }
-
-  private async historical(method: string, request: Json): Promise<Json> {
-    // No await until every descriptor and projection is selected at the same S.
-    const sequence = this.state.pin(request.snapshot_sequence);
-    const base = { workspace_id: request.workspace_id, snapshot_sequence: sequence };
-    if (request.metadata_only) return { ...base, artifacts: [] };
-    const projects = new Map(this.state.all("project", sequence).map(p => [p.project_id, p]));
-    const resources = request.resource_ids ?? [];
-    requireThat(Array.isArray(resources) && resources.length <= 1000, "invalid_resource_ids");
-    const since = request.since_days == null ? null : Date.now() - request.since_days * 86400000;
-    const rows = this.state.all("artifact", sequence).filter(row => !row.deleted
-      && (!request.project_name || projects.get(row.project_id)?.display_name === request.project_name)
-      && (!request.agent_vendor || row.vendors.includes(request.agent_vendor))
-      && (since == null || Date.parse(row.observed_at) >= since)
-      && (!request.modified_since || Date.parse(row.observed_at) >= Date.parse(request.modified_since))
-      && (!resources.length || resources.some(id => this.state.sql.exec("SELECT 1 FROM resources WHERE digest=? AND resource_id=?", row.content_sha256, id).toArray().length))
-    ).sort((a, b) => a.artifact_id.localeCompare(b.artifact_id));
-    if (method === "ct_project_sessions_projection") {
-      const include = request.include ?? [];
-      requireThat(Array.isArray(include), "invalid_include");
-      const variant = include.includes("runtime") ? include.includes("usage") ? "runtime_usage" : "runtime" : include.includes("usage") ? "usage" : "default";
-      let complete = true;
-      const items = rows.flatMap(row => {
-        const projection = this.state.get("projections", row.content_sha256, sequence)?.[variant];
-        if (!projection) { complete = false; return []; }
-        return projection.items.filter((item: Json) => !request.agent_vendor || item.vendors.includes(request.agent_vendor));
-      }).sort((a, b) => (a.project ?? "").localeCompare(b.project ?? ""));
-      return { ...base, complete, result: { items } };
-    }
-    requireThat(rows.reduce((total, row) => total + row.compressed_bytes, 0) <= 32 * 1024 * 1024, "narrow_historical_scope", 413);
-    const artifacts: Json[] = [];
-    for (const row of rows) {
-      const stored = await this.env.ARTIFACTS.get(row.key);
-      requireThat(stored, "artifact_unavailable", 503);
-      artifacts.push({ artifact_id: row.artifact_id, revision: row.revision, published_sequence: row.published_sequence,
-        content_sha256: row.content_sha256, payload_encoding: "gzip", uncompressed_bytes: row.uncompressed_bytes,
-        payload_base64: encode(await bounded(stored.body, MAX_ARTIFACT)) });
-    }
-    return { ...base, artifacts };
   }
 }

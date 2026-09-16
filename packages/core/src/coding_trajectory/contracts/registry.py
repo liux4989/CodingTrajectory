@@ -11,22 +11,6 @@ from coding_trajectory.contracts.envelope import (
     ApiErrorResponse,
     ApiSuccessResponse,
 )
-from coding_trajectory.contracts.estimate import (
-    EstimateBackfillStartRequest,
-    EstimateBackfillStartResponse,
-    EstimateBackfillStatusRequest,
-    EstimateBackfillStatusResponse,
-    EstimateBindRequest,
-    EstimateBindResponse,
-    EstimateCalibrationRequest,
-    EstimateCalibrationResponse,
-    EstimateGetRequest,
-    EstimateGetResponse,
-    EstimateListRequest,
-    EstimateListResponse,
-    EstimatePredictRequest,
-    EstimatePredictResponse,
-)
 from coding_trajectory.contracts.living import (
     LivingEventsRequest,
     LivingEventsResponse,
@@ -36,6 +20,7 @@ from coding_trajectory.contracts.living import (
 from coding_trajectory.contracts.session import (
     CliProjectSessionsResponse,
     CliSessionEventsResponse,
+    CliSessionItemsResponse,
     CliSessionOverviewResponse,
     CliSessionStatsResponse,
     CliSessionUsageResponse,
@@ -121,83 +106,84 @@ class ServiceContract:
 SERVICE_CONTRACTS = {
     contract.method: contract
     for contract in (
-        ServiceContract("project.list", 2, ProjectListRequest, ProjectListResponse),
+        ServiceContract("project.list", 3, ProjectListRequest, ProjectListResponse),
         ServiceContract(
             "project.sessions",
-            2,
+            3,
             ProjectSessionsRequest,
             ProjectSessionsResponse,
             CliProjectSessionsResponse,
         ),
         ServiceContract(
             "session.overview",
-            2,
+            3,
             SessionOverviewRequest,
             SessionOverviewResponse,
             CliSessionOverviewResponse,
         ),
         ServiceContract(
             "session.summary",
-            1,
+            2,
             SessionSummaryRequest,
             SessionSummaryResponse,
         ),
         ServiceContract(
             "session.search",
-            1,
+            2,
             SessionSearchRequest,
             SessionSearchResponse,
         ),
-        ServiceContract("session.tree", 2, SessionTreeRequest, SessionTreeResponse),
+        ServiceContract("session.tree", 3, SessionTreeRequest, SessionTreeResponse),
         ServiceContract(
             "graph.overview",
-            2,
+            3,
             GraphOverviewRequest,
             GraphOverviewResponse,
         ),
         ServiceContract(
             "session.stats",
-            2,
+            3,
             SessionStatsRequest,
             SessionStatsResponse,
             CliSessionStatsResponse,
         ),
-        ServiceContract("graph.stats", 2, GraphStatsRequest, SessionStatsResponse),
+        ServiceContract("graph.stats", 3, GraphStatsRequest, SessionStatsResponse),
         ServiceContract(
             "session.usage",
-            2,
+            3,
             SessionUsageRequest,
             SessionUsageResponse,
             CliSessionUsageResponse,
         ),
-        ServiceContract("graph.usage", 2, GraphUsageRequest, SessionUsageResponse),
+        ServiceContract("graph.usage", 3, GraphUsageRequest, SessionUsageResponse),
         ServiceContract(
             "session.model_usage",
-            2,
+            3,
             SessionModelUsageRequest,
             SessionModelUsageResponse,
         ),
         ServiceContract(
             "session.request_usage",
-            2,
+            3,
             SessionRequestUsageRequest,
             SessionRequestUsageResponse,
         ),
         ServiceContract(
-            "session.tool_usage", 2, SessionToolUsageRequest, SessionToolUsageResponse
+            "session.tool_usage", 3, SessionToolUsageRequest, SessionToolUsageResponse
         ),
         ServiceContract(
             "session.events",
-            2,
+            4,
             SessionEventsRequest,
             SessionEventsResponse,
             CliSessionEventsResponse,
         ),
         ServiceContract(
             "session.items",
-            2,
+            4,
             SessionItemsRequest,
             SessionItemsResponse,
+            CliSessionItemsResponse,
         ),
         ServiceContract(
             "living.events",
@@ -210,48 +196,6 @@ SERVICE_CONTRACTS = {
             2,
             LivingSessionsRequest,
             LivingSessionsResponse,
-        ),
-        ServiceContract(
-            "estimate.predict",
-            1,
-            EstimatePredictRequest,
-            EstimatePredictResponse,
-        ),
-        ServiceContract(
-            "estimate.bind",
-            1,
-            EstimateBindRequest,
-            EstimateBindResponse,
-        ),
-        ServiceContract(
-            "estimate.get",
-            1,
-            EstimateGetRequest,
-            EstimateGetResponse,
-        ),
-        ServiceContract(
-            "estimate.list",
-            1,
-            EstimateListRequest,
-            EstimateListResponse,
-        ),
-        ServiceContract(
-            "estimate.calibration",
-            1,
-            EstimateCalibrationRequest,
-            EstimateCalibrationResponse,
-        ),
-        ServiceContract(
-            "estimate.backfill.start",
-            1,
-            EstimateBackfillStartRequest,
-            EstimateBackfillStartResponse,
-        ),
-        ServiceContract(
-            "estimate.backfill.status",
-            1,
-            EstimateBackfillStatusRequest,
-            EstimateBackfillStatusResponse,
         ),
     )
 }

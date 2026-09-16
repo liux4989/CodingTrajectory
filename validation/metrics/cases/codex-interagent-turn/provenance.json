@@ -16,10 +16,13 @@
   "entrypoint_id": "019f17c0-0000-7000-8000-000000000001",
   "coverage": ["provider:codex_cli", "graph:multi-session", "relationship:fork", "turn:inter-agent-triggered", "turn:orphan-marker-skip", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration"],
   "expected_schema_versions": {
+    "structure": 1,
     "session.overview": 1,
     "session.stats": 1,
     "session.usage": 1,
-    "session.model_usage": 1
+    "session.model_usage": 1,
+    "graph.stats": 1,
+    "graph.usage": 1
   },
   "pricing_artifact_version": "2026-07-15-baseline-v1",
   "audit_date": "2026-07-18",

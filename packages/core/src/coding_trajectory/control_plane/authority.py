@@ -2,7 +2,7 @@
 
 The dispatcher is deliberately unaware of local discovery, HTTP, Cloudflare, or
 cache implementation details. Embedded and remote runtimes provide the same
-four handlers and therefore share request and response validation.
+handlers and therefore share request and response validation.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ class MethodAuthority(StrEnum):
     HISTORICAL = "historical"
     PROJECT_INVENTORY = "project_inventory"
     LIVING = "living"
-    ESTIMATION = "estimation"
 
 
 AUTHORITY_METHODS: dict[MethodAuthority, frozenset[str]] = {
@@ -45,17 +44,6 @@ AUTHORITY_METHODS: dict[MethodAuthority, frozenset[str]] = {
     ),
     MethodAuthority.PROJECT_INVENTORY: frozenset({"project.list"}),
     MethodAuthority.LIVING: frozenset({"living.events", "living.sessions"}),
-    MethodAuthority.ESTIMATION: frozenset(
-        {
-            "estimate.predict",
-            "estimate.bind",
-            "estimate.get",
-            "estimate.list",
-            "estimate.calibration",
-            "estimate.backfill.start",
-            "estimate.backfill.status",
-        }
-    ),
 }
 
 METHOD_AUTHORITIES = {

@@ -8,34 +8,35 @@ import hashlib
 import json
 import sys
 import tomllib
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Literal
-
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from typing import Any, Literal
+from uuid import UUID
 
 from coding_trajectory.contracts import service_contract
+from coding_trajectory.discovery import _ingest_sessions
 from coding_trajectory.ingestion import ClaudeCodeAdapter, CodexAdapter, PiAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
-from coding_trajectory.discovery import stabilize_session
-from coding_trajectory.ingestion.models import Vendor
+from coding_trajectory.ingestion.models import SessionGraph, Vendor
 from coding_trajectory.metrics import pricing
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.service import IndexCache, dispatch
 from coding_trajectory_cli._shared import compact_payload
-
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATION_ROOT = REPO_ROOT / "validation" / "metrics"
 DEFAULT_MANIFEST = VALIDATION_ROOT / "manifest.toml"
 DEFAULT_REPORT = REPO_ROOT / ".artifacts" / "metrics-quality-gate-report.json"
-SURFACES = (
+REQUIRED_METRIC_SURFACES = (
     "session.overview",
     "session.stats",
     "session.usage",
     "session.model_usage",
 )
+GRAPH_METRIC_SURFACES = ("graph.stats", "graph.usage")
 
 
 class StrictModel(BaseModel):
@@ -48,6 +49,7 @@ class BaselineCase(StrictModel):
     provider: Literal["codex_cli", "claude_code", "pi"]
     entrypoint_id: str
     source_files: list[str] = Field(min_length=1)
+    structure_file: str
     expected_files: list[str] = Field(min_length=1)
     coverage: list[str] = Field(min_length=1)
 
@@ -114,8 +116,19 @@ class ExpectedArtifact(StrictModel):
         "session.stats",
         "session.usage",
         "session.model_usage",
+        "graph.stats",
+        "graph.usage",
     ]
     assertions: list[Assertion] = Field(min_length=1)
+
+
+class StructuralAssertion(Assertion):
+    surface: Literal["canonical.graph", "session.tree", "graph.overview"]
+
+
+class StructuralArtifact(StrictModel):
+    schema_version: Literal[1]
+    assertions: list[StructuralAssertion] = Field(min_length=1)
 
 
 class Difference(StrictModel):
@@ -136,6 +149,7 @@ class CaseReport(StrictModel):
     provider: str
     status: Literal["pass", "fail"]
     assertions: int = 0
+    structural_assertions: int = 0
     invariants: int = 0
     differences: list[Difference] = Field(default_factory=list)
 
@@ -214,30 +228,75 @@ def pinned_pricing(artifact: PricingArtifact) -> Iterator[None]:
         pricing._load_models_dev_cache = original_catalog
 
 
-def build_store(case: BaselineCase) -> DocumentStore:
+def build_evidence(case: BaselineCase) -> tuple[DocumentStore, SessionGraph]:
     adapter_class, vendor = ADAPTERS[case.provider]
-    sessions = []
+    candidates = []
     for relative in case.source_files:
         path = VALIDATION_ROOT / relative
         if not path.is_file():
             raise ValueError(f"missing source file: {path}")
-        session = adapter_class().ingest_file(path)
-        sessions.append(stabilize_session(session, vendor=vendor, source=path))
-    graphs = assemble_project_session_graphs(f"metrics-baseline-{case.id}", sessions)
-    return DocumentStore.from_session_graphs(graphs)
+        candidates.append((vendor, adapter_class, path))
+
+    # Use the production two-pass ingestion core. In particular, Codex child
+    # files receive their parent's started turn ids before projection so an
+    # inherited transcript prefix cannot be counted twice.
+    ingested, _provenance = _ingest_sessions(candidates)
+    graphs = assemble_project_session_graphs(
+        f"metrics-baseline-{case.id}",
+        [item.session for item in ingested],
+    )
+    store = DocumentStore.from_session_graphs(graphs)
+    graph = store.get_session_graph_for_session(UUID(case.entrypoint_id))
+    return store, graph
+
+
+def canonical_graph_structure(graph: SessionGraph) -> dict[str, Any]:
+    """Project only source-auditable canonical hierarchy and linkage facts."""
+    return {
+        "root_session_id": str(graph.root_session_id),
+        "session_count": len(graph.sessions),
+        "sessions": [
+            {
+                "session_id": str(session.session_id),
+                "parent_session_id": (
+                    str(session.parent_session_id)
+                    if session.parent_session_id is not None
+                    else None
+                ),
+                "vendor": session.vendor.value,
+                "turn_count": len(session.turns),
+                "item_count": sum(len(turn.items) for turn in session.turns),
+                "turn_statuses": [turn.status.value for turn in session.turns],
+                "tools": [
+                    {
+                        "kind": item.kind,
+                        "tool_call_id": item.tool_call_id,
+                        "status": getattr(item.status, "value", item.status),
+                    }
+                    for turn in session.turns
+                    for item in turn.items
+                    if getattr(item, "tool_call_id", None) is not None
+                ],
+            }
+            for session in graph.sessions
+        ],
+        "edge_count": len(graph.edges),
+        "edges": [edge.model_dump(mode="json") for edge in graph.edges],
+    }
 
 
 def project_surface(store: DocumentStore, case: BaselineCase, method: str) -> Any:
+    scope_key = "root_session_id" if method.startswith("graph.") else "session_id"
     payload = dispatch(
         method,
-        {"session_id": case.entrypoint_id},
+        {scope_key: case.entrypoint_id},
         store=store,
         global_scope=True,
         current_dir=REPO_ROOT,
         discovery_note=f"committed baseline {case.id}",
         cache=IndexCache(),
     )
-    if method == "session.model_usage":
+    if method == "session.model_usage" or method.startswith("graph."):
         # This surface is public through `ct api call`, whose result is the
         # versioned service payload rather than a CLI compact projection.
         return payload
@@ -288,7 +347,9 @@ def walk_dicts(value: Any, path: str = "$") -> Iterator[tuple[str, dict[str, Any
             yield from walk_dicts(item, f"{path}[{index}]")
 
 
-def invariant_differences(case: BaselineCase, surfaces: dict[str, Any]) -> tuple[int, list[Difference]]:
+def invariant_differences(
+    case: BaselineCase, surfaces: dict[str, Any]
+) -> tuple[int, list[Difference]]:
     checked = 0
     differences: list[Difference] = []
     usage_payload = surfaces["session.usage"]
@@ -339,7 +400,10 @@ def invariant_differences(case: BaselineCase, surfaces: dict[str, Any]) -> tuple
     runtime = usage_payload.get("runtime") or {}
     if runtime:
         checked += 1
-        if runtime.get("execution_seconds", 0) < 0 or runtime.get("wait_seconds", 0) < 0:
+        if (
+            runtime.get("execution_seconds", 0) < 0
+            or runtime.get("wait_seconds", 0) < 0
+        ):
             differences.append(
                 Difference(
                     case=case.id,
@@ -370,25 +434,28 @@ def invariant_differences(case: BaselineCase, surfaces: dict[str, Any]) -> tuple
                     )
                 )
 
-    graph_usage = usage_payload.get("graph_usage") or {}
-    session_rows = usage_payload.get("sessions") or []
+    graph_usage_payload = surfaces["graph.usage"]
+    graph_usage = graph_usage_payload.get("total_usage") or {}
+    session_rows = graph_usage_payload.get("sessions") or []
     if graph_usage and session_rows:
         for field in (
-            "uncached_prompt",
-            "cached_prompt",
-            "cache_write",
-            "completion",
-            "reasoning",
-            "processed",
+            "uncached_prompt_tokens",
+            "cached_prompt_tokens",
+            "cache_write_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
+            "processed_tokens",
         ):
             checked += 1
-            session_total = sum((row.get("usage") or {}).get(field, 0) for row in session_rows)
+            session_total = sum(
+                (row.get("total_usage") or {}).get(field, 0) for row in session_rows
+            )
             if graph_usage.get(field, 0) != session_total:
                 differences.append(
                     Difference(
                         case=case.id,
-                        surface="session.usage",
-                        scope="$.graph_usage",
+                        surface="graph.usage",
+                        scope="$.total_usage",
                         field=field,
                         expected=session_total,
                         actual=graph_usage.get(field),
@@ -396,6 +463,25 @@ def invariant_differences(case: BaselineCase, surfaces: dict[str, Any]) -> tuple
                         message="graph usage does not reconcile with its distinct session sections",
                     )
                 )
+
+        checked += 1
+        session_turns = sum(
+            (row.get("runtime") or {}).get("turns", 0) for row in session_rows
+        )
+        graph_turns = (graph_usage_payload.get("runtime") or {}).get("turns", 0)
+        if graph_turns != session_turns:
+            differences.append(
+                Difference(
+                    case=case.id,
+                    surface="graph.usage",
+                    scope="$.runtime",
+                    field="turns",
+                    expected=session_turns,
+                    actual=graph_turns,
+                    kind="invariant",
+                    message="graph turn count does not reconcile with its session sections",
+                )
+            )
 
     for path, value in walk_dicts(usage_payload):
         if "cost" not in value:
@@ -457,6 +543,52 @@ def invariant_differences(case: BaselineCase, surfaces: dict[str, Any]) -> tuple
     return checked, differences
 
 
+def validate_assertions(
+    *,
+    case: BaselineCase,
+    surface: str,
+    payload: Any,
+    assertions: list[Assertion],
+    report: CaseReport,
+    structural: bool = False,
+) -> None:
+    for assertion in assertions:
+        if structural:
+            report.structural_assertions += 1
+        else:
+            report.assertions += 1
+        found, actual = resolve_path(payload, assertion.path)
+        if not found:
+            report.differences.append(
+                Difference(
+                    case=case.id,
+                    surface=surface,
+                    scope=assertion.path.rpartition(".")[0] or "$",
+                    field=assertion.path,
+                    expected=assertion.expected,
+                    source_refs=assertion.source_refs,
+                    audit_ref=assertion.audit_ref,
+                    kind="missing",
+                    message="expected field is absent",
+                )
+            )
+        elif actual != assertion.expected:
+            report.differences.append(
+                Difference(
+                    case=case.id,
+                    surface=surface,
+                    scope=assertion.path.rpartition(".")[0] or "$",
+                    field=assertion.path,
+                    expected=assertion.expected,
+                    actual=actual,
+                    source_refs=assertion.source_refs,
+                    audit_ref=assertion.audit_ref,
+                    kind="value",
+                    message="output differs from audited source expectation",
+                )
+            )
+
+
 def validate_case(case: BaselineCase, pricing_version: str) -> CaseReport:
     report = CaseReport(case=case.id, provider=case.provider, status="pass")
     case_root = VALIDATION_ROOT / "cases" / case.id
@@ -469,54 +601,62 @@ def validate_case(case: BaselineCase, pricing_version: str) -> CaseReport:
         if provenance.pricing_artifact_version not in {None, pricing_version}:
             raise ValueError("provenance references a different pricing artifact")
         actual_hashes = {
-            relative: sha256(VALIDATION_ROOT / relative) for relative in case.source_files
+            relative: sha256(VALIDATION_ROOT / relative)
+            for relative in case.source_files
         }
         if provenance.committed_source_sha256 != actual_hashes:
             raise ValueError("committed source hashes do not match provenance")
-        store = build_store(case)
-        surfaces = {method: project_surface(store, case, method) for method in SURFACES}
+        store, graph = build_evidence(case)
+        surfaces = {
+            method: project_surface(store, case, method)
+            for method in (*REQUIRED_METRIC_SURFACES, *GRAPH_METRIC_SURFACES)
+        }
         surfaces["graph.overview"] = project_surface(store, case, "graph.overview")
+        surfaces["session.tree"] = project_surface(store, case, "session.tree")
+        surfaces["canonical.graph"] = canonical_graph_structure(graph)
+
+        structure = load_json_model(
+            VALIDATION_ROOT / case.structure_file, StructuralArtifact
+        )
+        assert isinstance(structure, StructuralArtifact)
+        for assertion in structure.assertions:
+            validate_assertions(
+                case=case,
+                surface=assertion.surface,
+                payload=surfaces[assertion.surface],
+                assertions=[assertion],
+                report=report,
+                structural=True,
+            )
+
         expected_methods: set[str] = set()
         for relative in case.expected_files:
             artifact = load_json_model(VALIDATION_ROOT / relative, ExpectedArtifact)
             assert isinstance(artifact, ExpectedArtifact)
             expected_methods.add(artifact.method)
-            payload = surfaces[artifact.method]
-            for assertion in artifact.assertions:
-                report.assertions += 1
-                found, actual = resolve_path(payload, assertion.path)
-                if not found:
-                    report.differences.append(
-                        Difference(
-                            case=case.id,
-                            surface=artifact.method,
-                            scope=assertion.path.rpartition(".")[0] or "$",
-                            field=assertion.path,
-                            expected=assertion.expected,
-                            source_refs=assertion.source_refs,
-                            audit_ref=assertion.audit_ref,
-                            kind="missing",
-                            message="expected public field is absent",
-                        )
-                    )
-                elif actual != assertion.expected:
-                    report.differences.append(
-                        Difference(
-                            case=case.id,
-                            surface=artifact.method,
-                            scope=assertion.path.rpartition(".")[0] or "$",
-                            field=assertion.path,
-                            expected=assertion.expected,
-                            actual=actual,
-                            source_refs=assertion.source_refs,
-                            audit_ref=assertion.audit_ref,
-                            kind="value",
-                            message="public metric differs from audited expectation",
-                        )
-                    )
-        missing_methods = set(SURFACES) - expected_methods
+            validate_assertions(
+                case=case,
+                surface=artifact.method,
+                payload=surfaces[artifact.method],
+                assertions=artifact.assertions,
+                report=report,
+            )
+        required_methods = set(REQUIRED_METRIC_SURFACES)
+        if "graph:multi-session" in case.coverage:
+            required_methods.update(GRAPH_METRIC_SURFACES)
+        missing_methods = required_methods - expected_methods
         if missing_methods:
-            raise ValueError(f"missing expected artifacts for: {sorted(missing_methods)}")
+            raise ValueError(
+                f"missing expected artifacts for: {sorted(missing_methods)}"
+            )
+        expected_schema_versions = {
+            "structure": structure.schema_version,
+            **{method: 1 for method in expected_methods},
+        }
+        if provenance.expected_schema_versions != expected_schema_versions:
+            raise ValueError(
+                "provenance expected schema versions do not match artifacts"
+            )
         report.invariants, invariant_failures = invariant_differences(case, surfaces)
         report.differences.extend(invariant_failures)
     except (AssertionError, ValueError, ValidationError) as exc:
@@ -539,7 +679,8 @@ def print_report(report: GateReport) -> None:
         marker = "PASS" if case.status == "pass" else "FAIL"
         print(
             f"{marker} {case.case} ({case.provider}): "
-            f"{case.assertions} assertions, {case.invariants} invariants"
+            f"{case.structural_assertions} structural assertions, "
+            f"{case.assertions} metric assertions, {case.invariants} invariants"
         )
         for difference in case.differences:
             print(f"  surface: {difference.surface}")

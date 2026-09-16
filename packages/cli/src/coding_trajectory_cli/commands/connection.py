@@ -74,32 +74,6 @@ def _handle(args: argparse.Namespace) -> dict[str, Any]:
         access_token=credentials.access_token,
     )
     try:
-        if args.action == "migrate":
-            if (
-                credentials.profile.role != "collector"
-                or not credentials.profile.agent_id
-            ):
-                raise ConnectionError(
-                    "catalog migration requires a collector connection"
-                )
-            migrated = 0
-            for _ in range(args.max_pages):
-                page = client.call(
-                    "ct_catalog_migrate",
-                    {
-                        "workspace_id": str(credentials.profile.workspace_id),
-                        "agent_id": str(credentials.profile.agent_id),
-                    },
-                )
-                migrated += int(page["migrated"])
-                if page["complete"]:
-                    return {"profile": name, "complete": True, "migrated": migrated}
-            return {
-                "profile": name,
-                "complete": False,
-                "migrated": migrated,
-                "next_action": "repeat connection migrate",
-            }
         result = ConnectionStatus.model_validate(
             client.call(
                 "ct_connection_status",
@@ -142,14 +116,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         "connection", help="Configure shared collection and query connections."
     )
     commands = parser.add_subparsers(dest="action", required=True)
-    for action in ("configure", "status", "check", "rotate", "forget", "migrate"):
+    for action in ("configure", "status", "check", "rotate", "forget"):
         command = commands.add_parser(action)
         command.add_argument("name", nargs="?", default="default")
         command.set_defaults(_plugin_handler=_handle, _default_output="json")
-        if action == "migrate":
-            command.add_argument(
-                "--max-pages", type=int, choices=range(1, 101), default=20
-            )
         if action in {"configure", "rotate"}:
             command.add_argument(
                 "--token-env",

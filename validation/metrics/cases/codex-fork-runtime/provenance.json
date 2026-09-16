@@ -16,6 +16,7 @@
   "entrypoint_id": "019f17b8-d311-77f0-a163-e20701d5a150",
   "coverage": ["provider:codex_cli", "graph:single-session", "tokens:cached-input", "tokens:reasoning", "runtime:provider-duration", "relationship:fork"],
   "expected_schema_versions": {
+    "structure": 1,
     "session.overview": 1,
     "session.stats": 1,
     "session.usage": 1,

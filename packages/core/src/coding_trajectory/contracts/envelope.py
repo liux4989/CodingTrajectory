@@ -20,7 +20,7 @@ class ApiTransportMetadata(ApiEnvelopeModel):
     snapshot_sequence: int
     source: Literal["remote"]
     freshness: Literal["authoritative"]
-    content_scope: Literal["chronicle"]
+    content_scope: Literal["facts"]
 
 
 class ApiAvailability(ApiEnvelopeModel):

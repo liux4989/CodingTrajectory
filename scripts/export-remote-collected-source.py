@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Publish bounded chronicle artifacts from the local collector source window.
+"""Publish bounded Chronicle facts from the local collector source window.
 
 This script deliberately delegates serialization and delivery to ``ct collector
-run``.  That command fences the local source bytes, validates the body-free
-``ct.chronicle_graph.v2`` artifact, and uses the credential profile to refresh
-an access token in memory.  It never exports raw vendor logs or prints a token.
+run``. That command fences local source occurrences, derives bounded
+``ct.published_facts.v1`` rows from the canonical graph, and uses the credential
+profile to refresh an access token in memory. It never exports raw vendor logs
+or prints a token.
 """
 
 from __future__ import annotations

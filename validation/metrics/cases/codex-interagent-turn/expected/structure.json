@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "assertions": [
+    {"surface": "canonical.graph", "path": "$.root_session_id", "expected": "019f17c0-0000-7000-8000-000000000001", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "canonical.graph", "path": "$.session_count", "expected": 2, "source_refs": ["source/parent.jsonl:1", "source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "canonical.graph", "path": "$.sessions[1].session_id", "expected": "019f17c0-0000-7000-8000-000000000002", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "canonical.graph", "path": "$.sessions[1].parent_session_id", "expected": "019f17c0-0000-7000-8000-000000000001", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "canonical.graph", "path": "$.sessions[1].turn_count", "expected": 2, "source_refs": ["source/fork.jsonl:5-16"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"surface": "canonical.graph", "path": "$.sessions[1].turn_statuses", "expected": ["completed", "completed"], "source_refs": ["source/fork.jsonl:10", "source/fork.jsonl:16"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"surface": "canonical.graph", "path": "$.sessions[1].item_count", "expected": 4, "source_refs": ["source/fork.jsonl:7-8", "source/fork.jsonl:13-14"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"surface": "canonical.graph", "path": "$.sessions[1].tools[0].tool_call_id", "expected": "call_baseline_t1", "source_refs": ["source/fork.jsonl:7-8"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"surface": "canonical.graph", "path": "$.sessions[1].tools[1].tool_call_id", "expected": "call_baseline_t2", "source_refs": ["source/fork.jsonl:13-14"], "audit_ref": "audit.md#inter-agent-triggered-turns"},
+    {"surface": "canonical.graph", "path": "$.edges[0].type", "expected": "spawned_subagent", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "canonical.graph", "path": "$.edges[0].source_session_id", "expected": "019f17c0-0000-7000-8000-000000000001", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "canonical.graph", "path": "$.edges[0].target_session_id", "expected": "019f17c0-0000-7000-8000-000000000002", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "canonical.graph", "path": "$.edges[0].provenance", "expected": "derived", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "session.tree", "path": "$.branches[0].graph_session_count", "expected": 2, "source_refs": ["source/parent.jsonl:1", "source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "session.tree", "path": "$.branches[0].spawned_agent_count", "expected": 1, "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "graph.overview", "path": "$.graph.orchestration.kind", "expected": "multi_agent", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "graph.overview", "path": "$.summary.turn_count", "expected": 3, "source_refs": ["source/parent.jsonl:2-6", "source/fork.jsonl:5-16"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "graph.overview", "path": "$.edges[0].type", "expected": "spawned_subagent", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "graph.overview", "path": "$.edges[0].confidence", "expected": "medium", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"}
+  ]
+}

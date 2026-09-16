@@ -9,7 +9,6 @@ import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from itertools import chain
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -46,7 +45,7 @@ from coding_trajectory.ingestion.models import (
     TurnStatus,
     Vendor,
 )
-from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
+from coding_trajectory.ingestion.provenance import RecordSpan
 from coding_trajectory.ingestion.retention import CanonicalRetention
 from coding_trajectory.ingestion.transcript import TranscriptRecord
 from coding_trajectory.ingestion.vendor_mechanisms.codex_multi_agent import (
@@ -121,7 +120,6 @@ class _PendingExecWrapper:
     derived_records: dict[int, TranscriptRecord] = field(default_factory=dict)
     closed: bool = False
     completed_at: datetime | None = None
-
 
 
 def _native_command_text(value: Any) -> str | None:
@@ -439,65 +437,87 @@ def _session_forked_from_id(records: Iterable[dict]) -> str | None:
     for record in records:
         if record.get("type") != "session_meta":
             continue
-        ffid = (
-            record.get("payload", {}).get("forked_from_id")
-            if isinstance(record.get("payload"), dict)
-            else None
-        )
-        return _extract_uuid_text(ffid)
+        payload = record.get("payload")
+        return _record_parent_id(payload if isinstance(payload, dict) else {})
     return None
 
 
-def _iter_own_records(
-    records: Iterable[tuple[dict, RecordSpan]],
-    parent_started_turn_ids: set[str],
-) -> Iterator[tuple[dict, RecordSpan]]:
-    """Stream ``_cut_inherited_records`` semantics without materializing records.
+def _record_parent_id(meta: dict) -> str | None:
+    direct = _extract_uuid_text(meta.get("forked_from_id"))
+    if direct is not None:
+        return direct
+    source = meta.get("source")
+    subagent = source.get("subagent") if isinstance(source, dict) else None
+    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+    return (
+        _extract_uuid_text(spawn.get("parent_thread_id"))
+        if isinstance(spawn, dict)
+        else None
+    )
 
-    Keeps the leading ``session_meta`` prefix, drops the inherited segment a
-    forked rollout re-materializes, and passes through everything from the
-    first foreign ``task_started`` on.  Non-forks pass through unchanged.
-    """
-    iterator = iter(records)
-    head: list[tuple[dict, RecordSpan]] = []
-    leading = 0
-    prefix_open = True
-    meta_seen = False
-    forked_from: str | None = None
-    for pair in iterator:
-        record = pair[0]
-        head.append(pair)
-        if record.get("type") == "session_meta":
-            if not meta_seen:
-                meta_seen = True
-                payload = record.get("payload")
-                ffid = (
-                    payload.get("forked_from_id") if isinstance(payload, dict) else None
-                )
-                forked_from = _extract_uuid_text(ffid)
-        else:
-            prefix_open = False
-        if prefix_open:
-            leading += 1
-        if meta_seen and not prefix_open:
-            break
-    if not meta_seen or forked_from is None:
-        yield from head
-        yield from iterator
+
+def _iter_own_records(
+    records: Iterable[tuple[dict, RecordSpan | None]],
+    parent_started_turn_ids: set[str],
+) -> Iterator[tuple[dict, RecordSpan | None]]:
+    """Keep child-owned records even when copied parent turns are interleaved."""
+    materialized = list(records)
+    if _session_forked_from_id(record for record, _span in materialized) is None:
+        yield from materialized
         return
-    yield from head[:leading]
-    for record, _span in chain(head[leading:], iterator):
-        payload = record.get("payload") or {}
-        if payload.get("type") != "task_started":
-            continue
+
+    started: list[str] = []
+    completed: set[str] = set()
+    for record, _span in materialized:
+        payload = record.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
         turn_id = payload.get("turn_id")
-        if isinstance(turn_id, str) and turn_id not in parent_started_turn_ids:
-            yield record, _span
-            break
-    else:
-        # Fork has no own turns (inherited only): keep just its session_meta.
-        return
-    yield from iterator
+        if not isinstance(turn_id, str):
+            continue
+        if payload.get("type") == "task_started":
+            started.append(turn_id)
+        elif payload.get("type") == "task_complete":
+            completed.add(turn_id)
+    owned_turn_ids = {
+        turn_id
+        for turn_id in started
+        if turn_id not in parent_started_turn_ids and turn_id in completed
+    }
+    if started and started[-1] not in parent_started_turn_ids:
+        # The final lifecycle may be a legitimate in-progress child turn.
+        owned_turn_ids.add(started[-1])
+
+    keep_active_window = False
+    for record, span in materialized:
+        if record.get("type") in {"session_meta", "compacted"}:
+            yield record, span
+            continue
+        payload = record.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        explicit_turn_id = _nested_turn_id(payload)
+        if payload.get("type") == "task_started":
+            keep_active_window = explicit_turn_id in owned_turn_ids
+        if explicit_turn_id in parent_started_turn_ids:
+            continue
+        if explicit_turn_id in owned_turn_ids or (
+            explicit_turn_id is None and keep_active_window
+        ):
+            yield record, span
+
+
+def _nested_turn_id(value: object) -> str | None:
+    """Find explicit provider ownership on a record before using active-window state."""
+
+    if not isinstance(value, dict):
+        return None
+    turn_id = value.get("turn_id")
+    if isinstance(turn_id, str):
+        return turn_id
+    for nested in value.values():
+        found = _nested_turn_id(nested)
+        if found is not None:
+            return found
+    return None
 
 
 def _cut_inherited_records(
@@ -522,25 +542,13 @@ def _cut_inherited_records(
         return records
     if _session_forked_from_id(records) is None:
         return records
-    leading = 0
-    for record in records:
-        if record.get("type") == "session_meta":
-            leading += 1
-            continue
-        break
-    first_foreign = None
-    for index in range(leading, len(records)):
-        payload = records[index].get("payload") or {}
-        if payload.get("type") != "task_started":
-            continue
-        turn_id = payload.get("turn_id")
-        if isinstance(turn_id, str) and turn_id not in parent_started_turn_ids:
-            first_foreign = index
-            break
-    if first_foreign is None:
-        # Fork has no own turns (inherited only): keep just its session_meta.
-        return records[:leading]
-    return records[:leading] + records[first_foreign:]
+    return [
+        record
+        for record, _span in _iter_own_records(
+            ((record, None) for record in records),
+            parent_started_turn_ids,
+        )
+    ]
 
 
 def _derive_session_status(turns: list) -> SessionStatus:
@@ -730,9 +738,7 @@ class CodexAdapter(BaseAdapter):
         # item id is exactly the response-item call id (for example,
         # ``spawn_agent`` -> ``SubAgentActivity``). Keep the original call as
         # the canonical action and enrich it from that stronger terminal fact.
-        direct_function_calls: dict[str, TranscriptRecord] = field(
-            default_factory=dict
-        )
+        direct_function_calls: dict[str, TranscriptRecord] = field(default_factory=dict)
         native_direct_result_records: dict[str, TranscriptRecord] = field(
             default_factory=dict
         )
@@ -762,23 +768,21 @@ class CodexAdapter(BaseAdapter):
         retention: CanonicalRetention = "trajectory",
     ) -> Session:
         self._reset_ingest_state()
-        self.last_provenance: SessionProvenance | None = None
-        if retention == "measurements":
-            records: Iterable[tuple[dict, RecordSpan | None]] = self._iter_record_spans(
-                path
-            )
-            if parent_started_turn_ids is not None:
-                records = _iter_own_records(records, parent_started_turn_ids)
-        else:
-            records = (
-                (record, None)
-                for record in _cut_inherited_records(
-                    self._load_records(path), parent_started_turn_ids
-                )
-            )
-        state = self._ParseState()
-        transcript = self._build_transcript(records, state)
-        return self._build_session(path, transcript, state, retention=retention)
+        self._reset_source_provenance()
+        records: Iterable[tuple[dict, RecordSpan | None]] = self._iter_record_spans(
+            path
+        )
+        if parent_started_turn_ids is not None:
+            records = _iter_own_records(records, parent_started_turn_ids)
+        try:
+            state = self._ParseState()
+            transcript = self._build_transcript(records, state)
+            session = self._build_session(path, transcript, state, retention=retention)
+        except Exception:
+            self._finish_source_provenance(path)
+            raise
+        self._finish_source_provenance(path, session_id=session.session_id)
+        return session
 
     def build_canonical_session(
         self,
@@ -790,12 +794,10 @@ class CodexAdapter(BaseAdapter):
     ) -> Session:
         """In-memory-record seam: cut inherited fork history, then assemble."""
         self._reset_ingest_state()
-        self.last_provenance: SessionProvenance | None = None
+        self._reset_source_provenance()
         cut = _cut_inherited_records(list(records), parent_started_turn_ids)
         state = self._ParseState()
-        transcript = self._build_transcript(
-            ((record, None) for record in cut), state
-        )
+        transcript = self._build_transcript(((record, None) for record in cut), state)
         return self._build_session(source, transcript, state, retention=retention)
 
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
@@ -926,7 +928,7 @@ class CodexAdapter(BaseAdapter):
             for turn in session.turns
             if turn.user_request_event_id is not None
         }
-        return session.model_copy(
+        retained = session.model_copy(
             update={
                 "events": [
                     event
@@ -936,6 +938,7 @@ class CodexAdapter(BaseAdapter):
                 ]
             }
         )
+        return retained
 
     def _build_transcript(
         self,
@@ -1104,7 +1107,9 @@ class CodexAdapter(BaseAdapter):
                     },
                 )
             )
-            codex_native_items.handle_static_exec_wrapper_output(payload, ts, state, transcript)
+            codex_native_items.handle_static_exec_wrapper_output(
+                payload, ts, state, transcript
+            )
 
         elif inner_type == "tool_search_call":
             transcript.append(

@@ -85,8 +85,8 @@ class AssemblyHooks:
     build_session_fields: Callable[[AssemblyContext], dict[str, Any]] | None = None
     # Post-projection turn decoration (e.g. Claude team-state attachment).
     decorate_turns: Callable[[list[Turn]], None] | None = None
-    # Receives the compact provenance so the adapter can publish it as
-    # ``last_provenance``; invoked only on the measurements path.
+    # Receives local source provenance so the adapter can publish it as
+    # ``last_provenance`` in either retention mode.
     provenance_sink: Callable[[SessionProvenance], None] | None = None
 
 
@@ -127,12 +127,13 @@ def assemble_session(
         prefer_lifecycle=hooks.prefer_lifecycle,
         compact=compact,
     )
-    if compact is not None and hooks.provenance_sink is not None:
+    if hooks.provenance_sink is not None:
         hooks.provenance_sink(
             build_session_provenance(
                 session_id=session_id,
                 vendor=vendor,
                 source=source,
+                records=transcript,
                 stabilizer=compact,
                 turns=turns,
             )

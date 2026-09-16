@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from coding_trajectory_cli._shared import (
@@ -26,12 +27,15 @@ def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if args.project_name:
         params["project_name"] = args.project_name
+    # --since-days is a CLI convenience translated to one absolute protocol
+    # timestamp; the protocol itself only accepts modified_since.
     if args.all_time is True:
-        params["since_days"] = None
-    elif args.since_days is not None:
-        params["since_days"] = args.since_days
-    elif "since_days" not in params:
-        params["since_days"] = 30
+        params["modified_since"] = None
+    else:
+        since_days = args.since_days if args.since_days is not None else 30
+        params["modified_since"] = (
+            datetime.now(UTC) - timedelta(days=since_days)
+        ).isoformat()
     agent_vendor = getattr(args, "agent_vendor", None)
     if agent_vendor is not None:
         params["agent_vendor"] = agent_vendor
@@ -113,7 +117,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         type=positive_int,
         default=None,
         metavar="N",
-        help="Only scan sessions modified in the last N days. Defaults to 30.",
+        help="Only scan sessions modified in the last N days. Defaults to 30. Translated to an absolute modified-since timestamp.",
     )
     project_sessions.add_argument(
         "--all-time",

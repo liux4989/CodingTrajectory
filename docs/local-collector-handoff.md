@@ -1,190 +1,49 @@
-# Local Collector Handoff
+# Local collector handoff
 
-- **Status:** Chronicle schema deployed to the designated disposable non-production project; production not deployed
-- **Owner:** A host with authorized access to local vendor logs
-- **Depends on:** The chronicle-graph migration and a capability-scoped collector
-  principal
+The collector publishes canonical historical facts derived on an authorized
+host. It does not own source interpretation or historical semantics.
 
-## Purpose
+## Input and output
 
-The collector is the publication component for local vendor logs. Local evidence
-loading reads bodies independently and does not require publication.
-It fences complete source bytes, builds one bounded Chronicle artifact, stores
-delivery work durably, publishes project artifacts idempotently, and maintains
-the existing living sequence. Local SQLite is delivery state, never remote
-historical authority.
+Production ingestion first preserves source occurrences and reconstructs the
+canonical `DocumentStore`/`SessionGraph`, including exact measurements before
+retention. `published_fact_set_for_store` produces bounded `PublishedFactSet`
+values. The collector persists delivery/checkpoint state, stages those exact rows,
+and submits an atomic publication manifest.
 
-## Collection sequence
+Raw provider records, occurrence inventories, transcript/tool bodies, source
+paths, and credentials remain local. Source checkpoints contain only source
+epoch/sequence, complete offsets, parser provenance, and digests. Published edge
+and evidence references may retain safe canonical UUIDs.
 
-```text
-discover project-scoped sources
-  -> record one complete-line byte fence per physical segment
-  -> derive fork trimming from those same fenced parent bytes
-  -> coalesce resumed segments into one logical source/session
-  -> build and validate ct.chronicle_graph.v2 locally
-  -> queue metadata-only source checkpoints
-  -> obtain accepted checkpoint receipts
-  -> assemble the complete collected graphs locally
-  -> recover the agent/project publication watermark after pending retries
-  -> queue one atomic artifact publication with a complete collected source vector
-  -> publish with the original bytes and idempotency key
-  -> heartbeat on the shared living sequence
-```
+## Remote calls
 
-Measurement extraction and artifact normalization consume the same in-memory
-records read from the fence. Bytes appended after the fence are deferred to the
-next pass. Parent fork-cut inputs are derived only from fenced records; the
-collector never rescans an unfenced parent during normalization.
+- `ct_project_register` and `ct_collector_register_source` establish portable
+  identities.
+- `ct_collector_publish_observation` commits metadata-only source checkpoints.
+- `ct_collector_stage_fact_rows` stages bounded rows by graph digest and batch.
+- `ct_collector_missing_fact_rows` resumes interrupted staging.
+- `ct_collector_publish_facts` validates and commits complete graph revisions.
+- `ct_collector_recover` returns source/publication watermarks.
+- living heartbeat/change calls use their separate authority.
 
-Local-first living API requests read the host's persisted journals and local
-SQLite projection without publishing as a side effect. The retained publication
-machinery can separately reconcile projection changes through the durable
-`living_outbox`; remote-only callers see the latest observations that have
-already been published. The projection cursor prevents unchanged resources from
-being republished and preserves remove or reset changes.
+A scoped bearer token is sufficient; Cloudflare account credentials are never
+installed on the collector host. Collection is project-scoped. An overlapping
+graph requires its complete accepted source vector; partial scope fails closed.
 
-## Required remote contract
+## Recovery guarantees
 
-The collector uses:
+The local delivery store retains exact pending requests, idempotency keys,
+attempts, and receipts. A lost response retries the same request. Fresh local
+state recovers remote source epochs and publication watermarks before assigning
+new sequences. New fact-set digests may replace incomplete staging, while batches
+for one digest must agree on count.
 
-- `ct_project_register` for portable project identity;
-- `ct_collector_register_source` for stable logical sources and epochs;
-- `ct_collector_publish_observation` for metadata-only checkpoints;
-- `ct_collector_publish_artifacts` for direct atomic graph publication;
-- `ct_collector_recover` for authenticated source, publication, and living watermarks;
-- `ct_collector_heartbeat` for leases; and
-- `ct_collector_publish_living_observation` for canonical living changes.
+Exact replay derives the same row hashes and set digest. A failed stage or
+publication exposes no partial graph. Successful replacement atomically reuses
+unchanged rows, versions changed rows, and closes omitted rows/graphs within the
+declared source scope.
 
-The collector principal needs only its scoped authenticated capabilities. A
-Cloudflare account credential must never be installed on the collector host.
-Use a scoped control-plane bearer token; see [the Cloudflare control plane](remote-ct-control-plane-design.md).
-
-Remote collection requires a portable project name and project ID. The
-repository identity and aliases are optional portable identifiers. A host path
-is never project identity. Remote collection is project-scoped; `--global-scope`
-is rejected. The default collection window is seven days.
-
-## Durable local state
-
-```text
-registered_sources
-  physical segment path, file identity, fence, logical source, epoch
-
-logical_sources
-  vendor/native session identity, source ID, epoch, next sequence, last digest
-
-observation_outbox
-  exact checkpoint request, idempotency key, attempts, outcome
-
-artifact_outbox
-  exact project publication, agent/project sequence, digest, attempts, outcome
-
-living_outbox
-  heartbeat and living changes on one monotonic observation sequence
-
-remote_receipts
-  durable accepted/duplicate/rejected/conflict evidence
-```
-
-Paths exist only in private collector state. They are not serialized into a
-checkpoint or artifact.
-
-On restart, in-flight records return to pending. A lost response retries the
-byte-identical stored request with the same idempotency key. A pending or
-unclassified rejected publication blocks assignment of a newer publication
-sequence. A confirmed stale-sequence conflict is retained as superseded and
-reconciled. An incomplete-graph rejection consumes its server sequence and is
-retained as `rejected_scope`; it does not block a later expanded scan. Source
-failures prevent a partial collected graph from being queued.
-
-The local snapshot-state marker combines the wire schema and collector parser
-version. Changing either rolls the logical source epoch before publishing a
-new derived digest for unchanged fenced bytes. The wire payload can therefore
-remain on `ct.source_checkpoint.v1` while its parser provenance advances,
-without violating immutable checkpoint identity within an existing epoch.
-
-A fresh SQLite database recovers the agent's existing source epochs and accepted
-checkpoint digests instead of assuming source sequence zero. It recovers the
-publication watermark before assigning work and the living watermark before its
-first heartbeat. Recovery never changes an uncertain pending request. Preserve
-separate state per agent and run one collector per agent/project stream.
-
-Time/vendor filtering preserves all unrelated remote artifacts. Replacing an
-overlapping graph requires its complete previously published source set; a
-partial scan cannot silently truncate the graph. The run result reports
-`artifact_scope_incomplete` and a content-free remedy. Expand the scan only within
-the authorized collection scope. Different agents can publish disjoint graphs
-into one project; overlapping ownership fails closed.
-
-## Artifact content
-
-The collector publishes the structural/numeric core and sanitized operational
-details documented in
-[`chronicle-history.md`](chronicle-history.md).
-It never uploads raw logs, complete sessions, event arrays, complete commands,
-tool inputs, tool outputs, titles, or pending-plan text. Bounded user/assistant
-previews, command signatures, and portable targets are explicit Chronicle
-fields; a value visible only inside a tool output does not enter remote history.
-
-The per-source checkpoint payload contains only:
-
-```text
-kind = ct.source_checkpoint.v1
-complete offsets for the logical source segments
-digest of the locally built source artifact
-```
-
-The remote graph payload exists only in the atomic artifact publication, not in
-every source observation.
-
-## Targeted publication
-
-An explicit collector run can target one session with `target_session_id`.
-The collector fences the selected source component, normalizes required fork
-inputs, and queues only the requested canonical graph. Matching published
-artifact digests skip publication. Collector writers share an agent lock and
-durable retry state. API fallback itself is read-only: it does not invoke the
-collector or change remote state.
-See [remote fallback and publication](cli.md#remote-fallback-and-publication) for
-source selection and explicit read-only behavior.
-
-## Operational use
-
-Before a run, confirm that the target is authorized and non-production. Keep
-the API URL, publishable key, and collector access token in the local secret
-environment or a refreshable credential profile. Never put
-secret values in command history, reports, or repository files.
-
-Run with a portable project name. The collector registers that name when
-needed, checks an explicitly supplied project ID for consistency, and then
-uses the seven-day project-scoped default. `ct collector status` exposes only
-the aggregate pending count.
-
-## Definition of done
-
-1. One resumed-session group creates one logical source registration.
-2. Source epoch and sequence advance without collision or loss.
-3. Fork trimming, local discovery, and the artifact retain identical turn and
-   item identities.
-4. Source checkpoints contain no graph or transcript body.
-5. Every artifact source is present exactly once in the normalized source
-   vector, and every vector source belongs to an artifact.
-6. A partial or failed collection publishes no project artifact.
-7. Exact replay produces the same artifact bytes and digest.
-8. Lost-response retry reuses the exact request and idempotency key.
-9. Artifact and publication size bounds fail closed.
-10. Heartbeats and living changes retain one monotonic agent-instance sequence.
-11. Fresh collector state resumes committed source, publication, and living sequences.
-12. Filtered scans preserve history outside their scope; incomplete overlapping
-    graphs are rejected without blocking a later complete scan.
-13. Two agents publish disjoint graphs to one project without replacing each other.
-
-## Verified non-production deployment
-
-On 2026-09-09 the authorized disposable project was reset, rebuilt from all 12
-committed migrations, and cut over exclusively to sparse Chronicle v2. A full
-seven-day publication with graph closure accepted 45 sources, 26 artifacts, and
-9,534 items in one 8,135,476-byte request. Exact replay, remote reads, recovery,
-and the five-minute Amp publication job passed with zero failed, rejected, or
-pending deliveries. The publication RPC carries a 60-second database execution
-budget with a 90-second client wait.
+The collector enforces the same publication limits documented in
+[Chronicle history](chronicle-history.md). Exceeding a limit stops publication;
+it never falls back to raw or weaker data.

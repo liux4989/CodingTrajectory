@@ -2,6 +2,20 @@
 
 Unified canonical models and CLI tooling for coding-agent session graphs.
 
+## CodingTrajectory Loop
+
+Loop is the local-first Analytics product: explore local sessions, open an
+investigation, and resolve stable item/event references back to canonical evidence.
+It saves reading positions, never copied transcripts. Monitor, Improve, and
+hosted delivery are deferred. See [Loop design and local usage](docs/loop-design.md).
+
+```bash
+uv sync --all-packages --locked
+bun install --cwd packages/plugins/loop/web --frozen-lockfile
+bun run --cwd packages/plugins/loop/web build
+uv run ct plugin loop web
+```
+
 ## Layering
 
 - `Event`, `Item`, `Turn`, and `Session` are canonical normalized resources. They preserve agent-agnostic facts and stable references reconstructed from vendor logs.
@@ -20,4 +34,6 @@ Unified canonical models and CLI tooling for coding-agent session graphs.
 ## Checks
 
 - `uv run ruff check .` for repo-wide Python static analysis
-- `scripts/check-datahub-static.sh` for datahub backend undefined-name and import-time checks
+- `bun run --cwd packages/plugins/loop/web check` for generated Core consumer types and TypeScript
+- `uv run python scripts/check-loop.py` for offline local HTTP integration
+- `uv run python scripts/check-core-protocol.py` for the frozen Core boundary

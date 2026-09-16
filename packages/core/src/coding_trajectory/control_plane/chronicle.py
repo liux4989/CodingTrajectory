@@ -41,6 +41,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     SESSION_HANDOFF,
     SUBAGENT_TASK,
     TODO_LIST,
+    VENDOR_TOOL_CONCEPT,
     WEB_FETCH,
     WEB_SEARCH,
     WRITE_FILE,
@@ -93,9 +94,13 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
 
-CHRONICLE_GRAPH_SCHEMA_VERSION = "ct.chronicle_graph.v2"
+CHRONICLE_GRAPH_SCHEMA_VERSION = "ct.chronicle_graph.v3"
 MAX_CHRONICLE_ARTIFACT_BYTES = 8 * 1024 * 1024
 MAX_CHRONICLE_PUBLICATION_BYTES = 16 * 1024 * 1024
+MAX_CHRONICLE_ITEM_EVENT_IDS = 64
+MAX_CHRONICLE_SESSION_EVENTS = 16384
+MAX_CHRONICLE_EVIDENCE_FACTS = 8
+EVIDENCE_PROCESSOR_VERSION = 1
 _SYNTHETIC_REQUEST_NAMESPACE = uuid5(
     NAMESPACE_URL, "codingtrajectory:chronicle-request"
 )
@@ -134,6 +139,46 @@ _HOST_PATH_TOKEN = re.compile(
     r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
     r"[^\s'\"]+"
 )
+_PUBLISHED_COMMANDS = frozenset(
+    {
+        "bash",
+        "bun",
+        "cargo",
+        "cat",
+        "cmake",
+        "cp",
+        "curl",
+        "deno",
+        "docker",
+        "find",
+        "gh",
+        "git",
+        "go",
+        "grep",
+        "kubectl",
+        "ls",
+        "make",
+        "mkdir",
+        "mv",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "python",
+        "python3",
+        "rg",
+        "rm",
+        "ruff",
+        "sed",
+        "sh",
+        "terraform",
+        "uv",
+        "wget",
+        "wrangler",
+        "yarn",
+        "zsh",
+    }
+)
 
 
 class ChronicleModel(BaseModel):
@@ -171,6 +216,7 @@ class ChronicleRequestUsage(ChronicleModel):
     context_window_tokens: int | None = Field(default=None, ge=0)
     used_input_tokens: int = Field(default=0, ge=0)
     usage: ChronicleUsage = Field(default_factory=ChronicleUsage)
+    cumulative_usage: ChronicleUsage | None = None
     categories: list[ChronicleUsageCategory] = Field(
         default_factory=list, max_length=32
     )
@@ -220,6 +266,16 @@ class ChronicleToolDetail(ChronicleModel):
     scope: _Preview | None = None
     safety: Literal["sanitized"] = "sanitized"
 
+    @model_validator(mode="after")
+    def validate_command_signature(self) -> ChronicleToolDetail:
+        if self.kind == "command" and self.target not in _PUBLISHED_COMMANDS | {
+            "command"
+        }:
+            raise ValueError(
+                "command detail must be an allowlisted executable signature"
+            )
+        return self
+
 
 class ChronicleItemMeasurements(ChronicleModel):
     input_chars: int = Field(default=0, ge=0)
@@ -240,8 +296,72 @@ class ChronicleItemSemantic(ChronicleModel):
     resolution_key: _BoundedString | None = None
 
 
+_EvidenceFactValue = bool | int | _BoundedString
+
+# Processors allowed to mark retained evidence ``complete`` relative to the raw
+# output. Sanitized previews are never complete; v1 ships no such processor.
+_COMPLETE_RETENTION_PROCESSORS: frozenset[str] = frozenset()
+# Processors allowed to attach a bounded, redacted output preview. Publication
+# policy v1 allows no raw output previews at all; the field exists so future
+# allowlisted processors can declare one explicitly.
+_PREVIEW_PROCESSORS: frozenset[str] = frozenset()
+
+
+class ChronicleToolOutputEvidence(ChronicleModel):
+    """Deterministic, bounded evidence describing one item's tool output.
+
+    Owned once by the canonical item and referenced from event envelopes.
+    Raw output never enters this model: only lifecycle, exact measurements with
+    tokenizer provenance, truncation state, allowlisted structured facts, and
+    (for declared allowlisted processors) a bounded redacted preview.
+    """
+
+    processor: _BoundedString
+    processor_version: int = Field(default=EVIDENCE_PROCESSOR_VERSION, ge=1)
+    lifecycle: Literal["completed", "failed", "interrupted", "unknown"]
+    outcome: _BoundedString | None = None
+    exit_code: int | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+    output_chars: int = Field(default=0, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    token_method: Literal["provider_reported", "tokenizer_estimate", "not_measured"]
+    tokenizer: _BoundedString | None = None
+    provider: _BoundedString | None = None
+    truncated: bool = False
+    original_tokens: int | None = Field(default=None, ge=0)
+    facts: dict[_BoundedString, _EvidenceFactValue] | None = Field(
+        default=None,
+        max_length=MAX_CHRONICLE_EVIDENCE_FACTS,
+    )
+    preview: _Preview | None = None
+    source_event_ids: list[UUID] = Field(
+        default_factory=list,
+        max_length=MAX_CHRONICLE_ITEM_EVENT_IDS,
+    )
+    retention: Literal["not_applicable", "not_retained", "preview", "complete"]
+    searchable: Literal["complete", "preview", "facts_only", "none"]
+
+    @model_validator(mode="after")
+    def validate_policy(self) -> ChronicleToolOutputEvidence:
+        if self.preview is not None:
+            if self.retention != "preview":
+                raise ValueError("evidence preview requires preview retention")
+            if self.processor not in _PREVIEW_PROCESSORS:
+                raise ValueError("evidence preview requires an allowlisted processor")
+        if self.retention == "complete" and (
+            self.processor not in _COMPLETE_RETENTION_PROCESSORS
+        ):
+            raise ValueError(
+                "sanitized evidence is never complete relative to raw output"
+            )
+        return self
+
+
 class ChronicleItem(ChronicleModel):
     item_id: UUID
+    event_ids: list[UUID] = Field(
+        max_length=MAX_CHRONICLE_ITEM_EVENT_IDS,
+    )
     sequence: int = Field(ge=0)
     kind: _ITEM_KINDS
     started_at: datetime
@@ -257,6 +377,7 @@ class ChronicleItem(ChronicleModel):
         default_factory=ChronicleItemMeasurements
     )
     semantic: ChronicleItemSemantic = Field(default_factory=ChronicleItemSemantic)
+    output_evidence: ChronicleToolOutputEvidence | None = None
 
 
 class ChronicleUserRequest(ChronicleModel):
@@ -329,6 +450,23 @@ class ChronicleSpawnOrigin(ChronicleModel):
     tool_name: _BoundedString | None = None
 
 
+class ChronicleEvent(ChronicleModel):
+    """Minimal normalized event envelope; never a raw payload.
+
+    References the owning item's output evidence through ``item_id`` instead of
+    carrying any body. ``sequence`` is the deterministic source order within
+    the session.
+    """
+
+    event_id: UUID
+    timestamp: datetime
+    type: _BoundedString
+    sequence: int = Field(ge=0)
+    turn_id: UUID | None = None
+    item_id: UUID | None = None
+    status: _BoundedString | None = None
+
+
 class ChronicleSessionTopology(ChronicleModel):
     sidechain: bool = False
     forked: bool = False
@@ -348,12 +486,19 @@ class ChronicleSession(ChronicleModel):
     status: _BoundedString
     model: _BoundedString | None = None
     reasoning_effort: _BoundedString | None = None
-    title: None = None
-    preview: None = None
+    # Vendor-provided session title/preview are bounded display facts (never
+    # full prompt text); agent_name is structural orchestration identity.
+    title: _Preview | None = None
+    preview: _Preview | None = None
+    agent_name: _BoundedString | None = None
     topology: ChronicleSessionTopology = Field(default_factory=ChronicleSessionTopology)
     runtime: list[ChronicleRuntimeObservation] = Field(default_factory=list)
     measurements: ChronicleSessionMeasurements = Field(
         default_factory=ChronicleSessionMeasurements
+    )
+    events: list[ChronicleEvent] = Field(
+        default_factory=list,
+        max_length=MAX_CHRONICLE_SESSION_EVENTS,
     )
     turns: list[ChronicleTurn] = Field(default_factory=list)
 
@@ -362,6 +507,7 @@ class ChronicleEdgeOrigin(ChronicleModel):
     session_id: UUID
     turn_id: UUID | None = None
     item_id: UUID | None = None
+    event_id: UUID | None = None
 
 
 class ChronicleEdge(ChronicleModel):
@@ -379,6 +525,7 @@ class ChronicleEdge(ChronicleModel):
     tool_name: _BoundedString | None = None
     provenance: Literal["observed", "derived"] = "derived"
     confidence: Literal["high", "medium", "low"] = "medium"
+    evidence_event_ids: list[UUID] = Field(default_factory=list, max_length=64)
 
 
 class ChronicleGraphSummary(ChronicleModel):
@@ -394,15 +541,16 @@ class ChronicleGraphSummary(ChronicleModel):
 
 class ChronicleCoverage(ChronicleModel):
     content: Literal[False] = False
-    events: Literal[False] = False
+    events: Literal[True] = True
     topology: Literal[True] = True
     usage: Literal[True] = True
     measurements: Literal[True] = True
     operational_details: Literal[True] = True
+    output_evidence: Literal[True] = True
 
 
 class ChronicleGraphArtifact(ChronicleModel):
-    schema_version: Literal["ct.chronicle_graph.v2"] = CHRONICLE_GRAPH_SCHEMA_VERSION
+    schema_version: Literal["ct.chronicle_graph.v3"] = CHRONICLE_GRAPH_SCHEMA_VERSION
     graph: ChronicleGraphSummary
     sessions: list[ChronicleSession]
     edges: list[ChronicleEdge] = Field(default_factory=list)
@@ -429,6 +577,36 @@ class ChronicleGraphArtifact(ChronicleModel):
         turn_owners: dict[UUID, UUID] = {}
         item_owners: dict[UUID, tuple[UUID, UUID]] = {}
         for session in self.sessions:
+            event_sequences = [event.sequence for event in session.events]
+            if event_sequences != sorted(event_sequences) or len(
+                event_sequences
+            ) != len(set(event_sequences)):
+                raise ValueError("chronicle graph event ordering is invalid")
+            event_ids = {event.event_id for event in session.events}
+            if len(event_ids) != len(session.events):
+                raise ValueError("chronicle graph contains duplicate events")
+            session_turn_ids = {turn.turn_id for turn in session.turns}
+            session_item_ids = {
+                item.item_id for turn in session.turns for item in turn.items
+            }
+            item_turn: dict[UUID, UUID] = {
+                item.item_id: turn.turn_id
+                for turn in session.turns
+                for item in turn.items
+            }
+            for event in session.events:
+                if event.turn_id is not None and event.turn_id not in session_turn_ids:
+                    raise ValueError("chronicle graph event turn ownership mismatch")
+                if event.item_id is not None:
+                    if event.item_id not in session_item_ids:
+                        raise ValueError(
+                            "chronicle graph event item ownership mismatch"
+                        )
+                    if (
+                        event.turn_id is not None
+                        and item_turn[event.item_id] != event.turn_id
+                    ):
+                        raise ValueError("chronicle graph event item/turn mismatch")
             turn_sequences = [turn.sequence for turn in session.turns]
             if turn_sequences != sorted(turn_sequences) or len(turn_sequences) != len(
                 set(turn_sequences)
@@ -447,6 +625,17 @@ class ChronicleGraphArtifact(ChronicleModel):
                     if item.item_id in item_owners:
                         raise ValueError("chronicle graph contains duplicate items")
                     item_owners[item.item_id] = (session.session_id, turn.turn_id)
+                    if not set(item.event_ids) <= event_ids:
+                        raise ValueError(
+                            "chronicle graph item references an unretained event"
+                        )
+                    evidence = item.output_evidence
+                    if evidence is not None and not (
+                        set(evidence.source_event_ids) <= set(item.event_ids)
+                    ):
+                        raise ValueError(
+                            "chronicle graph evidence references an event the item does not own"
+                        )
                 turn_items = {item.item_id: item for item in turn.items}
                 for item in turn.items:
                     if item.projection_parent_item_id is None:
@@ -541,9 +730,9 @@ class ChronicleGraphArtifact(ChronicleModel):
                         measurements.pop("output_truncated")
 
                     summary = measurements.get("tool_summary")
-                    if isinstance(summary, dict) and item.get("tool_name") == summary.get(
-                        "name"
-                    ):
+                    if isinstance(summary, dict) and item.get(
+                        "tool_name"
+                    ) == summary.get("name"):
                         item.pop("tool_name")
 
                     semantic = item.get("semantic")
@@ -585,9 +774,14 @@ def build_chronicle_graph_artifact(
     """Project one canonical graph onto the bounded private Chronicle source."""
 
     index = build_session_graph_index(session_graph)
-    with scoped_counter(counter_for_session_graph(session_graph)):
+    counter = counter_for_session_graph(session_graph)
+    tokenizer = counter.name
+    provider = _latest_usage_provider(session_graph)
+    with scoped_counter(counter):
         sessions = [
-            _build_chronicle_session(session, index=index)
+            _build_chronicle_session(
+                session, index=index, tokenizer=tokenizer, provider=provider
+            )
             for session in session_graph.sessions
         ]
     started_at = min((session.started_at for session in sessions), default=None)
@@ -665,7 +859,32 @@ def chronicle_session_graph(session_graph: SessionGraph) -> SessionGraph:
     return build_chronicle_graph_artifact(session_graph).to_session_graph()
 
 
-def _build_chronicle_session(session: Session, *, index: Any) -> ChronicleSession:
+def _vendor_title(session: Session) -> str | None:
+    extensions = session.extensions
+    if extensions is None:
+        return None
+    for vendor_extensions in (
+        extensions.codex,
+        extensions.claude_code,
+        extensions.pi,
+        extensions.amp,
+    ):
+        title = getattr(vendor_extensions, "title", None) if vendor_extensions else None
+        if title:
+            return title
+    return None
+
+
+def _vendor_preview(session: Session) -> str | None:
+    extensions = session.extensions
+    if extensions and extensions.codex:
+        return extensions.codex.preview
+    return None
+
+
+def _build_chronicle_session(
+    session: Session, *, index: Any, tokenizer: str, provider: str | None
+) -> ChronicleSession:
     measurements = session.measurements or extract_session_measurements(session)
     origins = _canonical_spawn_origins(session)
     return ChronicleSession(
@@ -677,9 +896,11 @@ def _build_chronicle_session(session: Session, *, index: Any) -> ChronicleSessio
         status=session.status.value,
         model=session.model,
         reasoning_effort=session.reasoning_effort,
-        title=None,
-        preview=None,
+        title=_safe_detail_target(_vendor_title(session) or "", cwd=session.cwd),
+        preview=_safe_detail_target(_vendor_preview(session) or "", cwd=session.cwd),
+        agent_name=session.agent_name,
         topology=_build_topology(session, origins),
+        events=_build_event_envelopes(session),
         runtime=[
             ChronicleRuntimeObservation(
                 timestamp=observation.timestamp,
@@ -699,13 +920,68 @@ def _build_chronicle_session(session: Session, *, index: Any) -> ChronicleSessio
         ],
         measurements=_build_session_measurements(measurements),
         turns=[
-            _build_chronicle_turn(turn, session=session, index=index)
+            _build_chronicle_turn(
+                turn,
+                session=session,
+                index=index,
+                tokenizer=tokenizer,
+                provider=provider,
+            )
             for turn in session.turns
         ],
     )
 
 
-def _build_chronicle_turn(turn: Turn, *, session: Session, index: Any) -> ChronicleTurn:
+_EVENT_STATUS_TOKEN = re.compile(r"^[a-z][a-z0-9_\-]{0,63}$")
+
+
+def _build_event_envelopes(session: Session) -> list[ChronicleEvent]:
+    """Retain minimal envelopes for every source event in deterministic order."""
+
+    turn_by_event: dict[UUID, UUID] = {}
+    item_by_event: dict[UUID, UUID] = {}
+    for turn in session.turns:
+        for event_id in turn.event_ids:
+            turn_by_event.setdefault(event_id, turn.turn_id)
+        if turn.user_request_event_id is not None:
+            turn_by_event.setdefault(turn.user_request_event_id, turn.turn_id)
+        for item in turn.items:
+            for event_id in item.event_ids:
+                turn_by_event.setdefault(event_id, turn.turn_id)
+                item_by_event.setdefault(event_id, item.item_id)
+    return [
+        ChronicleEvent(
+            event_id=event.event_id,
+            timestamp=event.timestamp,
+            type=event.type.value,
+            sequence=position,
+            turn_id=turn_by_event.get(event.event_id),
+            item_id=item_by_event.get(event.event_id),
+            status=_event_status(event),
+        )
+        for position, event in enumerate(session.events)
+    ]
+
+
+def _event_status(event: Event) -> str | None:
+    """Retain a normalized status token when the source event carries one."""
+
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    for key in ("status", "state"):
+        value = payload.get(key)
+        if isinstance(value, str) and _EVENT_STATUS_TOKEN.fullmatch(value):
+            return value
+    return None
+
+
+def _build_chronicle_turn(
+    turn: Turn,
+    *,
+    session: Session,
+    index: Any,
+    tokenizer: str,
+    provider: str | None,
+) -> ChronicleTurn:
     event_ids = set(turn.event_ids)
     request = extract_user_request(index, turn, session=session)
     item_ids_by_tool_call = {
@@ -732,6 +1008,8 @@ def _build_chronicle_turn(turn: Turn, *, session: Session, index: Any) -> Chroni
                 item,
                 cwd=session.cwd,
                 item_ids_by_tool_call=item_ids_by_tool_call,
+                tokenizer=tokenizer,
+                provider=provider,
             )
             for item in turn.items
         ],
@@ -764,7 +1042,6 @@ def _build_user_request(
 
 
 def _build_request_usage(observation: ContextUsageObservation) -> ChronicleRequestUsage:
-    usage = observation.usage
     return ChronicleRequestUsage(
         request_id=observation.source_event_id,
         timestamp=observation.timestamp,
@@ -773,25 +1050,11 @@ def _build_request_usage(observation: ContextUsageObservation) -> ChronicleReque
         provider=observation.provider,
         context_window_tokens=observation.context_window_tokens,
         used_input_tokens=observation.used_input_tokens,
-        usage=ChronicleUsage(
-            input_tokens=_usage_int(usage, "input_tokens", "inputTokens"),
-            cached_input_tokens=_usage_int(
-                usage, "cached_input_tokens", "cachedInputTokens"
-            ),
-            cache_creation_input_tokens=_usage_int(
-                usage,
-                "cache_creation_input_tokens",
-                "cacheCreationInputTokens",
-            ),
-            output_tokens=_usage_int(usage, "output_tokens", "outputTokens"),
-            reasoning_output_tokens=_usage_int(
-                usage, "reasoning_output_tokens", "reasoningOutputTokens"
-            ),
-            total_tokens=_usage_int(usage, "total_tokens", "totalTokens"),
-            uncached_input_tokens=_usage_optional_int(
-                usage, "uncached_input_tokens", "uncachedInputTokens"
-            ),
-            cost_usd=_cost_text(_usage_optional_float(usage, "cost_usd", "costUsd")),
+        usage=_build_chronicle_usage(observation.usage),
+        cumulative_usage=(
+            _build_chronicle_usage(observation.cumulative_usage)
+            if observation.cumulative_usage is not None
+            else None
         ),
         categories=[
             ChronicleUsageCategory(
@@ -806,11 +1069,36 @@ def _build_request_usage(observation: ContextUsageObservation) -> ChronicleReque
     )
 
 
+def _build_chronicle_usage(usage: dict[str, Any]) -> ChronicleUsage:
+    return ChronicleUsage(
+        input_tokens=_usage_int(usage, "input_tokens", "inputTokens"),
+        cached_input_tokens=_usage_int(
+            usage, "cached_input_tokens", "cachedInputTokens"
+        ),
+        cache_creation_input_tokens=_usage_int(
+            usage,
+            "cache_creation_input_tokens",
+            "cacheCreationInputTokens",
+        ),
+        output_tokens=_usage_int(usage, "output_tokens", "outputTokens"),
+        reasoning_output_tokens=_usage_int(
+            usage, "reasoning_output_tokens", "reasoningOutputTokens"
+        ),
+        total_tokens=_usage_int(usage, "total_tokens", "totalTokens"),
+        uncached_input_tokens=_usage_optional_int(
+            usage, "uncached_input_tokens", "uncachedInputTokens"
+        ),
+        cost_usd=_cost_text(_usage_optional_float(usage, "cost_usd", "costUsd")),
+    )
+
+
 def _build_chronicle_item(
     item: Item,
     *,
     cwd: str | None,
     item_ids_by_tool_call: dict[str, UUID],
+    tokenizer: str,
+    provider: str | None,
 ) -> ChronicleItem:
     measurements = item.measurements or extract_item_measurements(item)
     tool_summary = _bounded_tool_summary(item, measurements, cwd=cwd)
@@ -818,8 +1106,12 @@ def _build_chronicle_item(
     projection_parent_item_id, nested_index = _projection_origin(
         item, item_ids_by_tool_call=item_ids_by_tool_call
     )
+    path = (
+        _portable_path(item.path, cwd=cwd) if isinstance(item, FileChangeItem) else None
+    )
     return ChronicleItem(
         item_id=item.item_id,
+        event_ids=item.event_ids,
         sequence=item.sequence,
         kind=item.kind,
         started_at=item.started_at,
@@ -832,13 +1124,18 @@ def _build_chronicle_item(
         tool_name=_bounded(getattr(item, "tool_name", None)),
         operation=_bounded(getattr(item, "operation", None)),
         exit_code=getattr(item, "exit_code", None),
-        path=(
-            _portable_path(item.path, cwd=cwd)
-            if isinstance(item, FileChangeItem)
-            else None
-        ),
+        path=path,
         projection_parent_item_id=projection_parent_item_id,
         nested_index=nested_index,
+        output_evidence=_build_output_evidence(
+            item,
+            measurements=measurements,
+            tool_summary=tool_summary,
+            semantic=semantic,
+            path=path,
+            tokenizer=tokenizer,
+            provider=provider,
+        ),
         measurements=ChronicleItemMeasurements(
             input_chars=measurements.input_chars,
             input_tokens=measurements.input_tokens,
@@ -913,6 +1210,120 @@ def _item_semantic(
         verification_kind=_bounded(verification_kind),
         resolution_key=_bounded(resolution_key),
     )
+
+
+_EVIDENCE_KINDS = frozenset({"tool_call", "command_execution", "file_change", "plan"})
+_EVIDENCE_LIFECYCLE = {
+    "completed": "completed",
+    "success": "completed",
+    "succeeded": "completed",
+    "done": "completed",
+    "failed": "failed",
+    "error": "failed",
+    "errored": "failed",
+    "interrupted": "interrupted",
+    "cancelled": "interrupted",
+    "canceled": "interrupted",
+    "aborted": "interrupted",
+}
+
+
+def _build_output_evidence(
+    item: Item,
+    *,
+    measurements: ItemMeasurements,
+    tool_summary: ChronicleToolSummary | None,
+    semantic: ChronicleItemSemantic,
+    path: str | None,
+    tokenizer: str,
+    provider: str | None,
+) -> ChronicleToolOutputEvidence | None:
+    """Derive deterministic bounded output evidence owned by the canonical item.
+
+    Unknown tools fail closed to ``facts_only``: measurements and lifecycle are
+    retained, but no structured facts or previews beyond the allowlist.
+    """
+
+    kind = item.kind
+    tool_name = getattr(item, "tool_name", None)
+    if kind not in _EVIDENCE_KINDS:
+        return None
+    if kind == "plan" and not tool_name:
+        return None
+
+    facts: dict[str, bool | int | str] = {}
+    if isinstance(item, CommandExecutionItem):
+        processor = "ct.output_evidence.command.v1"
+        if semantic.verification_kind:
+            facts["verification_kind"] = semantic.verification_kind
+        if item.exit_code is not None:
+            facts["exited_zero"] = item.exit_code == 0
+    elif isinstance(item, FileChangeItem):
+        processor = "ct.output_evidence.file_change.v1"
+        if item.operation:
+            facts["operation"] = _bounded(item.operation) or "unknown"
+        if path:
+            facts["path"] = path
+    else:
+        concept = (
+            VENDOR_TOOL_CONCEPT.get(tool_name) if isinstance(tool_name, str) else None
+        )
+        if concept is not None:
+            processor = "ct.output_evidence.tool.v1"
+            facts["concept"] = _bounded(concept) or "tool"
+        else:
+            # Fail closed: unknown tools keep measurements only.
+            processor = "ct.output_evidence.unknown.v1"
+
+    status_token = (
+        str(getattr(item.status, "value", item.status)).casefold()
+        if item.status is not None
+        else None
+    )
+    lifecycle = _EVIDENCE_LIFECYCLE.get(status_token or "", "unknown")
+    outcome = (
+        tool_summary.activity_outcome
+        if tool_summary is not None and tool_summary.activity_outcome
+        else status_token
+    )
+    duration_ms = None
+    if item.started_at is not None and item.completed_at is not None:
+        duration_ms = max(
+            0, round((item.completed_at - item.started_at).total_seconds() * 1000)
+        )
+    measured = measurements.output_chars > 0 or measurements.output_truncated
+    retention = "not_retained" if measured else "not_applicable"
+    return ChronicleToolOutputEvidence(
+        processor=processor,
+        processor_version=EVIDENCE_PROCESSOR_VERSION,
+        lifecycle=lifecycle,
+        outcome=_bounded(outcome),
+        exit_code=getattr(item, "exit_code", None),
+        duration_ms=duration_ms,
+        output_chars=measurements.output_chars,
+        output_tokens=measurements.output_tokens if measured else None,
+        token_method="tokenizer_estimate" if measured else "not_measured",
+        tokenizer=tokenizer if measured else None,
+        provider=provider if measured else None,
+        truncated=measurements.output_truncated,
+        original_tokens=measurements.output_original_tokens,
+        facts=facts or None,
+        preview=None,
+        source_event_ids=list(item.event_ids)[:MAX_CHRONICLE_ITEM_EVENT_IDS],
+        retention=retention,
+        searchable="facts_only" if facts else "none",
+    )
+
+
+def _latest_usage_provider(session_graph: SessionGraph) -> str | None:
+    """Match ``counter_for_session_graph`` provenance for token measurements."""
+
+    latest: ContextUsageObservation | None = None
+    for session in session_graph.sessions:
+        for observation in session.context_usage:
+            if latest is None or observation.timestamp > latest.timestamp:
+                latest = observation
+    return latest.provider if latest is not None else None
 
 
 def _build_session_measurements(
@@ -1038,10 +1449,12 @@ def _build_chronicle_edge(edge: SessionEdge) -> ChronicleEdge:
             session_id=edge.source_session_id,
             turn_id=edge.source_turn_id,
             item_id=edge.source_item_id,
+            event_id=edge.source_event_id,
         ),
         tool_name=tool_name,
         provenance=edge.provenance,
         confidence=edge.confidence,
+        evidence_event_ids=edge.evidence_event_ids,
     )
 
 
@@ -1049,47 +1462,90 @@ def _to_session(value: ChronicleSession) -> Session:
     events: list[Event] = []
     turns: list[Turn] = []
     context_usage: list[ContextUsageObservation] = []
-    for turn in value.turns:
-        event_ids = [request.request_id for request in turn.requests]
-        user_request_event_id = None
-        if turn.user_request is not None:
-            user_request_event_id = turn.user_request.request_id
-            event_ids.insert(0, user_request_event_id)
+    request_by_event: dict[UUID, ChronicleUserRequest] = {
+        turn.user_request.request_id: turn.user_request
+        for turn in value.turns
+        if turn.user_request is not None
+    }
+    turn_event_ids: dict[UUID, list[UUID]] = {turn.turn_id: [] for turn in value.turns}
+    for envelope in sorted(value.events, key=lambda event: event.sequence):
+        user_request = request_by_event.get(envelope.event_id)
+        payload: dict[str, Any] = {}
+        if envelope.status is not None:
+            payload["status"] = envelope.status
+        if user_request is not None:
             payload_key = (
                 "team_request_summary"
-                if turn.user_request.source in {"team_lead", "parent_agent"}
+                if user_request.source in {"team_lead", "parent_agent"}
                 else "text"
             )
             request_text = (
-                f"<command-name>{turn.user_request.content}</command-name>"
-                if turn.user_request.type == "command"
-                else turn.user_request.content
+                f"<command-name>{user_request.content}</command-name>"
+                if user_request.type == "command"
+                else user_request.content
             )
             request_measurement = (
                 {
                     CONTENT_SIZE_MEASUREMENT_KEY: {
-                        "chars": turn.user_request.chars,
-                        "tokens": turn.user_request.tokens,
+                        "chars": user_request.chars,
+                        "tokens": user_request.tokens,
                     }
                 }
-                if turn.user_request.chars is not None
-                and turn.user_request.tokens is not None
+                if user_request.chars is not None and user_request.tokens is not None
                 else {}
             )
-            events.append(
-                Event(
-                    event_id=user_request_event_id,
-                    session_id=value.session_id,
-                    timestamp=turn.started_at,
-                    type=EventType.USER_PROMPT_SUBMITTED,
-                    vendor_source=value.vendor,
-                    payload={payload_key: request_text, **request_measurement},
-                )
+            payload = {payload_key: request_text, **request_measurement}
+        events.append(
+            Event(
+                event_id=envelope.event_id,
+                session_id=value.session_id,
+                timestamp=envelope.timestamp,
+                type=EventType(envelope.type),
+                vendor_source=value.vendor,
+                payload=payload,
             )
+        )
+        if envelope.turn_id in turn_event_ids:
+            turn_event_ids[envelope.turn_id].append(envelope.event_id)
+    for turn in value.turns:
+        user_request_event_id = (
+            turn.user_request.request_id if turn.user_request is not None else None
+        )
+        if value.events:
+            event_ids = list(turn_event_ids.get(turn.turn_id) or [])
+            if (
+                user_request_event_id is not None
+                and user_request_event_id not in event_ids
+            ):
+                event_ids.insert(0, user_request_event_id)
+        else:
+            # Hand-built v3 fixtures without envelopes keep the synthesized
+            # user-request event surface.
+            event_ids = [request.request_id for request in turn.requests]
+            if user_request_event_id is not None:
+                event_ids.insert(0, user_request_event_id)
+                user_request = turn.user_request
+                payload_key = (
+                    "team_request_summary"
+                    if user_request.source in {"team_lead", "parent_agent"}
+                    else "text"
+                )
+                request_text = (
+                    f"<command-name>{user_request.content}</command-name>"
+                    if user_request.type == "command"
+                    else user_request.content
+                )
+                events.append(
+                    Event(
+                        event_id=user_request_event_id,
+                        session_id=value.session_id,
+                        timestamp=turn.started_at,
+                        type=EventType.USER_PROMPT_SUBMITTED,
+                        vendor_source=value.vendor,
+                        payload={payload_key: request_text},
+                    )
+                )
         for request in turn.requests:
-            usage = request.usage.model_dump(mode="json", exclude_none=True)
-            if request.usage.cost_usd is not None:
-                usage["cost_usd"] = float(request.usage.cost_usd)
             context_usage.append(
                 ContextUsageObservation(
                     source_event_id=request.request_id,
@@ -1099,7 +1555,12 @@ def _to_session(value: ChronicleSession) -> Session:
                     provider=request.provider,
                     context_window_tokens=request.context_window_tokens,
                     used_input_tokens=request.used_input_tokens,
-                    usage=usage,
+                    usage=_to_usage_dict(request.usage),
+                    cumulative_usage=(
+                        _to_usage_dict(request.cumulative_usage)
+                        if request.cumulative_usage is not None
+                        else None
+                    ),
                     categories=[
                         ContextCategoryObservation(**category.model_dump(mode="python"))
                         for category in request.categories
@@ -1139,6 +1600,7 @@ def _to_session(value: ChronicleSession) -> Session:
         vendor=value.vendor,
         model=value.model,
         reasoning_effort=value.reasoning_effort,
+        agent_name=value.agent_name,
         started_at=value.started_at,
         ended_at=value.ended_at,
         parent_session_id=value.parent_session_id,
@@ -1153,6 +1615,13 @@ def _to_session(value: ChronicleSession) -> Session:
         extensions=_to_extensions(value),
         status=value.status,
     )
+
+
+def _to_usage_dict(usage: ChronicleUsage) -> dict[str, Any]:
+    result = usage.model_dump(mode="json", exclude_none=True)
+    if usage.cost_usd is not None:
+        result["cost_usd"] = float(usage.cost_usd)
+    return result
 
 
 def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
@@ -1171,10 +1640,12 @@ def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
         tool_summary=restored_tool_summary,
     )
     vendor_data: dict[str, Any] = {
-        "chronicle_semantics": value.semantic.model_dump(
+        "chronicle_semantics": value.semantic.model_dump(mode="json", exclude_none=True)
+    }
+    if value.output_evidence is not None:
+        vendor_data["chronicle_output_evidence"] = value.output_evidence.model_dump(
             mode="json", exclude_none=True
         )
-    }
     if value.projection_parent_item_id is not None:
         vendor_data["chronicle_projection"] = {
             "parent_item_id": str(value.projection_parent_item_id),
@@ -1192,7 +1663,7 @@ def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
         "started_at": value.started_at,
         "completed_at": value.completed_at,
         "status": value.status,
-        "event_ids": [],
+        "event_ids": value.event_ids,
         "measurements": measurements,
         "vendor_data": vendor_data,
     }
@@ -1311,8 +1782,10 @@ def _to_edge(value: ChronicleEdge) -> SessionEdge:
         target_session_id=value.target_session_id,
         source_turn_id=value.origin.turn_id,
         source_item_id=value.origin.item_id,
+        source_event_id=value.origin.event_id,
         provenance=value.provenance,
         confidence=value.confidence,
+        evidence_event_ids=value.evidence_event_ids,
         metadata={"tool_name": value.tool_name} if value.tool_name else None,
     )
 
@@ -1381,7 +1854,7 @@ def _tool_detail(
     else:
         kind = _DETAIL_KIND_BY_CONCEPT.get(concept, "tool")
     target = (
-        _safe_command_target(description, cwd=cwd)
+        _safe_command_target(description)
         if kind == "command"
         else _safe_detail_target(description, cwd=cwd)
     )
@@ -1390,41 +1863,19 @@ def _tool_detail(
     return ChronicleToolDetail(kind=kind, target=target)
 
 
-def _safe_command_target(value: str, *, cwd: str | None) -> str | None:
+def _safe_command_target(value: str) -> str:
+    """Return only an allowlisted executable name, never command arguments."""
+
     try:
         tokens = shlex.split(value)
     except ValueError:
         tokens = value.split()
-    redact_next = False
-    sensitive = re.compile(
-        r"(?:password|passwd|token|secret|api[-_]?key|authorization|cookie)",
-        re.IGNORECASE,
-    )
-    retained: list[str] = []
-    for token in tokens[:16]:
+    for token in tokens:
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
             continue
-        if redact_next:
-            redact_next = False
-            retained.append("[redacted]")
-            continue
-        key = token.split("=", 1)[0]
-        if sensitive.search(key):
-            if "=" in token:
-                safe_key = _safe_detail_target(key, cwd=cwd)
-                retained.append(
-                    f"{safe_key}=[redacted]" if safe_key else "[redacted]"
-                )
-            else:
-                safe_token = _safe_detail_target(token, cwd=cwd)
-                if safe_token:
-                    retained.append(safe_token)
-                redact_next = True
-            continue
-        safe_token = _safe_detail_target(token, cwd=cwd)
-        if safe_token:
-            retained.append(safe_token)
-    return _bounded_preview(shlex.join(retained)) if retained else None
+        executable = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        return executable if executable in _PUBLISHED_COMMANDS else "command"
+    return "command"
 
 
 def _safe_detail_target(value: str, *, cwd: str | None) -> str | None:
@@ -1557,7 +2008,7 @@ def _reject_embedded_content(value: Any, *, field: str = "") -> None:
     elif isinstance(value, str):
         if len(value) > 512:
             raise ValueError(f"chronicle graph retained unbounded string in {field}")
-        if field in {"content", "text_preview"}:
+        if field in {"content", "text_preview", "preview"}:
             if not value or len(value) > 280:
                 raise ValueError(
                     f"chronicle graph retained invalid narrative preview in {field}"
@@ -1571,12 +2022,39 @@ def _reject_embedded_content(value: Any, *, field: str = "") -> None:
             raise ValueError(f"chronicle graph retained a base64-like body in {field}")
 
 
+def output_evidence_from_item(item: Item) -> ChronicleToolOutputEvidence | None:
+    """Read the retained output evidence from a reconstructed compact item."""
+
+    vendor_data = item.vendor_data
+    raw = (
+        vendor_data.get("chronicle_output_evidence")
+        if isinstance(vendor_data, dict)
+        else None
+    )
+    if not isinstance(raw, dict):
+        return None
+    return ChronicleToolOutputEvidence.model_validate(raw)
+
+
 __all__ = [
     "CHRONICLE_GRAPH_SCHEMA_VERSION",
     "MAX_CHRONICLE_ARTIFACT_BYTES",
+    "MAX_CHRONICLE_ITEM_EVENT_IDS",
     "MAX_CHRONICLE_PUBLICATION_BYTES",
+    "MAX_CHRONICLE_SESSION_EVENTS",
+    "ChronicleEdge",
+    "ChronicleEvent",
     "ChronicleGraphArtifact",
+    "ChronicleGraphSummary",
+    "ChronicleItem",
+    "ChronicleRequestUsage",
+    "ChronicleRuntimeObservation",
+    "ChronicleSession",
+    "ChronicleSessionMeasurements",
+    "ChronicleToolOutputEvidence",
+    "ChronicleTurn",
     "build_chronicle_graph_artifact",
     "build_chronicle_segments",
     "chronicle_session_graph",
+    "output_evidence_from_item",
 ]

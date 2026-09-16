@@ -17,7 +17,6 @@ from coding_trajectory.ingestion.models import (
     Item,
 )
 
-
 CanonicalRetention = Literal["trajectory", "measurements"]
 
 
@@ -97,9 +96,8 @@ def compact_context_usage_observation(
 ) -> ContextUsageObservation:
     """Apply measurements-retention shaping to one usage observation inline.
 
-    Identical to the post-assembly path in ``stabilize_session``: remap the
-    source event reference, keep provider accounting fields, and drop the
-    cumulative snapshot and composition categories.
+    Remap the source event reference while preserving exact provider
+    accounting, cumulative snapshots, and composition categories.
     """
 
     return observation.model_copy(
@@ -108,8 +106,6 @@ def compact_context_usage_observation(
                 observation.source_event_id, observation.source_event_id
             ),
             "usage": compact_usage_mapping(observation.usage),
-            "cumulative_usage": None,
-            "categories": [],
         }
     )
 

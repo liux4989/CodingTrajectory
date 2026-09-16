@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "method": "graph.stats",
+  "assertions": [
+    {"path": "$.scope", "expected": "session_graph", "source_refs": ["source/parent.jsonl:1", "source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.turns", "expected": 3, "source_refs": ["source/parent.jsonl:2-6", "source/fork.jsonl:5-16"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.runtime.subagent_sessions", "expected": 1, "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"path": "$.billed_token_usage.processed_tokens", "expected": 4753, "source_refs": ["source/parent.jsonl:5", "source/fork.jsonl:9", "source/fork.jsonl:15"], "audit_ref": "audit.md#usage-arithmetic"}
+  ]
+}

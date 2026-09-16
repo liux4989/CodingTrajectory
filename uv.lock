@@ -13,7 +13,7 @@ members = [
     "coding-trajectory-benchmarks",
     "coding-trajectory-core",
     "coding-trajectory-workspace",
-    "ct-plugin-datahub",
+    "ct-plugin-loop",
 ]
 
 [[package]]
@@ -375,9 +375,9 @@ wheels = [
 ]
 
 [[package]]
-name = "ct-plugin-datahub"
+name = "ct-plugin-loop"
 version = "0.1.0"
-source = { editable = "packages/plugins/datahub" }
+source = { editable = "packages/plugins/loop" }
 dependencies = [
     { name = "coding-trajectory-core" },
     { name = "pydantic" },

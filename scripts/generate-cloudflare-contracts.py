@@ -12,64 +12,34 @@ from coding_trajectory.contracts import (
     service_contract,
 )
 from coding_trajectory.control_plane import collector_protocol as protocol
-from coding_trajectory.control_plane.catalog_protocol import (
-    CatalogReadRequest,
-    CatalogReadResponse,
-    PublicationChangesRequest,
-    PublishedCatalogRequest,
-    ResourceProjections,
-)
-from coding_trajectory.control_plane.chronicle import ChronicleGraphArtifact
-from coding_trajectory.control_plane.upload_chunks import (
-    ChunkBatchRequest,
-    ChunkManifestRequest,
-    ChunkMissingRequest,
-)
+from coding_trajectory.control_plane import fact_protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
     models = {
-        "ct_catalog_read_v2": CatalogReadRequest,
-        "catalog_read_v2_response": CatalogReadResponse,
-        "resource_projections": ResourceProjections,
-        "ct_published_catalog": PublishedCatalogRequest,
-        "ct_publication_changes": PublicationChangesRequest,
-        "ct_collector_upload_chunks": ChunkBatchRequest,
-        "ct_collector_missing_chunks": ChunkMissingRequest,
-        "ct_collector_stage_chunk_manifest": ChunkManifestRequest,
         "ct_project_register": protocol.ProjectRegistrationRequest,
         "ct_collector_register_source": protocol.SourceRegistrationRequest,
         "ct_collector_recover": protocol.CollectorRecoveryRequest,
         "ct_collector_publish_observation": protocol.ObservationRequest,
-        "ct_collector_stage_artifact_payload": protocol.ArtifactStageRequest,
-        "ct_collector_publish_artifacts": protocol.ArtifactManifestRequest,
+        "ct_collector_stage_fact_rows": fact_protocol.StageFactRowsRequest,
+        "ct_collector_missing_fact_rows": fact_protocol.MissingFactRowsRequest,
+        "ct_collector_publish_facts": fact_protocol.FactPublicationRequest,
         "ct_collector_heartbeat": protocol.LeaseHeartbeatRequest,
         "ct_collector_publish_living_observation": protocol.LivingObservationRequest,
-        "chronicle": ChronicleGraphArtifact,
+        "ct_fact_read": fact_protocol.FactReadRequest,
         "checkpoint": protocol.SourceCheckpointPayload,
         "living_events_change": LivingChange,
         "living_sessions_change": LivingSessionsChange,
     }
     for name, method in (
-        ("project_sessions", "project.sessions"),
         ("living_events", "living.events"),
         ("living_sessions", "living.sessions"),
     ):
         models[f"{name}_request"] = service_contract(method).request_model
         models[f"{name}_response"] = service_contract(method).response_model
     schemas = {name: model.model_json_schema() for name, model in models.items()}
-    for method in (
-        "graph.overview",
-        "graph.stats",
-        "graph.usage",
-        "session.tree",
-        "session.items",
-    ):
-        schemas[f"{method.replace('.', '_')}_response"] = service_contract(
-            method
-        ).response_model.model_json_schema()
     destination = ROOT / "cloudflare/control-plane/src/contracts.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(schemas, indent=2, sort_keys=True) + "\n")
