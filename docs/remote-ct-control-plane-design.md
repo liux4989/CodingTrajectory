@@ -43,7 +43,12 @@ tool input/output, arbitrary event body, secret, or host-absolute path.
 
 The exact limits are 512 KiB per row, 16 MiB per graph, 96 MiB per publication,
 and 1 MiB/2,048 rows per read page. Normalized SQL staging keeps Worker
-materialization graph-bounded independently of the publication aggregate.
+materialization graph-bounded independently of the publication aggregate. These
+bounds describe `main`, where the larger limits are merged but not
+production-qualified or deployed; the 2026-09-16 execution evidence records the
+deployed runtime as the earlier clean baseline with tighter bounds (see
+[Chronicle history](chronicle-history.md) and the
+[upload qualification plan](refactor/upload-qualification-plan.md)).
 
 Living methods remain separately versioned. Forecasting and calibration remain
 local/Core authorities; no estimator route or job store exists in this Worker.

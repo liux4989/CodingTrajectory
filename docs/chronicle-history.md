@@ -45,6 +45,13 @@ One row is limited to 512 KiB, one graph to 16 MiB, and one atomic publication
 to 96 MiB/512 graphs. Reads are deterministic pages bounded by both 2,048 rows
 and 1 MiB. A bound failure rejects the operation rather than trimming silently.
 
+These are the contract bounds on `main`, where the larger limits are merged but
+not production-qualified or deployed. The 2026-09-16 execution evidence records
+the deployed production runtime as the earlier clean baseline with tighter
+bounds (8 MiB per graph, 16 MiB per publication). The
+[upload qualification plan](refactor/upload-qualification-plan.md) pins the two
+runtime lanes and their exact sources.
+
 Historical methods have one response shape. Graph methods require
 `root_session_id`; session methods require `session_id`; `turn_id` is subordinate.
 Paging uses stable cursors or `before_turn_id` plus `limit`. One absolute protocol

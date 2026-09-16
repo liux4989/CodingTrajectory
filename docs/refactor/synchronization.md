@@ -25,6 +25,10 @@ source vector and every staged row pass validation in one workspace transaction.
 - one atomic publication: 96 MiB of staged encoded rows and 512 graphs;
 - one fact read page: 2,048 rows and 1 MiB encoded, whichever is reached first.
 
+These are the bounds on `main`, where the larger limits are merged but not
+production-qualified or deployed (see
+[Bounded large fact publications](bounded-large-fact-publications.md)).
+
 Worker memory is bounded independently of the aggregate limit: batches are at
 most 2 MiB, graph relationships are validated in normalized staged SQL, and
 only one compact graph digest manifest is materialized in JS. The atomic commit

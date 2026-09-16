@@ -2,9 +2,15 @@
 
 ## Status
 
-Implemented additive design. `session.summary.v1` and `session.search.v1` are
-registered service contracts and CLI commands. Existing v2 contracts remain
-compatible; this is not an API-wide v3 migration.
+Implemented additive design. `session.summary` and `session.search` are
+registered service contracts and CLI commands. At introduction they were v1 and
+the pre-existing methods were v2; the later Chronicle fact cutover
+([design record](refactor/remote-historical-facts.md)) bumped the frozen
+registry, so current method versions — including `session.summary` v2 and
+`session.search` v2 — are recorded in
+[`validation/core-protocol.json`](../validation/core-protocol.json). The
+taxonomy, scope rules, and contract principles below remain the accepted
+design.
 
 ## Purpose
 
@@ -84,8 +90,15 @@ graph root as an alias and do not fall back to the oldest or root session. An
 optional `turn_id` narrows a query and must belong to that session.
 
 This is intentionally stricter than the historical `SessionEntryRequest`,
-which accepts session, root-session, or turn entry points. Existing v2 methods
-retain that behavior until a separately justified version migration.
+which accepts session, root-session, or turn entry points. The Chronicle fact
+cutover later applied the field-level rule to every session and graph method:
+`SessionEntryRequest` is gone, session methods take `session_id` with
+`turn_id` subordinate, and graph methods take `root_session_id`. Entry-point
+tolerance is now per family rather than per request alias: `session.tree` and
+the `graph.*` methods still accept a session or turn entry point and select
+the branch or orchestration run containing it, while the remaining
+`session.*` methods select their session by exact ID — a turn ID can resolve
+its graph and still fail session selection.
 
 ### Evidence references
 

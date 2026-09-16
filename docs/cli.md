@@ -73,26 +73,31 @@ example `ct api schema session.usage`.
 
 ## Versioned Service API
 
-The accepted additive redesign for session interpretation and evidence
-discovery is specified in
-[`session-api-redesign.md`](session-api-redesign.md). It adds
-`session.summary.v1` and `session.search.v1` without changing the existing v2
-methods.
-
 The service registry currently exposes 18 method-scoped contracts: 16 project,
-session, and graph methods plus two living protocols.
-Requests are strict: unknown fields are rejected. The new summary/search
-methods require an exact canonical session ID; historical v2 session/graph
-analysis accepts a session, root-session, or turn entry point.
+session, and graph methods plus two living protocols. The frozen snapshot in
+[`validation/core-protocol.json`](../validation/core-protocol.json) records
+each method's current version; [`core-protocol.md`](core-protocol.md) governs
+intentional changes.
+Requests are strict: unknown fields are rejected. Session methods take
+`session_id` with `turn_id` subordinate; graph methods take
+`root_session_id`. A graph's identity is its root session ID. Entry-point
+tolerance differs by family: `session.tree` and the `graph.*` methods also
+accept another session ID or a turn ID from the same graph, selecting the
+branch or orchestration run containing it. The remaining `session.*` methods
+select their session by exact ID, so a turn ID can resolve its graph and
+still fail session selection.
 `ct api call` returns the documented
 `{id, method, ok, result|error}` envelope; the `result` schema is also exposed
 separately for consumers that unwrap it.
 
-Version 2 removes two redundant or unreachable methods:
-
-- `session.turn_usage` is replaced by `session.usage` with `turn_id`.
-- `project.logfile` is removed; it never accepted a usable file path through
-  `ServiceRuntime`.
+The accepted additive redesign for session interpretation and evidence
+discovery is specified in
+[`session-api-redesign.md`](session-api-redesign.md); it introduced the
+summary/search methods and their exact-ID scope rule. Historical version
+notes: version 2 removed `session.turn_usage` (replaced by `session.usage`
+with `turn_id`) and the unreachable `project.logfile`; the Chronicle fact
+cutover later removed the legacy session/root/turn request aliases in favor
+of the contract above.
 
 `session.model_usage` and `session.tool_usage` are advanced API-only methods.
 Human navigation remains on the dedicated session/graph commands; automation
@@ -107,13 +112,17 @@ as reported, while `processed_tokens` and `prompt_completion_tokens` provide
 explicit derived totals. New compact CLI JSON uses `prompt_completion` for the
 prompt-plus-completion total.
 
-Session and nested graph analysis commands require a session entry-point ID;
-they never guess the most-recent graph. Use `project sessions` to choose one.
-Explicit session, graph, and turn entry points are resolved from local source
-indexes first, so those commands have no scope flag. `--global-scope` is
-reserved for project collection discovery. A missing local entry point can be
-resolved through the configured remote Chronicles resource index. `project
-list` uses local project metadata unless local discovery is unavailable.
+Dedicated session and graph analysis commands never guess the most-recent
+graph; use `project sessions` to choose an entry point. Session commands
+select one session by exact ID; because a graph's identity is its root
+session ID, a graph ID selects the root session, while a turn ID fails
+session selection. `session tree` and the nested graph commands also accept a
+turn ID, selecting the branch or orchestration run containing it. Entry
+points are resolved from local source indexes first, so those commands have
+no scope flag. `--global-scope` is reserved for project collection discovery.
+A missing local entry point can be resolved through the configured remote
+Chronicles resource index. `project list` uses local project metadata unless
+local discovery is unavailable.
 
 Session `status` is a reversible liveness signal, with only `living` and
 `not_living` values. A session is `living` only while its current canonical
