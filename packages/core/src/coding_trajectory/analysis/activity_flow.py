@@ -91,13 +91,17 @@ def project_tool_activity(item: Item) -> dict[str, Any] | None:
     summary = summarize_tool_call(item)
     if summary is None or summary.get("activity_hidden") is True:
         return None
+    if summary.get("activity_kind") == "command":
+        summary["description"] = {
+            LIST_FILES: "list",
+            READ_FILE: "read",
+            SEARCH_TEXT: "search",
+        }.get(str(summary.get("name") or ""), "command")
     summary.setdefault("item_id", str(item.item_id))
     return {"type": "tool_call", **summary}
 
 
-def build_flows(
-    items: list[Item], *, flatten_commands: bool = False
-) -> list[dict[str, Any]]:
+def build_flows(items: list[Item]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for item in items:
         if is_tool_shaped_item(item):
@@ -126,14 +130,12 @@ def build_flows(
                         "item_id": str(item.item_id),
                     }
                 )
-    return _project_activity_cells(result, flatten_commands=flatten_commands)
+    return _project_activity_cells(result)
 
 
-def build_overview_flows(
-    items: list[Item], *, flatten_commands: bool = False
-) -> list[dict[str, Any]]:
+def build_overview_flows(items: list[Item]) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
-    for item in build_flows(items, flatten_commands=flatten_commands):
+    for item in build_flows(items):
         if is_control_only_activity_cell(item) or is_low_value_activity_cell(item):
             continue
         if item.get("type") == "assistant_response":
@@ -184,6 +186,7 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
                 "tool": item.get("name"),
                 "status": item.get("status"),
                 "count": item.get("count"),
+                "concept_counts": item.get("concept_counts"),
                 **details,
                 "item_ids": item.get("item_ids"),
                 "outcome": public_activity_outcome(item.get("activity_outcome")),
@@ -226,16 +229,13 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
-def _same_projected_tool_action(
-    left: dict[str, Any], right: dict[str, Any]
-) -> bool:
+def _same_projected_tool_action(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if "tool" not in left or "tool" not in right:
         return False
     ignored = {"count", "item_ids"}
-    return (
-        {key: value for key, value in left.items() if key not in ignored}
-        == {key: value for key, value in right.items() if key not in ignored}
-    )
+    return {key: value for key, value in left.items() if key not in ignored} == {
+        key: value for key, value in right.items() if key not in ignored
+    }
 
 
 def _merge_projected_tool_actions(
@@ -269,10 +269,8 @@ def _truncate_text(
     return text
 
 
-def _project_activity_cells(
-    items: list[dict[str, Any]], *, flatten_commands: bool
-) -> list[dict[str, Any]]:
-    """Project ordered tool facts into Codex-style activity cells.
+def _project_activity_cells(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project ordered tool facts into evidence-driven activity cells.
 
     The active cell only accepts compatible, agent-originated successful tool
     facts. Every other item flushes it, preserving the temporal boundary for
@@ -290,7 +288,7 @@ def _project_activity_cells(
         active = None
 
     for item in items:
-        group_key = _tool_activity_group_key(item, flatten_commands=flatten_commands)
+        group_key = _tool_activity_group_key(item)
         if group_key is None:
             flush_active()
             projected.append(item)
@@ -313,8 +311,6 @@ def _project_activity_cells(
 
 def _tool_activity_group_key(
     item: dict[str, Any],
-    *,
-    flatten_commands: bool,
 ) -> tuple[str, str | None, str | None] | None:
     if item.get("type") != "tool_call":
         return None
@@ -334,10 +330,14 @@ def _tool_activity_group_key(
             return ("background_terminal_wait", identity, None)
         return None
     if item.get("activity_kind") == "command":
-        # Evidence-rich Codex views are static and lack the TUI's expandable
-        # transcript, so their commands remain inspectable rows. Compact and
-        # other-vendor projections retain their established grouping contract.
-        if flatten_commands and item.get("activity_fidelity"):
+        fidelity = item.get("activity_fidelity")
+        description = item.get("description")
+        if (
+            isinstance(fidelity, str)
+            and fidelity.startswith("observed")
+            and isinstance(description, str)
+            and description
+        ):
             return _exact_activity_group_key(item)
         if item.get("activity_outcome") == "succeeded":
             return _COMMAND_CELL_KEY
@@ -401,9 +401,7 @@ def _project_exact_tool_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
             "optimization_profile": _profile_name(first),
             "status": first.get("status"),
             "count": len(items),
-            "exact_description": description
-            if isinstance(description, str)
-            else None,
+            "exact_description": description if isinstance(description, str) else None,
             "item_ids": item_ids or None,
             "activity_outcome": first.get("activity_outcome"),
             "activity_wrapper_status": first.get("activity_wrapper_status"),
@@ -454,23 +452,23 @@ def _project_exploration_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _project_command_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
-    commands = [
-        item["description"]
-        for item in items
-        if isinstance(item.get("description"), str) and item.get("description")
-    ]
     item_ids = [
         item["item_id"]
         for item in items
         if isinstance(item.get("item_id"), str) and item.get("item_id")
     ]
+    concept_counts: dict[str, int] = {}
+    for item in items:
+        concept = item.get("name")
+        if isinstance(concept, str) and concept:
+            concept_counts[concept] = concept_counts.get(concept, 0) + 1
     return prune_nones(
         {
             "type": "tool_call_group",
             "name": RUN_COMMAND,
             "optimization_profile": "activity:command",
             "count": len(items),
-            "descriptions": commands or None,
+            "concept_counts": concept_counts or None,
             "item_ids": item_ids or None,
         }
     )

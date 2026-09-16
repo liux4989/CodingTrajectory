@@ -1,12 +1,15 @@
 # Documentation
 
 Start with the [product requirements](prd.md) and [architecture](architecture.md).
-The private operational-history contract is [Chronicle history](chronicle-history.md).
+The historical publication contract is [Chronicle history](chronicle-history.md),
+governed by the [authority boundaries RFC](authority-boundaries.md).
 
 | Document | Role |
 | --- | --- |
 | [CodingTrajectory Loop](loop-design.md) | Local Analytics, evidence references, and future Monitor/Improve boundaries |
 | [Chronicle history](chronicle-history.md) | Private operational schema, privacy boundary, replay, and publication bounds |
+| [Authority boundaries](authority-boundaries.md) | Accepted evidence, canonical, publication, and query ownership |
+| [Direct published facts](refactor/direct-published-facts.md) | Aggregate-free publication implementation and qualification |
 | [Remote control plane](remote-ct-control-plane-design.md) | Historical, inventory, and living authorities |
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |
 | [CLI](cli.md) and [session API](session-api-redesign.md) | Public usage and progressive evidence retrieval |

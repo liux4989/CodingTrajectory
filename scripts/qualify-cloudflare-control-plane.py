@@ -23,23 +23,6 @@ from uuid import UUID, uuid4, uuid5
 import httpx
 from coding_trajectory.analysis.tool_summary_shared import RUN_COMMAND
 from coding_trajectory.contracts import SERVICE_CONTRACTS, service_contract
-from coding_trajectory.control_plane.chronicle import (
-    ChronicleContextSourceMeasurement,
-    ChronicleEdge,
-    ChronicleEdgeOrigin,
-    ChronicleEvent,
-    ChronicleGraphArtifact,
-    ChronicleGraphSummary,
-    ChronicleItem,
-    ChronicleItemMeasurements,
-    ChronicleSession,
-    ChronicleSessionMeasurements,
-    ChronicleToolOutputEvidence,
-    ChronicleToolSummary,
-    ChronicleTurn,
-    ChronicleUserRequest,
-    _tool_detail,
-)
 from coding_trajectory.control_plane.collector import CloudflareCollectorRemote
 from coding_trajectory.control_plane.collector_protocol import (
     LeaseHeartbeatRequest,
@@ -48,6 +31,25 @@ from coding_trajectory.control_plane.collector_protocol import (
     ProjectRegistrationRequest,
     SourceRegistrationRequest,
     SourceVectorEntry,
+)
+from coding_trajectory.control_plane.fact_projection import (
+    ChronicleContextSourceMeasurement,
+    ChronicleCoverage,
+    ChronicleEvent,
+    ChronicleGraphSummary,
+    ChronicleItem,
+    ChronicleItemMeasurements,
+    ChronicleRequestUsage,
+    ChronicleRuntimeObservation,
+    ChronicleSession,
+    ChronicleSessionMeasurements,
+    ChronicleToolOutputEvidence,
+    ChronicleToolSummary,
+    ChronicleTurn,
+    ChronicleUsage,
+    ChronicleUserRequest,
+    _tool_detail,
+    build_published_fact_set,
 )
 from coding_trajectory.control_plane.fact_protocol import (
     FACT_PUBLICATION_MAX_BYTES,
@@ -64,10 +66,15 @@ from coding_trajectory.control_plane.published_facts import (
     MAX_FACT_ROW_BYTES,
     PublishedFactSet,
     compute_row_hash,
-    derive_published_fact_set,
+    session_graph_from_fact_set,
 )
 from coding_trajectory.control_plane.remote import CloudflareRpcClient
 from coding_trajectory.ingestion.common import canonical_json
+from coding_trajectory.ingestion.models import (
+    SessionEdge,
+    SessionGraph,
+    SessionGraphSummary,
+)
 from coding_trajectory.service.handlers import dispatch
 from coding_trajectory.service.store import IndexCache
 from pydantic import ValidationError
@@ -125,7 +132,7 @@ def rpc(
     return envelope["data"] if envelope.get("ok") else envelope
 
 
-def synthetic_artifact(
+def synthetic_fact_set(
     *,
     seed: str,
     project: str,
@@ -133,11 +140,12 @@ def synthetic_artifact(
     revised: bool = False,
     command_description: str | None = None,
     large_measurement: bool = False,
-) -> ChronicleGraphArtifact:
+) -> PublishedFactSet:
     root = uuid5(UUID(WORKSPACE), seed + ":session")
     turn_id = uuid5(root, "turn")
     command_id = uuid5(root, "command")
     unknown_id = uuid5(root, "unknown")
+    request_id = uuid5(turn_id, "request")
     started = datetime(2026, 9, 15, 12, tzinfo=UTC)
     command_events = [uuid5(command_id, "call"), uuid5(command_id, "result")]
     unknown_events = [uuid5(unknown_id, "call"), uuid5(unknown_id, "result")]
@@ -150,7 +158,6 @@ def synthetic_artifact(
         completed_at=started + timedelta(seconds=2),
         status="failed",
         tool_name="shell_command",
-        operation="command",
         exit_code=23,
         measurements=ChronicleItemMeasurements(
             output_chars=14,
@@ -190,10 +197,17 @@ def synthetic_artifact(
     items = [command]
     events = [
         ChronicleEvent(
+            event_id=request_id,
+            timestamp=started,
+            type="user.prompt.submitted",
+            sequence=0,
+            turn_id=turn_id,
+        ),
+        ChronicleEvent(
             event_id=command_events[0],
             timestamp=started + timedelta(seconds=1),
             type="tool.call.requested",
-            sequence=0,
+            sequence=1,
             turn_id=turn_id,
             item_id=command_id,
             status="running",
@@ -202,7 +216,7 @@ def synthetic_artifact(
             event_id=command_events[1],
             timestamp=started + timedelta(seconds=2),
             type="tool.call.failed",
-            sequence=1,
+            sequence=2,
             turn_id=turn_id,
             item_id=command_id,
             status="failed",
@@ -219,10 +233,13 @@ def synthetic_artifact(
                 completed_at=started + timedelta(seconds=4),
                 status="completed",
                 tool_name="synthetic_unknown_tool",
+                projection_parent_item_id=command_id,
+                nested_index=0,
                 measurements=ChronicleItemMeasurements(
                     output_chars=9,
                     output_tokens=3,
                     output_original_tokens=3,
+                    projection_only=True,
                 ),
                 output_evidence=ChronicleToolOutputEvidence(
                     processor="ct.output_evidence.unknown.v1",
@@ -245,7 +262,7 @@ def synthetic_artifact(
                     event_id=unknown_events[0],
                     timestamp=started + timedelta(seconds=3),
                     type="tool.call.requested",
-                    sequence=2,
+                    sequence=3,
                     turn_id=turn_id,
                     item_id=unknown_id,
                     status="running",
@@ -254,7 +271,7 @@ def synthetic_artifact(
                     event_id=unknown_events[1],
                     timestamp=started + timedelta(seconds=4),
                     type="tool.call.succeeded",
-                    sequence=3,
+                    sequence=4,
                     turn_id=turn_id,
                     item_id=unknown_id,
                     status="completed",
@@ -268,11 +285,25 @@ def synthetic_artifact(
         completed_at=started + timedelta(seconds=5),
         status="completed",
         user_request=ChronicleUserRequest(
-            request_id=uuid5(turn_id, "request"),
+            request_id=request_id,
             content="Synthetic qualification request",
             chars=31,
             tokens=4,
         ),
+        requests=[
+            ChronicleRequestUsage(
+                request_id=request_id,
+                timestamp=started,
+                source="synthetic",
+                model="synthetic-model",
+                provider="synthetic-provider",
+                used_input_tokens=11,
+                usage=ChronicleUsage(input_tokens=11, output_tokens=7, total_tokens=18),
+                cumulative_usage=ChronicleUsage(
+                    input_tokens=21, output_tokens=9, total_tokens=30
+                ),
+            )
+        ],
         items=items,
     )
     session = ChronicleSession(
@@ -299,27 +330,40 @@ def synthetic_artifact(
             else ChronicleSessionMeasurements()
         ),
         events=events,
+        runtime=[
+            ChronicleRuntimeObservation(
+                timestamp=started,
+                kind="compaction",
+                duration_ms=17,
+                pre_tokens=21,
+                post_tokens=11,
+            )
+        ],
         turns=[turn],
     )
-    return ChronicleGraphArtifact(
-        graph=ChronicleGraphSummary(
+    from coding_trajectory.control_plane.published_facts import (
+        _assemble_published_fact_set,
+    )
+
+    return _assemble_published_fact_set(
+        summary=ChronicleGraphSummary(
             root_session_id=root,
             project=project,
             started_at=started,
             ended_at=started + timedelta(seconds=5),
-            status="completed",
+            status="not_living",
             session_count=1,
             turn_count=1,
             item_count=len(items),
         ),
         sessions=[session],
+        edges=[],
+        coverage=ChronicleCoverage(),
     )
 
 
 def large_fact_set(*, seed: str, project: str) -> PublishedFactSet:
-    fact_set = derive_published_fact_set(
-        synthetic_artifact(seed=seed, project=project, large_measurement=True)
-    )
+    fact_set = synthetic_fact_set(seed=seed, project=project, large_measurement=True)
     largest = max(
         len(canonical_json(row.model_dump(mode="json", exclude_none=True)).encode())
         for row in fact_set.rows
@@ -332,56 +376,51 @@ def large_fact_set(*, seed: str, project: str) -> PublishedFactSet:
 
 
 def synthetic_edge_fact_set(*, seed: str, project: str) -> PublishedFactSet:
-    parent = synthetic_artifact(seed=seed + ":parent", project=project)
-    child = synthetic_artifact(seed=seed + ":child", project=project)
+    parent = session_graph_from_fact_set(
+        synthetic_fact_set(seed=seed + ":parent", project=project)
+    )
+    child = session_graph_from_fact_set(
+        synthetic_fact_set(seed=seed + ":child", project=project)
+    )
     parent_session = parent.sessions[0]
     child_session = child.sessions[0].model_copy(
         update={"parent_session_id": parent_session.session_id}
     )
     origin_turn = parent_session.turns[0]
     origin_item = origin_turn.items[0]
-    artifact = ChronicleGraphArtifact(
-        graph=ChronicleGraphSummary(
+    graph = SessionGraph(
+        root_session_id=parent_session.session_id,
+        project_identifier=project,
+        summary=SessionGraphSummary(
             root_session_id=parent_session.session_id,
-            project=project,
-            started_at=parent.graph.started_at,
-            ended_at=child.graph.ended_at,
-            status="completed",
+            started_at=parent.summary.started_at,
+            ended_at=child.summary.ended_at,
             session_count=2,
             turn_count=2,
-            item_count=sum(
-                len(turn.items)
-                for session in (parent_session, child_session)
-                for turn in session.turns
-            ),
+            vendors=[parent_session.vendor, child_session.vendor],
         ),
         sessions=[parent_session, child_session],
         edges=[
-            ChronicleEdge(
+            SessionEdge(
+                type="spawned_subagent",
                 source_session_id=parent_session.session_id,
                 target_session_id=child_session.session_id,
-                kind="spawned_subagent",
-                origin=ChronicleEdgeOrigin(
-                    session_id=parent_session.session_id,
-                    turn_id=origin_turn.turn_id,
-                    item_id=origin_item.item_id,
-                    event_id=origin_item.event_ids[0],
-                ),
+                source_turn_id=origin_turn.turn_id,
+                source_item_id=origin_item.item_id,
+                source_event_id=origin_item.event_ids[0],
                 evidence_event_ids=[origin_item.event_ids[0]],
                 provenance="observed",
                 confidence="high",
             )
         ],
     )
-    return derive_published_fact_set(artifact)
+    return build_published_fact_set(graph)
 
 
 def sized_row_fact_set(
     *, seed: str, project: str, target_row_bytes: int
 ) -> PublishedFactSet:
-    rows = raw_rows(
-        derive_published_fact_set(synthetic_artifact(seed=seed, project=project))
-    )
+    rows = raw_rows(synthetic_fact_set(seed=seed, project=project))
     measurement = next(row for row in rows if row["kind"] == "measurement")
     timestamp = "2026-09-15T12:00:00Z"
 
@@ -515,9 +554,7 @@ def exact_graph_fact_set(
         ]["context_sources"]
     )
     source_sets = [
-        derive_published_fact_set(
-            synthetic_artifact(seed=f"{seed}:{index}", project=project)
-        )
+        synthetic_fact_set(seed=f"{seed}:{index}", project=project)
         for index in range(19)
     ]
     adjustable_id = str(
@@ -782,21 +819,17 @@ def main() -> None:
     project_name = "Qualification-" + tag
     bearer_secret = "synthetic-bearer-secret-value"
     positional_secret = "synthetic-positional-secret"
-    first_a = derive_published_fact_set(
-        synthetic_artifact(
-            seed=tag + ":a",
-            project=project_name,
-            command_description=(
-                f"curl -H 'Authorization: Bearer {bearer_secret}' https://example.test"
-            ),
+    first_a = synthetic_fact_set(
+        seed=tag + ":a",
+        project=project_name,
+        command_description=(
+            f"curl -H 'Authorization: Bearer {bearer_secret}' https://example.test"
         ),
     )
-    first_b = derive_published_fact_set(
-        synthetic_artifact(
-            seed=tag + ":b",
-            project=project_name,
-            command_description=f"python deploy.py {positional_secret}",
-        ),
+    first_b = synthetic_fact_set(
+        seed=tag + ":b",
+        project=project_name,
+        command_description=f"python deploy.py {positional_secret}",
     )
     bounded_sets = canonical_json(
         [
@@ -811,7 +844,7 @@ def main() -> None:
     checkpoint_payload_0 = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [100]},
-        "chronicle_digest": first_a.fact_set_digest,
+        "session_digest": first_a.fact_set_digest,
     }
     checkpoint_digest_0 = hashlib.sha256(
         canonical_json(checkpoint_payload_0).encode()
@@ -1265,18 +1298,16 @@ def main() -> None:
         "invalid digest publication rolls back",
     )
 
-    second_a = derive_published_fact_set(
-        synthetic_artifact(
-            seed=tag + ":a",
-            project=project_name,
-            include_unknown=False,
-            revised=True,
-        ),
+    second_a = synthetic_fact_set(
+        seed=tag + ":a",
+        project=project_name,
+        include_unknown=False,
+        revised=True,
     )
     checkpoint_payload_1 = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [80]},
-        "chronicle_digest": second_a.fact_set_digest,
+        "session_digest": second_a.fact_set_digest,
     }
     checkpoint_digest_1 = hashlib.sha256(
         canonical_json(checkpoint_payload_1).encode()
@@ -1566,7 +1597,7 @@ def main() -> None:
     boundary_checkpoint = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [sum(staged_sizes)]},
-        "chronicle_digest": hashlib.sha256(
+        "session_digest": hashlib.sha256(
             "".join(fact_set.fact_set_digest for fact_set in boundary_sets).encode()
         ).hexdigest(),
     }
@@ -1764,7 +1795,7 @@ def main() -> None:
         selector_checkpoint_payload = {
             "kind": "ct.source_checkpoint.v1",
             "source_checkpoint": {"segments": [index + 1]},
-            "chronicle_digest": hashlib.sha256(
+            "session_digest": hashlib.sha256(
                 f"{tag}:selector:{index}".encode()
             ).hexdigest(),
         }
@@ -1796,12 +1827,10 @@ def main() -> None:
             )
         )
     selector_sets = [
-        derive_published_fact_set(
-            synthetic_artifact(
-                seed=f"{tag}:selector-graph:{index}",
-                project=selector_project_name,
-                include_unknown=False,
-            )
+        synthetic_fact_set(
+            seed=f"{tag}:selector-graph:{index}",
+            project=selector_project_name,
+            include_unknown=False,
         )
         for index in range(512)
     ]
@@ -1852,7 +1881,7 @@ def main() -> None:
     overflow_checkpoint_payload = {
         "kind": "ct.source_checkpoint.v1",
         "source_checkpoint": {"segments": [513]},
-        "chronicle_digest": hashlib.sha256(
+        "session_digest": hashlib.sha256(
             f"{tag}:selector:overflow".encode()
         ).hexdigest(),
     }
@@ -1874,12 +1903,10 @@ def main() -> None:
         ),
         idempotency_key="selector-checkpoint-overflow:" + tag,
     )
-    overflow_set = derive_published_fact_set(
-        synthetic_artifact(
-            seed=f"{tag}:selector-graph:overflow",
-            project=selector_project_name,
-            include_unknown=False,
-        )
+    overflow_set = synthetic_fact_set(
+        seed=f"{tag}:selector-graph:overflow",
+        project=selector_project_name,
+        include_unknown=False,
     )
     stage_fact_set(remote, fact_set=overflow_set)
     remote.publish_facts(

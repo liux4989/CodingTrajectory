@@ -78,10 +78,8 @@ def benchmark_scale(
                         seed=f"{tag}:{index}", project=project_name
                     )
                     if boundary_rows
-                    else qualification["derive_published_fact_set"](
-                        qualification["synthetic_artifact"](
-                            seed=f"{tag}:{index}", project=project_name
-                        )
+                    else qualification["synthetic_fact_set"](
+                        seed=f"{tag}:{index}", project=project_name
                     )
                 )
                 for index in range(graph_count)
@@ -94,7 +92,7 @@ def benchmark_scale(
         checkpoint_payload = {
             "kind": "ct.source_checkpoint.v1",
             "source_checkpoint": {"segments": [encoded_bytes]},
-            "chronicle_digest": hashlib.sha256(
+            "session_digest": hashlib.sha256(
                 "".join(fact_set.fact_set_digest for fact_set in fact_sets).encode()
             ).hexdigest(),
         }

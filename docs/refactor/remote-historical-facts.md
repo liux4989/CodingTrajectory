@@ -39,9 +39,7 @@ Durable Object SQLite.
 1. **Local provider adapters** still build complete canonical sessions from
    immutable provider logs. Local raw logs remain the raw authority.
 2. **Publication processing** derives one bounded typed `PublishedFactSet`
-   from the private Chronicle (`ct.chronicle_graph.v3`). Chronicle stays the
-   full private bounded representation (previews retained); it is **not**
-   redefined as body-free. Standard local and remote historical APIs consume
+   directly from the canonical `SessionGraph`. Standard local and remote historical APIs consume
    the same `PublishedFactSet` representation, so local and remote standard
    reads are identical by construction.
 3. The **collector** stages typed, bounded fact-row batches
@@ -98,7 +96,7 @@ Durable Object SQLite.
 
 ## Contract versioning (no aliases)
 
-- `ct.chronicle_graph.v3`: adds bounded event envelopes
+- `ct.published_facts.v1` carries bounded event envelopes
   (`coverage.events=True`) and per-item `output_evidence`.
 - `session.summary` v2, `session.overview` v3, `session.items` v4,
   `session.events` v4, `session.search` v2, `graph.overview` v3.

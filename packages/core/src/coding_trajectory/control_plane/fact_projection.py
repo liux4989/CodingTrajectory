@@ -1,9 +1,9 @@
-"""Strict, bounded private Chronicle artifact shared by local and remote APIs.
+"""Privacy-sensitive projection from canonical session graphs to published facts.
 
-The artifact is the operational history contract, not a public sharing format.
-Raw events and tool bodies never enter the model. Bounded user/assistant previews
-and sanitized tool details retain the narrative and operational context needed by
-Chronicle views without publishing complete commands, outputs, or transcripts.
+Raw events and tool bodies never enter the publication contract. Bounded
+user/assistant previews and sanitized tool details retain the narrative and
+operational context needed by Chronicle views without publishing complete
+commands, outputs, or transcripts.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import math
 import re
 import shlex
 from datetime import datetime
-from pathlib import Path, PurePath
-from typing import Annotated, Any, Literal
+from pathlib import PurePath
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -47,14 +47,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     WRITE_FILE,
 )
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
-from coding_trajectory.discovery import (
-    DiscoveryCandidate,
-    merge_session_segments,
-    stabilize_session,
-)
-from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.ingestion.graph import (
-    build_session_graph,
     canonical_spawn_origins,
 )
 from coding_trajectory.ingestion.indexes import (
@@ -82,7 +75,6 @@ from coding_trajectory.ingestion.models import (
     Session,
     SessionEdge,
     SessionGraph,
-    SessionGraphSummary,
     SessionMeasurements,
     TeamMemberState,
     TeamTaskState,
@@ -94,12 +86,12 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
 
-CHRONICLE_GRAPH_SCHEMA_VERSION = "ct.chronicle_graph.v3"
-MAX_CHRONICLE_ARTIFACT_BYTES = 8 * 1024 * 1024
-MAX_CHRONICLE_PUBLICATION_BYTES = 16 * 1024 * 1024
-MAX_CHRONICLE_ITEM_EVENT_IDS = 64
-MAX_CHRONICLE_SESSION_EVENTS = 16384
-MAX_CHRONICLE_EVIDENCE_FACTS = 8
+if TYPE_CHECKING:
+    from coding_trajectory.control_plane.published_facts import PublishedFactSet
+
+MAX_FACT_ITEM_EVENT_IDS = 64
+MAX_FACT_SESSION_EVENTS = 16384
+MAX_FACT_EVIDENCE_FIELDS = 8
 EVIDENCE_PROCESSOR_VERSION = 1
 _SYNTHETIC_REQUEST_NAMESPACE = uuid5(
     NAMESPACE_URL, "codingtrajectory:chronicle-request"
@@ -331,12 +323,12 @@ class ChronicleToolOutputEvidence(ChronicleModel):
     original_tokens: int | None = Field(default=None, ge=0)
     facts: dict[_BoundedString, _EvidenceFactValue] | None = Field(
         default=None,
-        max_length=MAX_CHRONICLE_EVIDENCE_FACTS,
+        max_length=MAX_FACT_EVIDENCE_FIELDS,
     )
     preview: _Preview | None = None
     source_event_ids: list[UUID] = Field(
         default_factory=list,
-        max_length=MAX_CHRONICLE_ITEM_EVENT_IDS,
+        max_length=MAX_FACT_ITEM_EVENT_IDS,
     )
     retention: Literal["not_applicable", "not_retained", "preview", "complete"]
     searchable: Literal["complete", "preview", "facts_only", "none"]
@@ -360,7 +352,7 @@ class ChronicleToolOutputEvidence(ChronicleModel):
 class ChronicleItem(ChronicleModel):
     item_id: UUID
     event_ids: list[UUID] = Field(
-        max_length=MAX_CHRONICLE_ITEM_EVENT_IDS,
+        max_length=MAX_FACT_ITEM_EVENT_IDS,
     )
     sequence: int = Field(ge=0)
     kind: _ITEM_KINDS
@@ -498,7 +490,7 @@ class ChronicleSession(ChronicleModel):
     )
     events: list[ChronicleEvent] = Field(
         default_factory=list,
-        max_length=MAX_CHRONICLE_SESSION_EVENTS,
+        max_length=MAX_FACT_SESSION_EVENTS,
     )
     turns: list[ChronicleTurn] = Field(default_factory=list)
 
@@ -549,229 +541,8 @@ class ChronicleCoverage(ChronicleModel):
     output_evidence: Literal[True] = True
 
 
-class ChronicleGraphArtifact(ChronicleModel):
-    schema_version: Literal["ct.chronicle_graph.v3"] = CHRONICLE_GRAPH_SCHEMA_VERSION
-    graph: ChronicleGraphSummary
-    sessions: list[ChronicleSession]
-    edges: list[ChronicleEdge] = Field(default_factory=list)
-    coverage: ChronicleCoverage = Field(default_factory=ChronicleCoverage)
-
-    @model_validator(mode="after")
-    def validate_boundary(self) -> ChronicleGraphArtifact:
-        if not self.sessions:
-            raise ValueError("chronicle graph requires at least one session")
-        session_ids = {session.session_id for session in self.sessions}
-        if len(session_ids) != len(self.sessions):
-            raise ValueError("chronicle graph contains duplicate sessions")
-        if self.graph.root_session_id not in session_ids:
-            raise ValueError("chronicle graph root is not retained")
-        if self.graph.session_count != len(self.sessions):
-            raise ValueError("chronicle graph session count mismatch")
-        turn_count = sum(len(session.turns) for session in self.sessions)
-        item_count = sum(
-            len(turn.items) for session in self.sessions for turn in session.turns
-        )
-        if self.graph.turn_count != turn_count or self.graph.item_count != item_count:
-            raise ValueError("chronicle graph hierarchy count mismatch")
-
-        turn_owners: dict[UUID, UUID] = {}
-        item_owners: dict[UUID, tuple[UUID, UUID]] = {}
-        for session in self.sessions:
-            event_sequences = [event.sequence for event in session.events]
-            if event_sequences != sorted(event_sequences) or len(
-                event_sequences
-            ) != len(set(event_sequences)):
-                raise ValueError("chronicle graph event ordering is invalid")
-            event_ids = {event.event_id for event in session.events}
-            if len(event_ids) != len(session.events):
-                raise ValueError("chronicle graph contains duplicate events")
-            session_turn_ids = {turn.turn_id for turn in session.turns}
-            session_item_ids = {
-                item.item_id for turn in session.turns for item in turn.items
-            }
-            item_turn: dict[UUID, UUID] = {
-                item.item_id: turn.turn_id
-                for turn in session.turns
-                for item in turn.items
-            }
-            for event in session.events:
-                if event.turn_id is not None and event.turn_id not in session_turn_ids:
-                    raise ValueError("chronicle graph event turn ownership mismatch")
-                if event.item_id is not None:
-                    if event.item_id not in session_item_ids:
-                        raise ValueError(
-                            "chronicle graph event item ownership mismatch"
-                        )
-                    if (
-                        event.turn_id is not None
-                        and item_turn[event.item_id] != event.turn_id
-                    ):
-                        raise ValueError("chronicle graph event item/turn mismatch")
-            turn_sequences = [turn.sequence for turn in session.turns]
-            if turn_sequences != sorted(turn_sequences) or len(turn_sequences) != len(
-                set(turn_sequences)
-            ):
-                raise ValueError("chronicle graph turn ordering is invalid")
-            for turn in session.turns:
-                if turn.turn_id in turn_owners:
-                    raise ValueError("chronicle graph contains duplicate turns")
-                turn_owners[turn.turn_id] = session.session_id
-                item_sequences = [item.sequence for item in turn.items]
-                if item_sequences != sorted(item_sequences) or len(
-                    item_sequences
-                ) != len(set(item_sequences)):
-                    raise ValueError("chronicle graph item ordering is invalid")
-                for item in turn.items:
-                    if item.item_id in item_owners:
-                        raise ValueError("chronicle graph contains duplicate items")
-                    item_owners[item.item_id] = (session.session_id, turn.turn_id)
-                    if not set(item.event_ids) <= event_ids:
-                        raise ValueError(
-                            "chronicle graph item references an unretained event"
-                        )
-                    evidence = item.output_evidence
-                    if evidence is not None and not (
-                        set(evidence.source_event_ids) <= set(item.event_ids)
-                    ):
-                        raise ValueError(
-                            "chronicle graph evidence references an event the item does not own"
-                        )
-                turn_items = {item.item_id: item for item in turn.items}
-                for item in turn.items:
-                    if item.projection_parent_item_id is None:
-                        if item.nested_index is not None:
-                            raise ValueError(
-                                "chronicle graph nested index has no projection parent"
-                            )
-                        continue
-                    parent = turn_items.get(item.projection_parent_item_id)
-                    if parent is None or parent.item_id == item.item_id:
-                        raise ValueError(
-                            "chronicle graph projection parent ownership mismatch"
-                        )
-                    if parent.measurements.projection_only:
-                        raise ValueError(
-                            "chronicle graph projection parent is not canonical"
-                        )
-                    if not item.measurements.projection_only:
-                        raise ValueError(
-                            "chronicle graph projection child owns canonical content"
-                        )
-            for origin in session.topology.spawn_origins:
-                if (
-                    origin.turn_id is not None
-                    and turn_owners.get(origin.turn_id) != session.session_id
-                ):
-                    raise ValueError("chronicle graph spawn turn ownership mismatch")
-                if origin.item_id is not None and (
-                    origin.turn_id is None
-                    or item_owners.get(origin.item_id)
-                    != (session.session_id, origin.turn_id)
-                ):
-                    raise ValueError("chronicle graph spawn item ownership mismatch")
-
-        edge_identities: set[tuple[str, UUID, UUID, UUID | None, UUID | None]] = set()
-        for edge in self.edges:
-            if (
-                edge.source_session_id not in session_ids
-                or edge.target_session_id not in session_ids
-                or edge.origin.session_id != edge.source_session_id
-            ):
-                raise ValueError("chronicle graph edge endpoint mismatch")
-            if (
-                edge.origin.turn_id is not None
-                and turn_owners.get(edge.origin.turn_id) != edge.source_session_id
-            ):
-                raise ValueError("chronicle graph edge turn ownership mismatch")
-            if edge.origin.item_id is not None and (
-                edge.origin.turn_id is None
-                or item_owners.get(edge.origin.item_id)
-                != (edge.source_session_id, edge.origin.turn_id)
-            ):
-                raise ValueError("chronicle graph edge item ownership mismatch")
-            identity = (
-                edge.kind,
-                edge.source_session_id,
-                edge.target_session_id,
-                edge.origin.turn_id,
-                edge.origin.item_id,
-            )
-            if identity in edge_identities:
-                raise ValueError("chronicle graph contains duplicate edges")
-            edge_identities.add(identity)
-        payload = self.wire_payload()
-        _reject_embedded_content(payload)
-        encoded = canonical_json(payload).encode()
-        if len(encoded) > MAX_CHRONICLE_ARTIFACT_BYTES:
-            raise ValueError("chronicle graph exceeds the 8 MiB artifact bound")
-        return self
-
-    def wire_payload(self) -> dict[str, Any]:
-        """Return the intentionally sparse v2 wire representation."""
-
-        payload = self.model_dump(mode="json", exclude_none=True)
-        for session in payload["sessions"]:
-            for turn in session["turns"]:
-                for item in turn["items"]:
-                    measurements = item["measurements"]
-                    for key in (
-                        "input_chars",
-                        "input_tokens",
-                        "output_chars",
-                        "output_tokens",
-                        "text_chars",
-                        "text_tokens",
-                    ):
-                        if measurements.get(key) == 0:
-                            measurements.pop(key)
-                    if measurements.get("projection_only") is False:
-                        measurements.pop("projection_only")
-                    if measurements.get("output_truncated") is False:
-                        measurements.pop("output_truncated")
-
-                    summary = measurements.get("tool_summary")
-                    if isinstance(summary, dict) and item.get(
-                        "tool_name"
-                    ) == summary.get("name"):
-                        item.pop("tool_name")
-
-                    semantic = item.get("semantic")
-                    if semantic == {}:
-                        item.pop("semantic")
-        return payload
-
-    def canonical_bytes(self) -> bytes:
-        return canonical_json(self.wire_payload()).encode()
-
-    def digest(self) -> str:
-        return hashlib.sha256(self.canonical_bytes()).hexdigest()
-
-    def to_session_graph(self) -> SessionGraph:
-        sessions = [_to_session(session) for session in self.sessions]
-        edges = [_to_edge(edge) for edge in self.edges]
-        return SessionGraph(
-            root_session_id=self.graph.root_session_id,
-            project_identifier=self.graph.project,
-            summary=SessionGraphSummary(
-                root_session_id=self.graph.root_session_id,
-                started_at=self.graph.started_at,
-                ended_at=self.graph.ended_at,
-                session_count=self.graph.session_count,
-                turn_count=self.graph.turn_count,
-                vendors=sorted(
-                    {session.vendor for session in sessions},
-                    key=lambda vendor: vendor.value,
-                ),
-            ),
-            edges=edges,
-            sessions=sessions,
-        )
-
-
-def build_chronicle_graph_artifact(
-    session_graph: SessionGraph,
-) -> ChronicleGraphArtifact:
-    """Project one canonical graph onto the bounded private Chronicle source."""
+def build_published_fact_set(session_graph: SessionGraph) -> PublishedFactSet:
+    """Project one canonical graph directly onto bounded publication facts."""
 
     index = build_session_graph_index(session_graph)
     counter = counter_for_session_graph(session_graph)
@@ -797,66 +568,29 @@ def build_chronicle_graph_artifact(
         ),
         None,
     )
-    return ChronicleGraphArtifact(
-        graph=ChronicleGraphSummary(
-            root_session_id=session_graph.root_session_id,
-            project=_portable_project(session_graph.project_identifier),
-            started_at=started_at,
-            ended_at=ended_at,
-            status=root.status if root is not None else None,
-            session_count=len(sessions),
-            turn_count=sum(len(session.turns) for session in sessions),
-            item_count=sum(
-                len(turn.items) for session in sessions for turn in session.turns
-            ),
+    summary = ChronicleGraphSummary(
+        root_session_id=session_graph.root_session_id,
+        project=_portable_project(session_graph.project_identifier),
+        started_at=started_at,
+        ended_at=ended_at,
+        status=root.status if root is not None else None,
+        session_count=len(sessions),
+        turn_count=sum(len(session.turns) for session in sessions),
+        item_count=sum(
+            len(turn.items) for session in sessions for turn in session.turns
         ),
+    )
+    edges = [_build_chronicle_edge(edge) for edge in session_graph.edges]
+    from coding_trajectory.control_plane.published_facts import (
+        _assemble_published_fact_set,
+    )
+
+    return _assemble_published_fact_set(
+        summary=summary,
         sessions=sessions,
-        edges=[_build_chronicle_edge(edge) for edge in session_graph.edges],
+        edges=edges,
+        coverage=ChronicleCoverage(),
     )
-
-
-def build_chronicle_segments(
-    segments: list[
-        tuple[DiscoveryCandidate, Path, list[dict[str, Any]], set[str] | None]
-    ],
-) -> ChronicleGraphArtifact:
-    """Build one logical source artifact from exactly fenced source records."""
-
-    canonical_segments: list[tuple[Path, Session]] = []
-    for candidate, source, records, parent_started_turn_ids in segments:
-        session = candidate.adapter_cls().build_canonical_session(
-            source,
-            records,
-            parent_started_turn_ids=parent_started_turn_ids,
-        )
-        canonical_segments.append(
-            (
-                source,
-                stabilize_session(
-                    session,
-                    vendor=candidate.vendor,
-                    source=source,
-                ),
-            )
-        )
-    canonical_segments.sort(key=lambda entry: (entry[1].started_at, str(entry[0])))
-    session = (
-        canonical_segments[0][1]
-        if len(canonical_segments) == 1
-        else merge_session_segments(canonical_segments)
-    )
-    graph = build_session_graph(
-        root_session_id=session.session_id,
-        project_identifier="chronicle-source",
-        sessions=[session],
-    )
-    return build_chronicle_graph_artifact(graph)
-
-
-def chronicle_session_graph(session_graph: SessionGraph) -> SessionGraph:
-    """Round-trip a graph through the exact artifact used by remote reads."""
-
-    return build_chronicle_graph_artifact(session_graph).to_session_graph()
 
 
 def _vendor_title(session: Session) -> str | None:
@@ -1157,6 +891,12 @@ def _bounded_tool_summary(
     item: Item, measurements: ItemMeasurements, *, cwd: str | None
 ) -> ChronicleToolSummary | None:
     raw = measurements.tool_summary or summarize_tool_call(item)
+    if (
+        measurements.tool_summary is None
+        and isinstance(item.vendor_data, dict)
+        and item.vendor_data.get("published_fact_projection") is True
+    ):
+        return None
     if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
         return None
     name = _bounded(raw["name"])
@@ -1192,20 +932,29 @@ def _item_semantic(
         and isinstance(vendor_data.get("chronicle_semantics"), dict)
         else {}
     )
-    verification_kind = (
-        classify_verification_command(item.command)
-        if isinstance(item, CommandExecutionItem)
-        else None
-    ) or _bounded(retained.get("verification_kind"))
+    reconstructed = (
+        isinstance(vendor_data, dict)
+        and vendor_data.get("published_fact_projection") is True
+    )
+    verification_kind = _bounded(retained.get("verification_kind"))
+    if not reconstructed and verification_kind is None:
+        verification_kind = (
+            classify_verification_command(item.command)
+            if isinstance(item, CommandExecutionItem)
+            else None
+        )
     resolution_key: str | None = _bounded(retained.get("resolution_key"))
-    if isinstance(item, FileChangeItem) and item.path:
-        resolution_key = f"file:{_portable_path(item.path)}"
-    elif isinstance(item, CommandExecutionItem):
-        summary = tool_input_summary(item.command)
-        if summary:
-            resolution_key = "command:" + hashlib.sha256(summary.encode()).hexdigest()
-    elif tool_summary is not None:
-        resolution_key = f"tool:{tool_summary.name}"
+    if not reconstructed:
+        if isinstance(item, FileChangeItem) and item.path:
+            resolution_key = f"file:{_portable_path(item.path)}"
+        elif isinstance(item, CommandExecutionItem):
+            summary = tool_input_summary(item.command)
+            if summary:
+                resolution_key = (
+                    "command:" + hashlib.sha256(summary.encode()).hexdigest()
+                )
+        elif tool_summary is not None:
+            resolution_key = f"tool:{tool_summary.name}"
     return ChronicleItemSemantic(
         verification_kind=_bounded(verification_kind),
         resolution_key=_bounded(resolution_key),
@@ -1243,6 +992,17 @@ def _build_output_evidence(
     Unknown tools fail closed to ``facts_only``: measurements and lifecycle are
     retained, but no structured facts or previews beyond the allowlist.
     """
+
+    if (
+        isinstance(item.vendor_data, dict)
+        and item.vendor_data.get("published_fact_projection") is True
+    ):
+        retained = item.vendor_data.get("chronicle_output_evidence")
+        return (
+            ChronicleToolOutputEvidence.model_validate(retained)
+            if isinstance(retained, dict)
+            else None
+        )
 
     kind = item.kind
     tool_name = getattr(item, "tool_name", None)
@@ -1309,7 +1069,7 @@ def _build_output_evidence(
         original_tokens=measurements.output_original_tokens,
         facts=facts or None,
         preview=None,
-        source_event_ids=list(item.event_ids)[:MAX_CHRONICLE_ITEM_EVENT_IDS],
+        source_event_ids=list(item.event_ids)[:MAX_FACT_ITEM_EVENT_IDS],
         retention=retention,
         searchable="facts_only" if facts else "none",
     )
@@ -1640,7 +1400,10 @@ def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
         tool_summary=restored_tool_summary,
     )
     vendor_data: dict[str, Any] = {
-        "chronicle_semantics": value.semantic.model_dump(mode="json", exclude_none=True)
+        "chronicle_semantics": value.semantic.model_dump(
+            mode="json", exclude_none=True
+        ),
+        "published_fact_projection": True,
     }
     if value.output_evidence is not None:
         vendor_data["chronicle_output_evidence"] = value.output_evidence.model_dump(
@@ -2037,14 +1800,10 @@ def output_evidence_from_item(item: Item) -> ChronicleToolOutputEvidence | None:
 
 
 __all__ = [
-    "CHRONICLE_GRAPH_SCHEMA_VERSION",
-    "MAX_CHRONICLE_ARTIFACT_BYTES",
-    "MAX_CHRONICLE_ITEM_EVENT_IDS",
-    "MAX_CHRONICLE_PUBLICATION_BYTES",
-    "MAX_CHRONICLE_SESSION_EVENTS",
+    "MAX_FACT_ITEM_EVENT_IDS",
+    "MAX_FACT_SESSION_EVENTS",
     "ChronicleEdge",
     "ChronicleEvent",
-    "ChronicleGraphArtifact",
     "ChronicleGraphSummary",
     "ChronicleItem",
     "ChronicleRequestUsage",
@@ -2053,8 +1812,6 @@ __all__ = [
     "ChronicleSessionMeasurements",
     "ChronicleToolOutputEvidence",
     "ChronicleTurn",
-    "build_chronicle_graph_artifact",
-    "build_chronicle_segments",
-    "chronicle_session_graph",
+    "build_published_fact_set",
     "output_evidence_from_item",
 ]

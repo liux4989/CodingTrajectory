@@ -3,8 +3,8 @@
 CodingTrajectory includes a project Amp plugin at
 `.amp/plugins/coding-trajectory/index.ts`. It is the first transport for Amp
 threads and establishes the host-local raw input for canonical ingestion.
-Hosted collection receives only metadata checkpoints and the locally assembled
-[chronicle artifact](chronicle-history.md), never these raw transcripts.
+Hosted collection receives only metadata checkpoints and locally assembled
+[published facts](chronicle-history.md), never these raw transcripts.
 
 ## Storage
 
@@ -30,7 +30,7 @@ and `event`. Agent observations also contain `message_id`; agent-end and tool
 result observations contain `status`; and tool observations contain
 `tool_use_id` plus `tool_name`, `input`, `output`, or `error` when Amp makes
 those fields available. This detail remains in the private local journal and is
-not a chronicle artifact by itself.
+not a published fact set by itself.
 
 The collector reads `thread.messages({ full: true })`, paging through the whole
 transcript so compaction does not discard earlier messages. It appends only new
@@ -76,7 +76,7 @@ Keep the wrapper mode executable and its parent directory private. Set
 `CT_AMP_PUBLISH_COMMAND` to an alternate absolute executable path, or set
 `CT_AMP_AUTO_PUBLISH=0` to retain capture without automatic publication. The
 capture plugin does not call the Loop product service.
-Only the local collector builds and validates the bounded Chronicle artifact
+Only the local collector builds and validates bounded published facts
 before publishing it through authenticated Cloudflare RPC. The publication path
 replaces user-request content with `[content omitted]` and removes assistant
 text previews even if a local Chronicle projection retains bounded narrative.
@@ -85,7 +85,7 @@ text previews even if a local Chronicle projection retains bounded narrative.
 
 The plugin runs inside an orb and writes to that orb's local filesystem. Files
 are not synchronized across orbs. The existing CT collector discovers these
-journals as vendor `amp`, builds bounded chronicle artifacts, and uses its normal
+journals as vendor `amp`, builds bounded published facts, and uses its normal
 authenticated outbox/publication path. Never upload raw journal records.
 
 The base Chronicle validator includes `amp` in its vendor allowlist. There is no

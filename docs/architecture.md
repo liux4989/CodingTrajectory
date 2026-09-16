@@ -10,8 +10,7 @@ through one shared service runtime.
 immutable provider JSONL
   → occurrence-aware ingestion and canonical reconstruction
   → DocumentStore / SessionGraph with exact measurements
-  → private in-memory ChronicleGraphArtifact v3
-  → bounded PublishedFactSet
+  → direct privacy projection → bounded PublishedFactSet
       ├─→ local FactRepository ─┐
       └─→ collector → Durable Object SQLite → remote FactRepository
                                 └──────────────→ shared historical handlers
@@ -38,8 +37,8 @@ does not host estimation jobs or semantics.
 | Location | Responsibility |
 | --- | --- |
 | `ingestion/`, `discovery.py` | Source occurrences, canonical reconstruction, exact accounting |
-| `control_plane/chronicle.py` | Private bounded Chronicle model and evidence projector |
-| `control_plane/published_facts.py` | Published fact identities, bounds, and reconstruction |
+| `control_plane/fact_projection.py` | One-way privacy and evidence projection |
+| `control_plane/published_facts.py` | Published fact identities, semantics, bounds, and direct reconstruction |
 | `control_plane/fact_repository.py` | Shared local/remote historical store boundary |
 | `control_plane/collector.py` | Checkpoint and fact-set staging/publication |
 | `cloudflare/control-plane/src/facts.ts` | Fact validation, atomic revisions, selection, cursors |

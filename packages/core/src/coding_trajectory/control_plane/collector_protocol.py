@@ -1,6 +1,6 @@
 """Versioned contracts shared by the local collector and remote ingress.
 
-These models describe checkpoint metadata and bounded chronicle artifacts, not
+These models describe checkpoint metadata and bounded published facts, not
 vendor JSONL records. The source files stay on the host that collected them.
 """
 
@@ -117,7 +117,7 @@ class SourceCheckpoint(CollectorModel):
 class SourceCheckpointPayload(CollectorModel):
     kind: Literal["ct.source_checkpoint.v1"] = "ct.source_checkpoint.v1"
     source_checkpoint: SourceCheckpoint
-    chronicle_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    session_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ObservationRequest(CollectorModel):

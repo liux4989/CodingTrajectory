@@ -41,7 +41,6 @@ from coding_trajectory.ingestion.models import (
     ToolCallItem,
     ToolStatus,
     Turn,
-    Vendor,
 )
 
 _SEARCH_FIELD_LIMIT = 16_000
@@ -283,7 +282,6 @@ def build_session_summary(
         "recent_activity": _recent_activity_cells(
             turns,
             signals,
-            flatten_commands=session.vendor == Vendor.CODEX_CLI,
         ),
     }
     sections: dict[str, list[dict[str, Any]]] = {}
@@ -647,8 +645,6 @@ def _pending_plan_actions_for_item(item: PlanItem) -> list[str]:
 def _recent_activity_cells(
     turns: list[Turn],
     signals: _ItemSignals,
-    *,
-    flatten_commands: bool,
 ) -> list[_RankedSummaryItem]:
     """Use the overview's canonical activity cells for the rolling tail.
 
@@ -663,7 +659,7 @@ def _recent_activity_cells(
     for turn in turns:
         items_by_id = {str(item.item_id): item for item in turn.items}
         for item_run in _summary_activity_item_runs(turn.items, signals):
-            for cell in build_flows(item_run, flatten_commands=flatten_commands):
+            for cell in build_flows(item_run):
                 if is_control_only_activity_cell(cell):
                     continue
                 item_ids = _activity_cell_item_ids(cell)
@@ -757,7 +753,22 @@ def _activity_cell_label(
     if cell_type == "tool_call_group":
         name = str(cell.get("name") or "Tool")
         if name == "RunCommand" and isinstance(count, int):
-            return f"Ran {count} commands"
+            concept_counts = cell.get("concept_counts")
+            details = []
+            if isinstance(concept_counts, dict):
+                labels = {
+                    "ListFiles": "list",
+                    "ReadFile": "read",
+                    "RunCommand": "other",
+                    "SearchText": "search",
+                }
+                details = [
+                    f"{value} {labels.get(str(concept), str(concept))}"
+                    for concept, value in sorted(concept_counts.items())
+                    if isinstance(value, int) and value > 0
+                ]
+            suffix = f" ({', '.join(details)})" if details else ""
+            return f"Ran {count} commands{suffix}"
         descriptions = cell.get("descriptions")
         detail = ", ".join(
             description

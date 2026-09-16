@@ -12,11 +12,8 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from coding_trajectory.control_plane.chronicle import (
-    build_chronicle_graph_artifact,
-    chronicle_session_graph,
-)
-from coding_trajectory.control_plane.published_facts import derive_published_fact_set
+from coding_trajectory.control_plane.fact_projection import build_published_fact_set
+from coding_trajectory.control_plane.published_facts import session_graph_from_fact_set
 from coding_trajectory.discovery import discover_store, stabilize_session
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
@@ -179,13 +176,10 @@ def main() -> None:
             )
             assert len(start_only.turns) == 1
             assert start_only.turns[0].status.value == "running"
-            artifact = build_chronicle_graph_artifact(graph)
-            encoded = artifact.canonical_bytes()
-            assert b"PRIVATE task" in encoded
-            assert b"PRIVATE final" in encoded
-            assert b"PRIVATE output" not in encoded
-            publication = derive_published_fact_set(artifact)
+            publication = build_published_fact_set(graph)
             publication_bytes = publication.model_dump_json(exclude_none=True).encode()
+            assert b"PRIVATE task" in publication_bytes
+            assert b"PRIVATE final" in publication_bytes
             assert b"PRIVATE output" not in publication_bytes
             assert publication.kind_counts["graph"] == 1
             assert publication.kind_counts["session"] == 2
@@ -193,8 +187,8 @@ def main() -> None:
                 "body" not in row.model_dump(mode="json", exclude_none=True)["payload"]
                 for row in publication.rows
             )
-            assert publication.to_session_graph().edges == graph.edges
-            replay = artifact.to_session_graph()
+            replay = session_graph_from_fact_set(publication)
+            assert replay.edges == graph.edges
             assert replay.sessions[0].vendor == Vendor.AMP and len(replay.edges) == 1
             # Compact ingestion preserves IDs/topology independently of content.
             compact = [
@@ -217,10 +211,10 @@ def main() -> None:
                 for p in paths
             ]
             assert (
-                build_chronicle_graph_artifact(
+                build_published_fact_set(
                     assemble_project_session_graphs(graph.project_identifier, full)[0]
-                ).digest()
-                == artifact.digest()
+                ).fact_set_digest
+                == publication.fact_set_digest
             )
             snapshots = [
                 SourceSnapshot(
@@ -278,7 +272,7 @@ def main() -> None:
                     method,
                     params,
                     store=DocumentStore.from_session_graphs(
-                        [chronicle_session_graph(graph)]
+                        [session_graph_from_fact_set(publication)]
                     ),
                     global_scope=True,
                     current_dir=directory,

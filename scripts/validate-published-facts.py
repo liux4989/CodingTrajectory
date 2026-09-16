@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify bounded Chronicle artifacts against available local vendor sources.
+"""Qualify direct published facts against available local vendor sources.
 
 The report contains aggregate counts only. It never records source paths,
 project names, session identifiers, payload bodies, or exception messages.
@@ -16,11 +16,11 @@ from typing import Any, Literal
 
 from coding_trajectory.analysis.measurements import extract_item_measurements
 from coding_trajectory.analysis.request_lineage import extract_user_request
-from coding_trajectory.control_plane.chronicle import (
-    MAX_CHRONICLE_ARTIFACT_BYTES,
-    MAX_CHRONICLE_PUBLICATION_BYTES,
-    ChronicleGraphArtifact,
-    build_chronicle_graph_artifact,
+from coding_trajectory.control_plane.fact_projection import build_published_fact_set
+from coding_trajectory.control_plane.fact_protocol import FACT_PUBLICATION_MAX_BYTES
+from coding_trajectory.control_plane.published_facts import (
+    MAX_FACT_SET_BYTES,
+    session_graph_from_fact_set,
 )
 from coding_trajectory.discovery import discover_store
 from coding_trajectory.ingestion.indexes import build_session_graph_index
@@ -31,7 +31,7 @@ from coding_trajectory.service.store import IndexCache
 from pydantic import BaseModel, ConfigDict, Field
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REPORT = REPO_ROOT / ".artifacts" / "chronicle-local-qualification.json"
+DEFAULT_REPORT = REPO_ROOT / ".artifacts" / "published-facts-qualification.json"
 VENDORS = ("codex_cli", "claude_code", "pi", "amp")
 API_METHODS = (
     "project.sessions",
@@ -75,9 +75,9 @@ class VendorQualification(StrictModel):
     session_count: int = 0
     turn_count: int = 0
     item_count: int = 0
-    artifact_count: int = 0
-    artifact_bytes_total: int = 0
-    artifact_bytes_max: int = 0
+    fact_set_count: int = 0
+    fact_set_bytes_total: int = 0
+    fact_set_bytes_max: int = 0
     operational_detail_count: int = 0
     projection_link_count: int = 0
     user_request_preview_count: int = 0
@@ -207,37 +207,39 @@ def _preview(value: Any) -> str | None:
 
 
 def _validate_narrative_previews(
-    graph: SessionGraph, artifact: ChronicleGraphArtifact
+    graph: SessionGraph, replay: SessionGraph
 ) -> tuple[int, int]:
     index = build_session_graph_index(graph)
-    artifact_sessions = {session.session_id: session for session in artifact.sessions}
+    replay_sessions = {session.session_id: session for session in replay.sessions}
     user_requests = 0
     assistant_responses = 0
     for session in graph.sessions:
-        artifact_session = artifact_sessions[session.session_id]
-        artifact_turns = {turn.turn_id: turn for turn in artifact_session.turns}
+        replay_session = replay_sessions[session.session_id]
+        replay_turns = {turn.turn_id: turn for turn in replay_session.turns}
         for turn in session.turns:
-            artifact_turn = artifact_turns[turn.turn_id]
+            replay_turn = replay_turns[turn.turn_id]
             request = extract_user_request(index, turn, session=session)
             expected_request = _preview(
                 request.get("content") if request is not None else None
             )
-            actual_request = (
-                artifact_turn.user_request.content
-                if artifact_turn.user_request is not None
-                else None
+            replay_index = build_session_graph_index(replay)
+            replay_request = extract_user_request(
+                replay_index, replay_turn, session=replay_session
+            )
+            actual_request = _preview(
+                replay_request.get("content") if replay_request is not None else None
             )
             if actual_request != expected_request:
                 raise ValueError("user-request preview parity failed")
             user_requests += expected_request is not None
 
-            artifact_items = {item.item_id: item for item in artifact_turn.items}
+            replay_items = {item.item_id: item for item in replay_turn.items}
             for item in turn.items:
                 if not isinstance(item, AgentMessageItem):
                     continue
                 measurements = item.measurements or extract_item_measurements(item)
                 expected_response = _preview(measurements.text_preview)
-                actual_response = artifact_items[item.item_id].measurements.text_preview
+                actual_response = replay_items[item.item_id].measurements.text_preview
                 if actual_response != expected_response:
                     raise ValueError("assistant-response preview parity failed")
                 assistant_responses += expected_response is not None
@@ -296,38 +298,36 @@ def _validate_vendor(
 
     try:
         for graph in graphs:
-            artifact = build_chronicle_graph_artifact(graph)
-            encoded = artifact.canonical_bytes()
-            replay_graph = artifact.to_session_graph()
-            replay_artifact = build_chronicle_graph_artifact(replay_graph)
-            if encoded != replay_artifact.canonical_bytes():
-                raise ValueError("artifact replay changed canonical bytes")
+            fact_set = build_published_fact_set(graph)
+            encoded = fact_set.model_dump_json(exclude_none=True).encode()
+            replay_graph = session_graph_from_fact_set(fact_set)
+            replay_fact_set = build_published_fact_set(replay_graph)
+            if encoded != replay_fact_set.model_dump_json(exclude_none=True).encode():
+                raise ValueError("fact replay changed canonical bytes")
             if _structure(graph) != _structure(replay_graph):
                 raise ValueError("identity or topology changed during replay")
             request_previews, response_previews = _validate_narrative_previews(
-                graph, artifact
+                graph, replay_graph
             )
             report.user_request_preview_count += request_previews
             report.assistant_response_preview_count += response_previews
-            if len(encoded) > MAX_CHRONICLE_ARTIFACT_BYTES:
-                raise ValueError("artifact exceeded its byte limit")
+            if len(encoded) > MAX_FACT_SET_BYTES:
+                raise ValueError("fact set exceeded its byte limit")
             publication_bytes[graph.project_identifier or "unknown"] += len(encoded)
 
-            report.artifact_count += 1
-            report.artifact_bytes_total += len(encoded)
-            report.artifact_bytes_max = max(report.artifact_bytes_max, len(encoded))
+            report.fact_set_count += 1
+            report.fact_set_bytes_total += len(encoded)
+            report.fact_set_bytes_max = max(report.fact_set_bytes_max, len(encoded))
             report.operational_detail_count += sum(
-                item.measurements.tool_summary is not None
-                and item.measurements.tool_summary.detail is not None
-                for session in artifact.sessions
-                for turn in session.turns
-                for item in turn.items
+                row.payload.measurements.tool_summary is not None
+                and row.payload.measurements.tool_summary.detail is not None
+                for row in fact_set.rows
+                if row.kind == "item"
             )
             report.projection_link_count += sum(
-                item.projection_parent_item_id is not None
-                for session in artifact.sessions
-                for turn in session.turns
-                for item in turn.items
+                row.payload.projection_parent_item_id is not None
+                for row in fact_set.rows
+                if row.kind == "item"
             )
 
             for method in API_METHODS:
@@ -343,8 +343,7 @@ def _validate_vendor(
                     report.numeric_values_checked += len(expected_numbers)
 
         if any(
-            total > MAX_CHRONICLE_PUBLICATION_BYTES
-            for total in publication_bytes.values()
+            total > FACT_PUBLICATION_MAX_BYTES for total in publication_bytes.values()
         ):
             raise ValueError("one project publication exceeded its byte limit")
     except Exception as exc:  # noqa: BLE001 - keep private evidence out of output
@@ -354,7 +353,7 @@ def _validate_vendor(
     report.status = "pass"
     report.checks = [
         "strict bounded-history model validation",
-        "artifact and per-project publication byte limits",
+        "fact-set and per-project publication byte limits",
         "canonical byte and digest replay stability",
         "session, turn, item, and edge identity parity",
         "bounded user-request and assistant-response preview parity",
@@ -404,7 +403,7 @@ def main() -> int:
             f"{vendor.status.upper()} {vendor.vendor}: sources={vendor.source_count} "
             f"graphs={vendor.graph_count} sessions={vendor.session_count} "
             f"turns={vendor.turn_count} items={vendor.item_count} "
-            f"artifacts={vendor.artifact_count} api_calls={vendor.api_calls}"
+            f"fact_sets={vendor.fact_set_count} api_calls={vendor.api_calls}"
         )
         for failure in vendor.failures:
             print(f"  {failure}")
