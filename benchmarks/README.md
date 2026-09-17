@@ -59,6 +59,15 @@ baseline: supply the `preparation_fingerprint` fields plus `input` in one object
 Use identical frozen source paths, not just identical bytes, because provenance
 paths affect fact identity. Fingerprint checks run outside preparation timings.
 
+Add `--fact-projection-profile` to measure projection separately after parsing.
+It splits row production from fact-set construction and measures helper-level
+work, with unassigned validation/model work retained as a combined bucket.
+Benchmark-only wrappers are restored before a separate cProfile diagnostic pass.
+Both paths must reproduce the prepared fact bytes. Profile self time is exclusive;
+cumulative time includes callees and must not be added across nested functions.
+Profiled durations are not ordinary latency samples, and helper timers also add
+overhead. Source parsing is reported outside these projection-only timings.
+
 Cold timings mean fresh runtimes, not cold OS or locator caches. Artifact reads
 decode in-memory objects, excluding disk, network, authentication, and publication.
 Preparation (parse, project, prepare summaries, serialize) is reported separately;
