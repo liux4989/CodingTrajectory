@@ -4,6 +4,8 @@ interface __BaseEnv_Env {
 	WORKER_VERSION: WorkerVersionMetadata;
 	CT_PRINCIPALS: string;
 	CT_CURSOR_KEY: string;
+	CT_REPLACEMENT_WORKSPACE_ID?: string;
+	CT_REPLACEMENT_EXPORT_SHA256?: string;
 	WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
 	ARTIFACTS: R2Bucket;
 }

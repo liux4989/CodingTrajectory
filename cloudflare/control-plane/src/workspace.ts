@@ -4,6 +4,7 @@ import { artifactManifests, artifactReadLocator, claimArtifactUpload, cleanupArt
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { commitPublication, factRead, initializeFacts, missingFactRows, preparePublication, verifyStageRows, writeStagedRows } from "./facts";
 import { livingRead, livingWrite } from "./living";
+import { deleteWorkspaceArtifactPrefix, previewWorkspaceReplacement } from "./replacement";
 
 /** A workspace is the authorization, transaction and revision boundary. */
 export class Workspace extends DurableObject<Env> {
@@ -13,6 +14,10 @@ export class Workspace extends DurableObject<Env> {
     super(ctx, env);
     this.state = new State(ctx.storage.sql);
     this.cursorSecret = env.CT_CURSOR_KEY;
+    this.initialize();
+  }
+
+  private initialize() {
     this.ctx.storage.transactionSync(() => {
       initializeFacts(this.state);
       initializeArtifacts(this.state);
@@ -29,6 +34,35 @@ export class Workspace extends DurableObject<Env> {
     try {
       const request = envelope.request;
       requireThat(request.workspace_id === principal.workspace_id, "workspace_denied", 403);
+      if (method === "ct_workspace_replace") {
+        requireThat(principal.roles.includes("owner"), "capability_required", 403);
+        requireThat(this.env.CT_REPLACEMENT_WORKSPACE_ID
+          && request.workspace_id === this.env.CT_REPLACEMENT_WORKSPACE_ID,
+        "workspace_replacement_target_denied", 403);
+        requireThat(this.env.CT_REPLACEMENT_EXPORT_SHA256
+          && request.expected_export_sha256 === this.env.CT_REPLACEMENT_EXPORT_SHA256,
+        "workspace_replacement_export_denied", 403);
+        requireThat(request.confirmation
+          === `${request.mode}:${request.workspace_id}:${request.expected_export_sha256}`,
+        "workspace_replacement_confirmation_required", 403);
+        const expectedObject = this.env.WORKSPACES.idFromName(request.workspace_id).toString();
+        requireThat(this.ctx.id.toString() === expectedObject, "workspace_replacement_target_denied", 403);
+        if (request.mode === "preview") {
+          return { status: 200, body: await previewWorkspaceReplacement(
+            this.state, this.env, request.workspace_id, request.expected_export_sha256,
+          ) };
+        }
+        requireThat(request.mode === "execute", "workspace_replacement_mode_invalid");
+        return this.ctx.blockConcurrencyWhile(async () => {
+          await this.ctx.storage.deleteAll();
+          this.state = new State(this.ctx.storage.sql);
+          this.initialize();
+          return { status: 200, body: {
+            workspace_id: request.workspace_id, sql_reset: true,
+            ...await deleteWorkspaceArtifactPrefix(this.env, request.workspace_id),
+          } };
+        });
+      }
       if (method === "ct_internal_artifact_claim") {
         requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
         requireThat(["facts", "summary"].includes(request.kind)

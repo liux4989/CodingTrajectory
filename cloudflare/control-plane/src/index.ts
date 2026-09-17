@@ -1,4 +1,4 @@
-import { authorityFailure, bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
+import { authorityFailure, bounded, DIGEST, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
 import { artifactKey } from "./artifacts";
 export { Workspace } from "./workspace";
 
@@ -6,6 +6,7 @@ const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", 
   "ct_collector_publish_observation", "ct_collector_missing_fact_rows", "ct_collector_stage_fact_rows",
   "ct_collector_publish_facts", "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
 const READ = new Set(["ct_workspace_snapshot", "ct_fact_read", "ct_artifact_manifest", "ct_artifact_read", "ct_project_inventory_snapshot", "ct_remote_living"]);
+const REPLACE = "ct_workspace_replace";
 const PROTOCOL = "ct.core.v1";
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 
@@ -77,11 +78,26 @@ export default {
       requestId = message.id ?? null;
       const methodName = text(message.method, 128);
       method = methodName;
-      const role = methodName === "ct_connection_status" ? "authenticated" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : null;
+      const role = methodName === "ct_connection_status" ? "authenticated" : methodName === REPLACE ? "owner" : COLLECT.has(methodName) ? "collect" : READ.has(methodName) ? "read" : null;
       requireThat(role, "not_found", 404);
       requireThat(role === "authenticated" || principal.roles.includes(role) || principal.roles.includes("owner"), "capability_required", 403);
       const body = object(message.params);
       requireThat(body.workspace_id === principal.workspace_id, "workspace_denied", 403);
+      if (methodName === REPLACE) {
+        requireThat(env.CT_REPLACEMENT_WORKSPACE_ID && env.CT_REPLACEMENT_EXPORT_SHA256,
+          "workspace_replacement_unavailable", 503);
+        const replacementWorkspace = uuid(env.CT_REPLACEMENT_WORKSPACE_ID);
+        requireThat(DIGEST.test(env.CT_REPLACEMENT_EXPORT_SHA256), "workspace_replacement_invalid", 503);
+        fields(body, ["workspace_id", "mode", "expected_export_sha256", "confirmation"],
+          ["workspace_id", "mode", "expected_export_sha256", "confirmation"]);
+        requireThat(body.workspace_id === replacementWorkspace, "workspace_replacement_target_denied", 403);
+        requireThat(body.expected_export_sha256 === env.CT_REPLACEMENT_EXPORT_SHA256,
+          "workspace_replacement_export_denied", 403);
+        requireThat(["preview", "execute"].includes(body.mode), "workspace_replacement_mode_invalid");
+        requireThat(body.confirmation
+          === `${body.mode}:${replacementWorkspace}:${env.CT_REPLACEMENT_EXPORT_SHA256}`,
+        "workspace_replacement_confirmation_required", 403);
+      }
       if (methodName === "ct_connection_status") {
         fields(body, ["workspace_id"], ["workspace_id"]);
         return Response.json({ protocol: PROTOCOL, id: requestId, method: methodName, ok: true,
