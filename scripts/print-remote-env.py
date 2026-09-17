@@ -37,12 +37,16 @@ def main() -> None:
     if not reader.profile.cloudflare_url or not reader.profile.workspace_id:
         print("The remote URL or workspace ID is missing.", file=sys.stderr)
         raise SystemExit(1)
+    if not collector.profile.agent_id:
+        print("The collector agent ID is missing.", file=sys.stderr)
+        raise SystemExit(1)
 
     values = {
         "CT_COLLECTOR_ACCESS_TOKEN": collector.access_token,
         "CT_ACCESS_TOKEN": reader.access_token,
         "CT_CLOUDFLARE_URL": str(reader.profile.cloudflare_url).rstrip("/"),
         "CT_REMOTE_WORKSPACE_ID": str(reader.profile.workspace_id),
+        "CT_COLLECTOR_AGENT_ID": str(collector.profile.agent_id),
     }
     for name, value in values.items():
         print(f"export {name}={shlex.quote(value)}")
