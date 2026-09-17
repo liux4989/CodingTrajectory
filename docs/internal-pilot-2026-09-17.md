@@ -5,6 +5,34 @@ running, and the reviewed seven-day export is published and verified. The pilot
 contains **30 sessions in 29 graphs**, with **29,681 fact rows**, at snapshot **63**.
 Collection remains manual; maximum-capacity qualification is deferred.
 
+## Subsequent read outage — 2026-09-17 03:58 UTC
+
+The successful publication and read-back above are historical verification, not
+current availability. A subsequent direct HTTPS check authenticated the reader
+(200), but workspace snapshot and fact reads returned 503 `authority_unavailable`.
+A live Wrangler trace identified the underlying Durable Object startup exception:
+
+> Exceeded allowed rows read in Durable Objects free tier.
+
+The exception originates in `State` initialization, before the requested read.
+The Worker version remains `926c9693-4fcd-423c-ba54-8808eaab3ca1`. This is a
+platform quota block, not a revoked reader grant. It does not establish data loss;
+current data integrity cannot be reverified until access resumes. No reset,
+re-upload, credential change or replacement deployment was performed.
+
+[Cloudflare's Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
+specifies 5 million rows read per day on Free and a reset at 00:00 UTC. The next
+reset is **2026-09-18 00:00 UTC / 08:00 Asia/Shanghai**. Earlier recovery requires
+a Workers Paid upgrade (minimum $5/month plus applicable usage), subject to user
+approval. Subscription inspection through the available Cloudflare connector was
+not authorized; no billing change was attempted. The runtime exception itself
+confirms enforcement of the Free-tier limit.
+
+After quota reset or an approved upgrade, first read the workspace snapshot and
+29 graph records. Then verify the frozen export at snapshot 63 without publishing
+again. The earlier inefficient publication scans may have contributed to quota
+consumption, but an account-wide usage breakdown was not established.
+
 ## Deployment and credentials
 
 | Item | Verified value |
