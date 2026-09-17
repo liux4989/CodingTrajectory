@@ -12,8 +12,9 @@ a publication. Maximum-capacity qualification is deferred until needed.
 
 Execution update: the [seven-day pilot record](../internal-pilot-2026-09-17.md)
 supersedes the original deployment starting point below. The selected current
-build is deployed and reader-verified; the reviewed export awaits the explicit
-registry decision. The user has authorized that scoped upload.
+build and two-grant registry are deployed. The authorized seven-day export is
+published and read-back verified: 30 sessions, 29 graphs, snapshot 63. The three
+jobs below are complete for this bounded pilot; maximum-capacity work is deferred.
 
 - The retained Worker is `coding-trajectory-control-plane`. Its recorded source
   is `2917baea8b980b40c733e155377ab498f5fa9bd9`, deployed as version

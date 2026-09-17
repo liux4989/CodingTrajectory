@@ -2,7 +2,7 @@
 
 - **Status:** Implemented and deployed for the
   [internal seven-day pilot](../internal-pilot-2026-09-17.md); maximum-capacity
-  qualification remains deferred and live publication is pending credentials
+  qualification remains deferred; the 19.1 MB seven-day publication is verified
 - **Wire impact:** Staging batch count ceiling only; fact rows and
   `ct.published_facts.v1` are unchanged
 

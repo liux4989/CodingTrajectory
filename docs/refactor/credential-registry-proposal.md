@@ -2,8 +2,9 @@
 
 Status: redesign accepted on 2026-09-17. Keep the existing bearer protocol and
 principal registry, with two application capabilities and one coordinated setup.
-This document changes the operating plan; no registry replacement or credential
-issuance has been executed by accepting it.
+Execution update: the user explicitly approved the complete registry replacement.
+The [seven-day pilot](../internal-pilot-2026-09-17.md) completed issuance, activation,
+old-grant retirement, publication and read verification using the design below.
 
 ## Two capabilities
 
@@ -15,7 +16,8 @@ issuance has been executed by accepting it.
 Cloudflare account authentication administers the Worker and secrets. This pilot
 needs no application owner token, estimator credential, enrollment API or new
 credential-management service. The runtime still accepts `owner`; this redesign
-does not remove that implementation or claim existing grants have been revoked.
+does not remove that implementation. The deployed registry now contains only
+the retained reader and new collector; all other old grants were retired.
 
 Start with one active collector credential and the working reader credential.
 Give another collector its own token and stable agent only when that installation
@@ -28,10 +30,10 @@ reader can read the workspace's published facts, not just inventory metadata.
 
 - `production-reader` is working. Its token was originally stored for the legacy
   Datahub reader and is now stored in the Mac profile's Keychain entry.
-- `default` and `cloudflare` refer to an old collector credential rejected by the
-  current runtime. A valid `collect` grant is still needed. Preserve the intended
-  agent and pending delivery state; do not translate an obsolete role silently.
-- The old estimator credential is not needed for this pilot.
+- `production-collector` now holds the valid `collect` credential and verified
+  project identity, preserving the original collector agent UUID.
+- `default` and `cloudflare` still reference the retired collector token. It and
+  the old estimator token return 401; use `production-collector` for collection.
 - The two legacy Datahub Workers and dedicated Access applications were
   [deleted](../datahub-retirement-2026-09-17.md). This removes their deployment
   configuration, not the reader grant still used by `production-reader`.
@@ -40,7 +42,8 @@ reader can read the workspace's published facts, not just inventory metadata.
 
 The [recovery record](../credential-recovery-2026-09-17.md) describes an encrypted
 historical reconstruction with three entries. It is not a verified export of the
-current registry and cannot prove that no other grants exist.
+pre-cutover registry and could not prove that no other grants existed. The
+explicitly approved replacement is now the authoritative encrypted revision.
 
 ## One coordinated credential cutover
 
