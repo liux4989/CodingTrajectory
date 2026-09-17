@@ -776,6 +776,24 @@ class LocalCollector:
             is not None
         )
 
+    def _previous_artifact_references(self, publication_sequence: int) -> set[str]:
+        """Return objects acknowledged by the immediately preceding manifest."""
+
+        row = self._connection.execute(
+            "select request_json from publication_outbox where state = 'accepted' and publication_sequence < ? order by publication_sequence desc limit 1",
+            (publication_sequence,),
+        ).fetchone()
+        if row is None:
+            return set()
+        artifact = json.loads(row["request_json"]).get("artifact_publication")
+        if artifact is None:
+            return set()
+        return {
+            reference["sha256"]
+            for graph in artifact["graphs"]
+            for reference in (graph["facts"], graph["summary"])
+        }
+
     def _source_delivery_accepted(self, source: _CollectedSource) -> bool:
         if (
             source.source_id is None
@@ -1063,8 +1081,18 @@ class LocalCollector:
                     artifact_request = ArtifactPublicationRequest.model_validate(
                         staged["artifact_publication"]
                     )
+                    acknowledged = self._previous_artifact_references(
+                        artifact_request.publication_sequence
+                    )
+                    # The manifest commit still heads every reference. Skip
+                    # already-acknowledged immutable objects on the normal path;
+                    # after any uncertain response, upload all so an externally
+                    # missing retained object cannot poison retries forever.
+                    force_upload = row["attempts"] > 0
                     for graph in artifact_request.graphs:
                         for reference in (graph.facts, graph.summary):
+                            if not force_upload and reference.sha256 in acknowledged:
+                                continue
                             artifact = self._connection.execute(
                                 "select body from artifact_objects where sha256 = ? and kind = ?",
                                 (reference.sha256, reference.kind),

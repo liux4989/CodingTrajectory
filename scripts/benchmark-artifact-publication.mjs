@@ -11,8 +11,13 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(`${root}cloudflare/control-plane/package.json`);
 const { build } = require('esbuild');
 const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
-const output = process.argv[2];
-if (!output) throw Error('usage: node scripts/benchmark-artifact-publication.mjs OUTPUT');
+const [output, rawGraphCount = '2', rawOrphanCount = '0'] = process.argv.slice(2);
+const graphCount = Number(rawGraphCount);
+const orphanCount = Number(rawOrphanCount);
+if (!output || !Number.isSafeInteger(graphCount) || graphCount < 1 || graphCount > 512
+  || !Number.isSafeInteger(orphanCount) || orphanCount < 0 || orphanCount > 5000) {
+  throw Error('usage: node scripts/benchmark-artifact-publication.mjs OUTPUT [GRAPHS=2] [ORPHANS=0]');
+}
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value !== null && typeof value === 'object'
@@ -151,6 +156,7 @@ const report = {
   localDiff: git('diff', '--stat'),
   recordedAt: new Date().toISOString(),
   synthetic: true,
+  scope: { graphs: graphCount, rowsPerGraph: 1, seededOrphans: orphanCount },
   units: 'Disposable local workerd SQL cursor counters, instrumented R2 method calls, HTTP request count, wall time; process CPU/RSS only on macOS and not Cloudflare billing or isolate limits',
   harnessSha256: Object.fromEntries(['benchmark-artifact-publication.mjs', 'artifact-benchmark-worker.ts'].map(name =>
     [name, sha(readFileSync(`${root}scripts/${name}`))])),
@@ -165,7 +171,8 @@ try {
     vendor: 'amp', native_session_id: 'artifact-benchmark' }, 'source')).data;
   runtimePid = findRuntimePid();
   report.environment.processSampling = runtimePid ? 'macOS ps cumulative process CPU and 50 ms RSS samples; shared workerd process, not isolate heap or billed CPU' : 'unavailable';
-  const graphs = ['00000000-0000-0000-0000-000000000101', '00000000-0000-0000-0000-000000000102'];
+  const graphs = Array.from({ length: graphCount }, (_, index) =>
+    `00000000-0000-0000-0000-${String(index + 1).padStart(12, '0')}`);
   let sourceSequence = -1;
   async function checkpoint(revision) {
     sourceSequence++;
@@ -202,14 +209,20 @@ try {
       graphs: values.map(value => value.publication) }, `publication:${sequence}`);
   }
 
-  let values = prepared([0, 0]);
+  let values = prepared(Array(graphCount).fill(0));
   let point = await checkpoint(0);
+  if (orphanCount) {
+    const bucket = await mf.getR2Bucket('ARTIFACTS');
+    for (let index = 0; index < orphanCount; index++) {
+      await bucket.put(`workspaces/${workspace}/artifacts/facts/orphan-${String(index).padStart(8, '0')}`, 'x');
+    }
+  }
   await scenario('initial_publication', async () => { await upload(values); const result = await publish(0, values, point.vector); return [result.sql]; });
   await scenario('unchanged_collector_run', async () => []);
-  values = prepared([1, 0]);
+  values = prepared([1, ...Array(Math.max(graphCount - 1, 0)).fill(0)]);
   point = await checkpoint(1);
-  await scenario('one_changed_graph', async () => { await upload(values); const result = await publish(1, values, point.vector); return [result.sql]; });
-  await scenario('prepared_summary_and_selected_detail_reads', async () => {
+  await scenario('one_changed_graph', async () => { await upload([values[0]]); const result = await publish(1, values, point.vector); return [result.sql]; });
+  if (graphCount <= 2) await scenario('prepared_summary_and_selected_detail_reads', async () => {
     const sql = [];
     const manifest = await rpc('ct_artifact_manifest', { snapshot_sequence: null }); sql.push(manifest.sql);
     for (const graph of manifest.data.manifests[0].graphs) {

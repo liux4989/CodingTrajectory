@@ -4,6 +4,7 @@ import { Fault, Json, receipt, requireThat, stable, State, validate } from "./sh
 const MANIFEST_SCHEMA = "ct.artifact-manifest.v1";
 const PREPARATION_VERSION = "ct.graph-preparation.v1";
 const RETAINED_MANIFESTS = 3;
+const CLEANUP_PAGES_PER_PUBLICATION = 4;
 
 export function artifactKey(workspaceId: string, kind: string, sha256: string): string {
   return `workspaces/${workspaceId}/artifacts/${kind}/${sha256}`;
@@ -16,7 +17,9 @@ export function initializeArtifacts(state: State) {
     manifest TEXT NOT NULL,
     PRIMARY KEY(project_id, publication_sequence));
     CREATE INDEX IF NOT EXISTS artifact_manifests_snapshot
-      ON artifact_manifests(workspace_sequence);`);
+      ON artifact_manifests(workspace_sequence);
+    CREATE TABLE IF NOT EXISTS artifact_cleanup (
+      workspace_id TEXT PRIMARY KEY, cursor TEXT NOT NULL);`);
 }
 
 export interface ArtifactPublicationPlan { complete: true }
@@ -178,11 +181,21 @@ export async function cleanupArtifactObjects(state: State, env: Env, workspaceId
       referenced.add(artifactKey(workspaceId, "summary", graph.summary.sha256));
     }
   }
-  let cursor: string | undefined;
-  do {
-    const page = await env.ARTIFACTS.list({ prefix: `workspaces/${workspaceId}/artifacts/`, cursor });
+  let cursor = state.sql.exec<{ cursor: string }>(
+    "SELECT cursor FROM artifact_cleanup WHERE workspace_id=?", workspaceId,
+  ).toArray()[0]?.cursor;
+  for (let pageNumber = 0; pageNumber < CLEANUP_PAGES_PER_PUBLICATION; pageNumber++) {
+    const page = await env.ARTIFACTS.list({
+      prefix: `workspaces/${workspaceId}/artifacts/`, cursor, limit: 1000,
+    });
     const stale = page.objects.map(object => object.key).filter(key => !referenced.has(key));
     if (stale.length) await env.ARTIFACTS.delete(stale);
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
+    if (!page.truncated || !page.cursor) {
+      state.sql.exec("DELETE FROM artifact_cleanup WHERE workspace_id=?", workspaceId);
+      return;
+    }
+    cursor = page.cursor;
+  }
+  state.sql.exec("INSERT INTO artifact_cleanup VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET cursor=excluded.cursor",
+    workspaceId, cursor);
 }

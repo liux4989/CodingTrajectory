@@ -141,17 +141,42 @@ def checkpoint(remote, project_id, native_id, digest, sequence, observed_at):
 def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
     """Exercise production per-graph reuse and complete-inventory semantics."""
 
+    class CountingRemote:
+        def __init__(self, authority: CloudflareCollectorRemote) -> None:
+            self.authority = authority
+            self.uploads: list[str] = []
+            self.lose_next_publication_response = False
+
+        def __getattr__(self, name: str):
+            return getattr(self.authority, name)
+
+        def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None:
+            self.uploads.append(sha256)
+            self.authority.upload_artifact(kind=kind, sha256=sha256, body=body)
+
+        def publish_artifacts(self, request, *, idempotency_key: str):
+            receipt = self.authority.publish_artifacts(
+                request, idempotency_key=idempotency_key
+            )
+            if self.lose_next_publication_response:
+                self.lose_next_publication_response = False
+                raise CollectorRemoteError("synthetic lost publication response")
+            return receipt
+
+    counted = CountingRemote(remote)
     with tempfile.TemporaryDirectory(prefix="ct-artifact-collector-") as directory:
         root = Path(directory)
         journals = root / "journals"
         journals.mkdir()
         os.environ["CT_AMP_LOG_DIR"] = str(journals)
         stamp = "2026-09-17T00:00:00Z"
+        sessions: dict[int, str] = {}
 
         def write(number: int, text: str) -> Path:
             session = str(
                 UUID(hex=hashlib.sha256(f"{tag}:{number}".encode()).hexdigest()[:32])
             )
+            sessions[number] = session
             rows = [
                 {
                     "schema_version": 1,
@@ -174,6 +199,27 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                         "content": [{"type": "text", "text": text}],
                     },
                 },
+                {
+                    "schema_version": 1,
+                    "type": "observation",
+                    "captured_at": stamp,
+                    "thread_id": "T-" + session,
+                    "event": "tool.call",
+                    "tool_use_id": "tool-0",
+                    "tool_name": "shell_command",
+                    "input": {"command": "true"},
+                },
+                {
+                    "schema_version": 1,
+                    "type": "observation",
+                    "captured_at": stamp,
+                    "thread_id": "T-" + session,
+                    "event": "tool.result",
+                    "tool_use_id": "tool-0",
+                    "tool_name": "shell_command",
+                    "status": "done",
+                    "output": json.dumps({"exitCode": 0, "output": "ok"}),
+                },
             ]
             path = journals / f"{number}.jsonl"
             path.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -181,7 +227,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
 
         first_path = write(1, "first")
         write(2, "second")
-        project = remote.register_project(
+        project = counted.register_project(
             ProjectRegistrationRequest(
                 workspace_id=WORKSPACE,
                 agent_id=AGENT,
@@ -200,7 +246,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
             initial = collector.collect(
                 current_dir=root,
                 agent_vendor="amp",
-                remote=remote,
+                remote=counted,
                 heartbeat=False,
             )
             check(
@@ -217,10 +263,11 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 len(initial_prepared) == 2,
                 "collector prepares each graph independently",
             )
+            check(len(counted.uploads) == 4, "initial collector uploads all objects")
             unchanged = collector.collect(
                 current_dir=root,
                 agent_vendor="amp",
-                remote=remote,
+                remote=counted,
                 heartbeat=False,
             )
             unchanged_prepared = {
@@ -235,12 +282,44 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 and unchanged_prepared == initial_prepared,
                 "unchanged inventory reuses preparations without republishing",
             )
+            check(len(counted.uploads) == 4, "unchanged collector uploads nothing")
             first_path.write_text(first_path.read_text().replace("first", "changed"))
+            counted.lose_next_publication_response = True
             changed = collector.collect(
                 current_dir=root,
                 agent_vendor="amp",
-                remote=remote,
+                remote=counted,
                 heartbeat=False,
+            )
+            check(
+                changed.facts_accepted == 0
+                and collector._connection.execute(
+                    "select state from publication_outbox order by publication_sequence desc limit 1"
+                ).fetchone()["state"]
+                == "pending",
+                "lost changed-publication response remains pending",
+            )
+            check(
+                len(counted.uploads) == 6,
+                "one changed graph normally uploads only its two new objects",
+            )
+            retried = collector.collect(
+                current_dir=root,
+                agent_vendor="amp",
+                remote=counted,
+                heartbeat=False,
+            )
+            check(
+                retried.facts_accepted == 1
+                and collector._connection.execute(
+                    "select state from publication_outbox order by publication_sequence desc limit 1"
+                ).fetchone()["state"]
+                == "accepted",
+                "lost response retry recovers the committed receipt",
+            )
+            check(
+                len(counted.uploads) == 10,
+                "uncertain response retry reuploads the complete manifest",
             )
             changed_prepared = {
                 row["facts_sha256"]
@@ -248,22 +327,76 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                     "select facts_sha256 from prepared_graphs"
                 )
             }
-            check(changed.facts_accepted == 1, "one changed graph republishes")
             check(
                 len(initial_prepared & changed_prepared) == 1,
                 "one changed graph reuses the other immutable preparation",
+            )
+            parent_rows = [
+                json.loads(line) for line in first_path.read_text().splitlines()
+            ]
+            parent_rows[2]["tool_name"] = "create_thread"
+            parent_rows[2]["input"] = {}
+            parent_rows[3]["tool_name"] = "create_thread"
+            parent_rows[3]["output"] = json.dumps(
+                {"threadID": "T-" + sessions[2], "executor": "orb"}
+            )
+            first_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in parent_rows)
+            )
+            merged = collector.collect(
+                current_dir=root,
+                agent_vendor="amp",
+                remote=counted,
+                heartbeat=False,
+            )
+            check(merged.facts_accepted == 1, "topology merge publishes")
+            check(
+                collector._connection.execute(
+                    "select count(*) from prepared_graphs"
+                ).fetchone()[0]
+                == 1,
+                "topology merge prepares one canonical graph",
+            )
+            check(
+                len(counted.uploads) == 12,
+                "topology merge uploads only the new combined graph",
+            )
+            parent_rows[2]["tool_name"] = "shell_command"
+            parent_rows[2]["input"] = {"command": "true"}
+            parent_rows[3]["tool_name"] = "shell_command"
+            parent_rows[3]["output"] = json.dumps({"exitCode": 0, "output": "ok"})
+            first_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in parent_rows)
+            )
+            split = collector.collect(
+                current_dir=root,
+                agent_vendor="amp",
+                remote=counted,
+                heartbeat=False,
+            )
+            check(split.facts_accepted == 1, "topology split publishes")
+            check(
+                collector._connection.execute(
+                    "select count(*) from prepared_graphs"
+                ).fetchone()[0]
+                == 2,
+                "topology split restores two canonical graphs",
+            )
+            check(
+                len(counted.uploads) == 16,
+                "topology split restores both graph artifacts",
             )
             (journals / "2.jsonl").unlink()
             deleted = collector.collect(
                 current_dir=root,
                 agent_vendor="amp",
-                remote=remote,
+                remote=counted,
                 heartbeat=False,
             )
             check(
                 deleted.facts_accepted == 1, "explicit file deletion updates inventory"
             )
-            before_unavailable = remote.recover(
+            before_unavailable = counted.recover(
                 QUALIFICATION.CollectorRecoveryRequest(
                     workspace_id=WORKSPACE,
                     agent_id=AGENT,
@@ -274,10 +407,10 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
             unavailable = collector.collect(
                 current_dir=root,
                 agent_vendor="amp",
-                remote=remote,
+                remote=counted,
                 heartbeat=False,
             )
-            after_unavailable = remote.recover(
+            after_unavailable = counted.recover(
                 QUALIFICATION.CollectorRecoveryRequest(
                     workspace_id=WORKSPACE,
                     agent_id=AGENT,

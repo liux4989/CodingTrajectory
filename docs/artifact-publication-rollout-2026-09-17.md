@@ -50,8 +50,17 @@ the project boundary.
 Uploads are invisible until the manifest transaction commits. An interruption
 leaves only content-addressed orphans; replay uploads missing objects and reuses
 present ones, while the same idempotency key recovers the same receipt. Cleanup
-runs after commit and is safe to repeat. A cleanup failure affects quota until a
-later publication retries cleanup, but does not affect visibility.
+runs after commit and is safe to repeat. Each publication scans at most four
+1,000-object R2 pages and persists its continuation cursor, so later successful
+publications finish large orphan sets without an unbounded request. A cleanup
+failure or a run of interrupted publications affects quota until a later
+successful publication retries cleanup, but does not affect visibility.
+
+Normal changed-graph runs upload only object hashes absent from the collector's
+last acknowledged manifest. The Durable Object still heads every reference in
+the proposed complete manifest before commit, including reused objects. After an
+uncertain response the collector uploads every object before replaying the exact
+request, so a missing retained object cannot permanently poison recovery.
 
 ## Local qualification
 
@@ -73,9 +82,10 @@ node scripts/benchmark-artifact-publication.mjs /tmp/artifact-publication.json
 ```
 
 The qualification covers authorization and malformed uploads, interrupted
-publication, lost-response replay, initial and unchanged collection, one changed
-graph, deletion, unavailable roots, prepared list/detail reads, root and child
-aliases, retained and expired snapshots, and cache entry/byte eviction. The
+publication, retry-all lost-response recovery, initial and unchanged collection,
+changed-only uploads, graph merge/split, deletion, unavailable roots, prepared
+list/detail reads, root and child aliases, retained and expired snapshots, and
+cache entry/byte eviction. The
 benchmark records local workerd SQL cursor counters, HTTP and instrumented R2
 operations, retained bytes, and wall time. macOS runs additionally sample the
 shared workerd process CPU and RSS; these are neither isolate measurements nor
@@ -105,7 +115,8 @@ Cloudflare billing counters and cannot guarantee Free-plan capacity.
    available.
 
 Known limitations: the prototype still parses the whole inventory before graph
-reuse; every changed publication performs idempotent upload checks for all graph
-objects; R2 cleanup is post-commit and eventually retried; retention is exactly
-three completed artifact snapshots; and operation measurements are local
-workerd evidence, not production load or billing evidence.
+reuse; complete-manifest integrity still requires Worker-side R2 heads for all
+objects even though only changed objects traverse PUT; R2 cleanup is post-commit
+and requires a later successful publication to resume; retention is exactly three
+completed artifact snapshots; and operation measurements are local workerd
+evidence, not production load or billing evidence.
