@@ -116,11 +116,32 @@ def source_paths(logs, vendor):
 
 
 def prepare(paths):
+    stages = {
+        "discovery": {"wall_s": 0.0, "cpu_s": 0.0, "calls": 1},
+        "fact_projection": {"wall_s": 0.0, "cpu_s": 0.0, "calls": 0},
+        "summary_preparation": {"wall_s": 0.0, "cpu_s": 0.0, "calls": 0},
+        "object_serialization": {"wall_s": 0.0, "cpu_s": 0.0, "calls": 0},
+        "manifest_assembly": {"wall_s": 0.0, "cpu_s": 0.0, "calls": 0},
+    }
+    wall_start, cpu_start = time.perf_counter(), time.process_time()
     store = discover_store_from_files(paths).store
+    stages["discovery"]["wall_s"] += time.perf_counter() - wall_start
+    stages["discovery"]["cpu_s"] += time.process_time() - cpu_start
     objects, graphs = {}, []
     for graph in store.session_graphs.values():
+        wall_start, cpu_start = time.perf_counter(), time.process_time()
         facts = build_published_fact_set(graph)
+        stages["fact_projection"]["wall_s"] += time.perf_counter() - wall_start
+        stages["fact_projection"]["cpu_s"] += time.process_time() - cpu_start
+        stages["fact_projection"]["calls"] += 1
+
+        wall_start, cpu_start = time.perf_counter(), time.process_time()
         summary = _prepared_graph_summary(facts)
+        stages["summary_preparation"]["wall_s"] += time.perf_counter() - wall_start
+        stages["summary_preparation"]["cpu_s"] += time.process_time() - cpu_start
+        stages["summary_preparation"]["calls"] += 1
+
+        wall_start, cpu_start = time.perf_counter(), time.process_time()
         refs = {}
         for kind, value in (("facts", facts), ("summary", summary)):
             body = encode(value.model_dump(mode="json", exclude_none=True))
@@ -129,6 +150,11 @@ def prepare(paths):
             refs[kind] = ArtifactObjectReference(
                 kind=kind, sha256=digest, bytes=len(body)
             )
+        stages["object_serialization"]["wall_s"] += time.perf_counter() - wall_start
+        stages["object_serialization"]["cpu_s"] += time.process_time() - cpu_start
+        stages["object_serialization"]["calls"] += 1
+
+        wall_start, cpu_start = time.perf_counter(), time.process_time()
         graphs.append(
             ArtifactManifestGraph(
                 graph_id=facts.graph_id,
@@ -139,26 +165,70 @@ def prepare(paths):
                 **refs,
             )
         )
-    return (
-        ArtifactManifest(
-            schema_version=ARTIFACT_MANIFEST_SCHEMA_VERSION,
-            preparation_version=ARTIFACT_PREPARATION_VERSION,
-            workspace_id=WORKSPACE,
-            project_id=UUID(int=2),
-            publisher_agent_id=UUID(int=3),
-            publication_sequence=0,
-            snapshot_sequence=1,
-            published_at="2026-09-15T00:00:00Z",
-            inventory_state="complete",
-            graphs=graphs,
-        ),
-        objects,
-        Counter(
-            session.vendor.value
-            for graph in store.session_graphs.values()
-            for session in graph.sessions
-        ),
+        stages["manifest_assembly"]["wall_s"] += time.perf_counter() - wall_start
+        stages["manifest_assembly"]["cpu_s"] += time.process_time() - cpu_start
+        stages["manifest_assembly"]["calls"] += 1
+
+    wall_start, cpu_start = time.perf_counter(), time.process_time()
+    manifest = ArtifactManifest(
+        schema_version=ARTIFACT_MANIFEST_SCHEMA_VERSION,
+        preparation_version=ARTIFACT_PREPARATION_VERSION,
+        workspace_id=WORKSPACE,
+        project_id=UUID(int=2),
+        publisher_agent_id=UUID(int=3),
+        publication_sequence=0,
+        snapshot_sequence=1,
+        published_at="2026-09-15T00:00:00Z",
+        inventory_state="complete",
+        graphs=graphs,
     )
+    canonical_vendors = Counter(
+        session.vendor.value
+        for graph in store.session_graphs.values()
+        for session in graph.sessions
+    )
+    stages["manifest_assembly"]["wall_s"] += time.perf_counter() - wall_start
+    stages["manifest_assembly"]["cpu_s"] += time.process_time() - cpu_start
+    stages["manifest_assembly"]["calls"] += 1
+    return manifest, objects, canonical_vendors, stages
+
+
+def preparation_fingerprint(manifest, objects, canonical_vendors):
+    manifest_body = encode(manifest.model_dump(mode="json", exclude_none=True))
+    inventory = sorted(
+        (digest, hashlib.sha256(body).hexdigest(), len(body))
+        for digest, body in objects.items()
+    )
+    return {
+        "manifest_sha256": hashlib.sha256(manifest_body).hexdigest(),
+        "manifest_bytes": len(manifest_body),
+        "object_inventory_sha256": hashlib.sha256(encode(inventory)).hexdigest(),
+        "objects": len(objects),
+        "object_bytes": sum(len(body) for body in objects.values()),
+        "canonical_vendors": dict(canonical_vendors),
+    }
+
+
+def summarize_preparation_stages(runs):
+    summary = {}
+    for stage in runs[0]["stages"]:
+        wall = [run["stages"][stage]["wall_s"] for run in runs]
+        cpu = [run["stages"][stage]["cpu_s"] for run in runs]
+        wall_fractions = [
+            run["stages"][stage]["wall_fraction_of_total"] for run in runs
+        ]
+        cpu_fractions = [run["stages"][stage]["cpu_fraction_of_total"] for run in runs]
+        summary[stage] = {
+            "wall_median_s": statistics.median(wall),
+            "wall_min_s": min(wall),
+            "wall_max_s": max(wall),
+            "cpu_median_s": statistics.median(cpu),
+            "cpu_min_s": min(cpu),
+            "cpu_max_s": max(cpu),
+            "wall_fraction_median_of_per_run_total": statistics.median(wall_fractions),
+            "cpu_fraction_median_of_per_run_total": statistics.median(cpu_fractions),
+        }
+    return summary
 
 
 def main(args):
@@ -179,10 +249,18 @@ def main(args):
             "Preparation includes parsing, facts, summaries and serialization, not durable collector caching/publication.",
             "Artifact path is not wired into the ordinary local API.",
             "Live pricing is disabled; prices absent from offline sources remain unavailable.",
+            "Stage timers include timer/bookkeeping overhead; unassigned loop and instrumentation work remains explicit as residual.",
+            "Stage fraction summaries are medians of per-run stage/total fractions; separately computed medians need not sum to one.",
         ],
+        "preparation_fraction_denominators": {
+            "wall": "same-run external end-to-end preparation wall time",
+            "cpu": "same-run external end-to-end preparation process CPU time",
+        },
         "turns_per_graph": args.turns if args.logs is None else None,
         "requested_vendor": args.vendor,
         "preparation_runs_s": [],
+        "preparation_runs_cpu_s": [],
+        "preparation_stage_runs": [],
         "results": [],
     }
     with tempfile.TemporaryDirectory(prefix="ct-local-api-bench-") as temporary:
@@ -195,10 +273,50 @@ def main(args):
         report["detected_source_vendors"] = dict(
             Counter(candidate.vendor.value for candidate in candidates)
         )
-        for _ in range(args.repeat):
-            start = time.perf_counter()
-            manifest, objects, canonical_vendors = prepare(paths)
-            report["preparation_runs_s"].append(time.perf_counter() - start)
+        expected = None
+        if args.expected_preparation_fingerprint:
+            expected = json.loads(args.expected_preparation_fingerprint.read_text())
+            assert expected["input"] == report["input"], "baseline input mismatch"
+            expected = {key: value for key, value in expected.items() if key != "input"}
+        for iteration in range(1, args.repeat + 1):
+            wall_start, cpu_start = time.perf_counter(), time.process_time()
+            manifest, objects, canonical_vendors, stages = prepare(paths)
+            total_wall = time.perf_counter() - wall_start
+            total_cpu = time.process_time() - cpu_start
+            report["preparation_runs_s"].append(total_wall)
+            report["preparation_runs_cpu_s"].append(total_cpu)
+            fingerprint = preparation_fingerprint(manifest, objects, canonical_vendors)
+            if "preparation_fingerprint" not in report:
+                report["preparation_fingerprint"] = fingerprint
+            assert fingerprint == report["preparation_fingerprint"], (
+                "preparation output changed between repeats"
+            )
+            if expected is not None:
+                assert fingerprint == expected, (
+                    "instrumented preparation output changed"
+                )
+            assigned_wall = sum(stage["wall_s"] for stage in stages.values())
+            assigned_cpu = sum(stage["cpu_s"] for stage in stages.values())
+            stages["residual"] = {
+                "wall_s": total_wall - assigned_wall,
+                "cpu_s": total_cpu - assigned_cpu,
+                "calls": 1,
+            }
+            for stage in stages.values():
+                stage["wall_fraction_of_total"] = stage["wall_s"] / total_wall
+                stage["cpu_fraction_of_total"] = stage["cpu_s"] / total_cpu
+            report["preparation_stage_runs"].append(
+                {
+                    "iteration": iteration,
+                    "first_iteration": iteration == 1,
+                    "total_wall_s": total_wall,
+                    "total_cpu_s": total_cpu,
+                    "stages": stages,
+                }
+            )
+        report["preparation_stage_summary"] = summarize_preparation_stages(
+            report["preparation_stage_runs"]
+        )
         report["canonical_session_vendors"] = dict(canonical_vendors)
         report["manifest_graph_vendors"] = dict(
             Counter(vendor for graph in manifest.graphs for vendor in graph.vendors)
@@ -332,6 +450,7 @@ if __name__ == "__main__":
     parser.add_argument("--turns", type=int, default=100)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--vendor", choices=("amp", "codex_cli"), default="amp")
+    parser.add_argument("--expected-preparation-fingerprint", type=Path)
     parser.add_argument(
         "--logs",
         type=Path,

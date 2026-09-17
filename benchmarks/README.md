@@ -50,6 +50,15 @@ graphs by fact count. Keep corpus selection independent of measured speed.
 Live pricing is disabled for both providers; missing offline prices remain
 unavailable rather than triggering network access.
 
+Preparation reports include exclusive wall/process-CPU timings for discovery,
+fact projection, summaries, object serialization, and manifest assembly, plus
+unassigned residual time. Fractions use each run's external preparation total;
+medians of fractions need not sum to one. The first iteration remains included.
+`--expected-preparation-fingerprint <json>` optionally verifies an uninstrumented
+baseline: supply the `preparation_fingerprint` fields plus `input` in one object.
+Use identical frozen source paths, not just identical bytes, because provenance
+paths affect fact identity. Fingerprint checks run outside preparation timings.
+
 Cold timings mean fresh runtimes, not cold OS or locator caches. Artifact reads
 decode in-memory objects, excluding disk, network, authentication, and publication.
 Preparation (parse, project, prepare summaries, serialize) is reported separately;
