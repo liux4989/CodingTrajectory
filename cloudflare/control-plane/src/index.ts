@@ -1,4 +1,4 @@
-import { bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
+import { authorityFailure, bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
@@ -69,10 +69,11 @@ export default {
             error: { code: failureCode } };
       return Response.json(response, { status: result.status, headers: responseHeaders(env) });
     } catch (error) {
-      const code = error instanceof Fault ? error.code : "authority_unavailable";
+      const failure = authorityFailure(error, "worker");
+      const code = failure.code;
       return Response.json({ protocol: PROTOCOL, id: requestId, method, ok: false, data: null,
         availability: { state: "unavailable", missing: [{ field: "$", reason: code }] }, error: { code } },
-        { status: error instanceof Fault ? error.status : 503, headers: responseHeaders(env) });
+        { status: failure.status, headers: responseHeaders(env) });
     }
   },
 } satisfies ExportedHandler<Env>;

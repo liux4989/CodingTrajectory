@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
+import { authorityFailure, digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { commitPublication, factRead, initializeFacts, missingFactRows, preparePublication, verifyStageRows, writeStagedRows } from "./facts";
 import { livingRead, livingWrite } from "./living";
@@ -77,8 +77,8 @@ export class Workspace extends DurableObject<Env> {
       });
       return { status: 200, body };
     } catch (error) {
-      return { status: error instanceof Fault ? error.status : 503,
-        body: { error: { code: error instanceof Fault ? error.code : "authority_unavailable" } } };
+      const failure = authorityFailure(error, "workspace");
+      return { status: failure.status, body: { error: { code: failure.code } } };
     }
   }
 

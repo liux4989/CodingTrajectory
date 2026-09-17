@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -14,9 +15,33 @@ from coding_trajectory.query import DocumentError
 class RemoteControlPlaneError(DocumentError):
     """A remote control-plane operation failed or violated its contract."""
 
-    def __init__(self, message: str, *, status: int | None = None):
+    def __init__(
+        self, message: str, *, status: int | None = None, code: str | None = None
+    ):
         super().__init__(message)
         self.status = status
+        self.code = code
+
+
+def _remote_error_code(response: httpx.Response) -> str | None:
+    """Keep only a bounded machine code from a failed Core envelope."""
+    if len(response.content) > 16 * 1024:
+        return None
+    try:
+        payload = response.json()
+    except (ValueError, UnicodeError):
+        return None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("protocol") != "ct.core.v1"
+        or payload.get("ok") is not False
+        or not isinstance(payload.get("error"), dict)
+    ):
+        return None
+    code = payload["error"].get("code")
+    if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
+        return code
+    return None
 
 
 def cloudflare_endpoint(url: str) -> str:
@@ -65,9 +90,12 @@ class CloudflareRpcClient:
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
+            code = _remote_error_code(exc.response)
+            detail = f"; {code}" if code else ""
             raise RemoteControlPlaneError(
-                f"remote control-plane {name} failed ({exc.response.status_code})",
+                f"remote control-plane {name} failed ({exc.response.status_code}{detail})",
                 status=exc.response.status_code,
+                code=code,
             ) from None
         except (httpx.HTTPError, json.JSONDecodeError):
             raise RemoteControlPlaneError(

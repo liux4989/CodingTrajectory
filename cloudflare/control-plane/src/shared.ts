@@ -10,6 +10,18 @@ export const MAX_BODY = 3 * 1024 * 1024;
 export class Fault extends Error {
   constructor(public status: number, public code: string) { super(code); }
 }
+/** Classify platform failures without emitting their SQL, messages or payloads. */
+export function authorityFailure(error: unknown, boundary: "worker" | "workspace"): Fault {
+  if (error instanceof Fault) return error;
+  const message = error instanceof Error ? error.message.slice(0, 4096) : "";
+  const code = /Exceeded allowed rows read in Durable Objects free tier/i.test(message)
+    ? "database_read_quota_exceeded"
+    : /Exceeded allowed rows written in Durable Objects free tier/i.test(message)
+      ? "database_write_quota_exceeded" : "authority_unavailable";
+  console.error(JSON.stringify({ event: "control_plane_failure", boundary, code,
+    category: code === "authority_unavailable" ? "unexpected" : "quota" }));
+  return new Fault(503, code);
+}
 export function requireThat(value: unknown, code: string, status = 400): asserts value {
   if (!value) throw new Fault(status, code);
 }
