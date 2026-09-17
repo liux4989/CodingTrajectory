@@ -187,8 +187,10 @@ def _ingest_sessions(
     ingested: list[tuple[Vendor, Path, Session]] = []
     provenance: dict[str, SessionProvenance] = {}
     for vendor, adapter_cls, path in candidates:
+        if path not in cut_inputs:
+            continue
         adapter = adapter_cls()
-        parent_started = cut_inputs.get(path)
+        parent_started = cut_inputs[path]
         try:
             unstable_session = adapter.ingest_file(
                 path,
@@ -430,16 +432,28 @@ def scan_parent_turn_ids(
     Full-fidelity re-ingestion (detail hydration, measurement extraction)
     must cut forked files exactly as the original two-pass ingest did, or
     stable ids would shift.  Returns each candidate's
-    ``parent_started_turn_ids`` argument.
+    ``parent_started_turn_ids`` argument. Failed sources and forks depending
+    on a failed parent scan are omitted, not assigned an empty parent history.
     """
 
     started_turn_ids_by_session: dict[UUID, set[str]] = {}
     parent_session_by_path: dict[Path, UUID | None] = {}
-    header_scans: list[tuple[BaseAdapter, SessionHeader | None]] = []
-    for _vendor, adapter_cls, path in candidates:
+    header_scans: dict[Path, tuple[BaseAdapter, SessionHeader | None]] = {}
+    failed_sessions: set[UUID] = set()
+    for vendor, adapter_cls, path in candidates:
         adapter = adapter_cls()
-        header = adapter.scan_header(path)
-        header_scans.append((adapter, header))
+        try:
+            header = adapter.scan_header(path)
+        except Exception as exc:  # noqa: BLE001 - isolate untrusted source parsing
+            debug.warn(
+                f"failed to scan {vendor.value} session header: {exc}",
+                code="discovery.header_scan_failed",
+                severity="error",
+                vendor=vendor.value,
+                source=str(path),
+            )
+            continue
+        header_scans[path] = (adapter, header)
         parent_session_by_path[path] = header.parent_session_id if header else None
 
     referenced_parent_ids = {
@@ -447,19 +461,51 @@ def scan_parent_turn_ids(
         for parent_session_id in parent_session_by_path.values()
         if parent_session_id is not None
     }
-    for (_vendor, _adapter_cls, path), (adapter, header) in zip(
-        candidates, header_scans, strict=True
-    ):
+    for path, (adapter, header) in header_scans.items():
         if header is None or header.session_id not in referenced_parent_ids:
             continue
-        started = adapter.scan_started_turn_ids(path)
+        try:
+            started = adapter.scan_started_turn_ids(path)
+        except Exception as exc:  # noqa: BLE001 - isolate untrusted source parsing
+            failed_sessions.add(header.session_id)
+            debug.warn(
+                f"failed to scan {header.vendor.value} parent turn ids: {exc}",
+                code="discovery.parent_scan_failed",
+                severity="error",
+                vendor=header.vendor.value,
+                source=str(path),
+            )
+            continue
         if started is not None:
             started_turn_ids_by_session.setdefault(header.session_id, set()).update(
                 started
             )
 
+    # A partial parent turn-id set is unsafe even if another segment succeeded.
+    # Propagate failure through known descendants so inherited history cannot
+    # be mistaken for new activity. An absent parent outside the inventory still
+    # uses the adapter's existing standalone-fork behavior.
+    while True:
+        dependent_ids = {
+            header.session_id
+            for _adapter, header in header_scans.values()
+            if header is not None and header.parent_session_id in failed_sessions
+        }
+        if dependent_ids <= failed_sessions:
+            break
+        failed_sessions.update(dependent_ids)
+
     result: dict[Path, set[str] | None] = {}
-    for _vendor, _adapter_cls, path in candidates:
+    for path, (_adapter, header) in header_scans.items():
+        if header is not None and header.session_id in failed_sessions:
+            debug.warn(
+                "skipped session because its own or an ancestor's parent scan failed",
+                code="discovery.unsafe_parent_history",
+                severity="error",
+                vendor=header.vendor.value,
+                source=str(path),
+            )
+            continue
         parent_session_id = parent_session_by_path.get(path)
         result[path] = (
             started_turn_ids_by_session.get(parent_session_id)

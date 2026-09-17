@@ -39,13 +39,6 @@ from coding_trajectory.service.store import (
     resolve_collection,
 )
 
-#: Deterministic always-on caps for bounded metrics child collections. When a
-#: collection exceeds its cap it is trimmed from the front (oldest first) and
-#: the response records a warning; aggregate totals are never affected.
-MAX_REQUEST_USAGE_REQUESTS = 4096
-MAX_TOOL_USAGE_ITEM_COSTS = 1024
-MAX_GRAPH_USAGE_TURNS = 4096
-
 
 @dataclass(frozen=True)
 class ServiceContext:
@@ -360,9 +353,7 @@ def _handle_session_usage(params: dict[str, Any], session_graph: SessionGraph) -
     from coding_trajectory.metrics import build_session_graph_usage
 
     return _native_metric_costs(
-        _cap_turns(
-            build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
-        )
+        build_session_graph_usage(session_graph, turn_id=params.get("turn_id"))
     )
 
 
@@ -387,11 +378,9 @@ def _handle_session_request_usage(
     from coding_trajectory.metrics import build_session_graph_request_usage
 
     return _native_metric_costs(
-        _cap_requests(
-            build_session_graph_request_usage(
-                session_graph,
-                turn_id=params.get("turn_id"),
-            )
+        build_session_graph_request_usage(
+            session_graph,
+            turn_id=params.get("turn_id"),
         )
     )
 
@@ -403,11 +392,9 @@ def _handle_session_tool_usage(
     from coding_trajectory.metrics import build_session_graph_tool_usage
 
     return _native_metric_costs(
-        _cap_item_costs(
-            build_session_graph_tool_usage(
-                session_graph,
-                turn_id=params.get("turn_id"),
-            )
+        build_session_graph_tool_usage(
+            session_graph,
+            turn_id=params.get("turn_id"),
         )
     )
 
@@ -444,39 +431,7 @@ def _handle_graph_usage(params: dict[str, Any], session_graph: SessionGraph) -> 
     from coding_trajectory.metrics import build_session_graph_usage
 
     return _native_metric_costs(
-        _cap_turns(build_session_graph_usage(session_graph, include_graph_turns=True))
-    )
-
-
-def _cap_collection(
-    payload: dict[str, Any], key: str, cap: int, label: str
-) -> dict[str, Any]:
-    values = payload.get(key)
-    if isinstance(values, list) and len(values) > cap:
-        payload[key] = values[-cap:]
-        payload.setdefault("warnings", []).append(
-            f"{label} exceeded the {cap}-entry bound and was trimmed to the "
-            f"most recent entries; aggregate totals are unaffected."
-        )
-    return payload
-
-
-def _cap_turns(payload: dict[str, Any]) -> dict[str, Any]:
-    return _cap_collection(payload, "turns", MAX_GRAPH_USAGE_TURNS, "turn list")
-
-
-def _cap_requests(payload: dict[str, Any]) -> dict[str, Any]:
-    return _cap_collection(
-        payload, "requests", MAX_REQUEST_USAGE_REQUESTS, "request ledger"
-    )
-
-
-def _cap_item_costs(payload: dict[str, Any]) -> dict[str, Any]:
-    return _cap_collection(
-        payload,
-        "item_real_token_costs",
-        MAX_TOOL_USAGE_ITEM_COSTS,
-        "item cost ledger",
+        build_session_graph_usage(session_graph, include_graph_turns=True)
     )
 
 
