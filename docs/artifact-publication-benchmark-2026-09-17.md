@@ -3,6 +3,9 @@
 This synthetic, disposable Miniflare run measures the committed implementation
 at `5b70ddacbf1c66b89d04ecef7793fc12b21beacc`. The raw report is
 [`artifact-publication-benchmark-2026-09-17.json`](artifact-publication-benchmark-2026-09-17.json).
+The independently transferred pinned Mac report is
+[`artifact-publication-benchmark-2026-09-17-mac.json`](artifact-publication-benchmark-2026-09-17-mac.json)
+(SHA-256 `e8935576b891f1acd5b4a60b57c93171cb4f9672ec642967155099254a6e4d62`).
 It uses local workerd SQL cursor counters and instrumented R2 calls. These are not
 production billing counters, billed Worker CPU, or isolate-memory measurements,
 and they do not guarantee Free-plan capacity.
@@ -10,6 +13,13 @@ and they do not guarantee Free-plan capacity.
 Environment: Linux x64, Node v26.8.2, Miniflare
 5.20260907.0-alpha, workerd 1.20260907.1. This orb could not sample the shared
 workerd process CPU/RSS; the same pinned harness enables those samples on macOS.
+
+The macOS 27.2 arm64 rerun reproduced all SQL, HTTP, R2, and retained-byte
+counts. Shared-workerd process samples were 10 ms / 78.1 MiB for initial
+publication, 0 ms / 79.0 MiB unchanged, 10 ms / 81.3 MiB for one changed graph,
+and 10 ms / 82.5 MiB for prepared-summary plus selected-detail reads. CPU has
+10 ms process-time resolution, and RSS is the shared workerd process rather than
+an isolate heap.
 
 | Scenario | HTTP | SQL reads | SQL writes | R2 calls | New bytes | Retained |
 | --- | ---: | ---: | ---: | --- | ---: | ---: |
