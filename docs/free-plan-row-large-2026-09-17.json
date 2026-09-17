@@ -1,0 +1,622 @@
+{
+  "baseline": "1d9bc2851ee7667969164016d36a504944bf9362",
+  "head": "08308bbadf291225f994c759cf6acefd5020ce4c",
+  "local_diff": "packages/cli/src/coding_trajectory_cli/plugins.py | 9 +++++++++\n 1 file changed, 9 insertions(+)",
+  "input_sha256": "67fef6822070af1102611361df798046d46a28f2f8f4e3a3bb9557e20627dbb0",
+  "sourceHashes": {
+    "cloudflare/control-plane/src/living.ts": "4c412a78e6e45af4e26c823aea55c1552170c0d530c7ced2966ff74f2f9234e2",
+    "cloudflare/control-plane/src/workspace.ts": "62084615747006aded2a327917c6a5e66d844f040b3fee16e35a708924a2212a",
+    "cloudflare/control-plane/src/index.ts": "527fdc5079d5072eef308790ec059a7a8bbc47904371807094e1491adb93a5c1",
+    "cloudflare/control-plane/src/shared.ts": "b1856a5df3050baf166bdd88f73693d25f6026d724101cd910ba18ee0d05a81a",
+    "cloudflare/control-plane/src/facts.ts": "219bc7c7f35d123a9e8b6f231b672aa93055ad69affce39f10f686dfdf21bec4",
+    "cloudflare/control-plane/src/collector.ts": "e054e9faabf016c687adc704380077630ce08307f8e962892e453010aeada6de",
+    "cloudflare/control-plane/src/validators.js": "010943361576d2f054b2122ec8cd7dad9baf3db55dfeea59c9325e2b394eb691"
+  },
+  "synthetic": true,
+  "recorded_at": "2026-09-17T07:13:25.501Z",
+  "harness_sha256": {
+    "benchmark-free-plan.mjs": "89a5637779202247f14f81e68c61dc3987fc789117f6e67f471170b6676a375c",
+    "free-plan-benchmark-worker.ts": "4eaad1f31a352aa533b22cb01c9893f366bf0d0a900322b9c9d70ebfcf88b1bc",
+    "prepare-free-plan-benchmark.py": "a11069151fd0e29cec29ab856999a11c0f14b16c6ed48b130021b12b73728952"
+  },
+  "environment": {
+    "node": "v22.22.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "miniflare": "5.20260907.0-alpha",
+    "workerd": "1.20260907.1",
+    "process_sampling": "macOS ps process CPU (10 ms resolution) and 50 ms RSS samples; shared workerd process, NOT isolate heap/Worker billed CPU"
+  },
+  "units": "Local workerd sql.exec cursor counters, SQLite total_changes, loopback wall ms; not deployed billing/CPU or isolate memory",
+  "results": [
+    {
+      "scenario": "history_sql_only",
+      "revisions": 1,
+      "retained": 100,
+      "current": 100,
+      "requests": 1,
+      "wall_ms": 7.9621250000000146,
+      "logical_changes": 100,
+      "rowsRead": 1,
+      "rowsWritten": 300,
+      "process_cpu_ms": null,
+      "process_rss_sample_max": null,
+      "groups": {
+        "UPDATE fact_rows": {
+          "calls": 1,
+          "rowsRead": 1,
+          "rowsWritten": 0
+        },
+        "INSERT fact_rows": {
+          "calls": 100,
+          "rowsRead": 0,
+          "rowsWritten": 300
+        }
+      },
+      "database_bytes": 151552
+    },
+    {
+      "scenario": "history_sql_only",
+      "revisions": 20,
+      "retained": 2000,
+      "current": 100,
+      "requests": 1,
+      "wall_ms": 13.138999999999953,
+      "logical_changes": 3800,
+      "rowsRead": 5700,
+      "rowsWritten": 7600,
+      "process_cpu_ms": null,
+      "process_rss_sample_max": null,
+      "groups": {
+        "UPDATE fact_rows": {
+          "calls": 19,
+          "rowsRead": 5700,
+          "rowsWritten": 1900
+        },
+        "INSERT fact_rows": {
+          "calls": 1900,
+          "rowsRead": 0,
+          "rowsWritten": 5700
+        }
+      },
+      "database_bytes": 1318912
+    },
+    {
+      "scenario": "history_sql_only",
+      "revisions": 100,
+      "retained": 10000,
+      "current": 100,
+      "requests": 1,
+      "wall_ms": 49.77649999999994,
+      "logical_changes": 16000,
+      "rowsRead": 24000,
+      "rowsWritten": 32000,
+      "process_cpu_ms": null,
+      "process_rss_sample_max": null,
+      "groups": {
+        "UPDATE fact_rows": {
+          "calls": 80,
+          "rowsRead": 24000,
+          "rowsWritten": 8000
+        },
+        "INSERT fact_rows": {
+          "calls": 8000,
+          "rowsRead": 0,
+          "rowsWritten": 24000
+        }
+      },
+      "database_bytes": 6246400
+    },
+    {
+      "scenario": "living",
+      "observations": 1000,
+      "write": {
+        "requests": 1,
+        "wall_ms": 28.810333000000014,
+        "logical_changes": 4000,
+        "rowsRead": 6000,
+        "rowsWritten": 10000,
+        "process_cpu_ms": null,
+        "process_rss_sample_max": null,
+        "groups": {
+          "queries": {
+            "calls": 4000,
+            "rowsRead": 4000,
+            "rowsWritten": 0
+          },
+          "UPDATE sequence": {
+            "calls": 1000,
+            "rowsRead": 2000,
+            "rowsWritten": 1000
+          },
+          "INSERT records": {
+            "calls": 3000,
+            "rowsRead": 0,
+            "rowsWritten": 9000
+          }
+        },
+        "database_bytes": 1028096
+      },
+      "read": {
+        "status": 200,
+        "requests": 1,
+        "wall_ms": 4.68162499999994,
+        "logical_changes": 0,
+        "rowsRead": 4003,
+        "rowsWritten": 0,
+        "process_cpu_ms": null,
+        "process_rss_sample_max": null,
+        "groups": {
+          "queries": {
+            "calls": 3,
+            "rowsRead": 4003,
+            "rowsWritten": 0
+          }
+        },
+        "database_bytes": 1028096
+      }
+    },
+    {
+      "scenario": "living",
+      "observations": 10000,
+      "write": {
+        "requests": 1,
+        "wall_ms": 248.47033299999998,
+        "logical_changes": 36000,
+        "rowsRead": 54000,
+        "rowsWritten": 90000,
+        "process_cpu_ms": null,
+        "process_rss_sample_max": null,
+        "groups": {
+          "queries": {
+            "calls": 36000,
+            "rowsRead": 36000,
+            "rowsWritten": 0
+          },
+          "UPDATE sequence": {
+            "calls": 9000,
+            "rowsRead": 18000,
+            "rowsWritten": 9000
+          },
+          "INSERT records": {
+            "calls": 27000,
+            "rowsRead": 0,
+            "rowsWritten": 81000
+          }
+        },
+        "database_bytes": 9486336
+      },
+      "read": {
+        "status": 200,
+        "requests": 1,
+        "wall_ms": 16.104082999999946,
+        "logical_changes": 0,
+        "rowsRead": 40003,
+        "rowsWritten": 0,
+        "process_cpu_ms": null,
+        "process_rss_sample_max": null,
+        "groups": {
+          "queries": {
+            "calls": 3,
+            "rowsRead": 40003,
+            "rowsWritten": 0
+          }
+        },
+        "database_bytes": 9486336
+      }
+    },
+    {
+      "scenario": "living",
+      "observations": 10001,
+      "write": {
+        "requests": 1,
+        "wall_ms": 4.353791000000001,
+        "logical_changes": 4,
+        "rowsRead": 6,
+        "rowsWritten": 10,
+        "process_cpu_ms": null,
+        "process_rss_sample_max": null,
+        "groups": {
+          "queries": {
+            "calls": 4,
+            "rowsRead": 4,
+            "rowsWritten": 0
+          },
+          "UPDATE sequence": {
+            "calls": 1,
+            "rowsRead": 2,
+            "rowsWritten": 1
+          },
+          "INSERT records": {
+            "calls": 3,
+            "rowsRead": 0,
+            "rowsWritten": 9
+          }
+        },
+        "database_bytes": 9486336
+      },
+      "read": {
+        "status": 413,
+        "error": "workspace_query_limit",
+        "requests": 1,
+        "wall_ms": 11.568916999999942,
+        "logical_changes": 0,
+        "rowsRead": 40004,
+        "rowsWritten": 0,
+        "process_cpu_ms": null,
+        "process_rss_sample_max": null,
+        "groups": {
+          "queries": {
+            "calls": 2,
+            "rowsRead": 40004,
+            "rowsWritten": 0
+          }
+        },
+        "database_bytes": 9486336
+      }
+    },
+    {
+      "scenario": "fresh_stage",
+      "requests": 116,
+      "wall_ms": 2494.7133760000006,
+      "logical_changes": 59450,
+      "rowsRead": 455,
+      "rowsWritten": 197780,
+      "process_cpu_ms": 2360,
+      "process_rss_sample_max": 233422848,
+      "groups": {
+        "queries": {
+          "calls": 232,
+          "rowsRead": 397,
+          "rowsWritten": 0
+        },
+        "DELETE staged_fact_items": {
+          "calls": 116,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        },
+        "INSERT staged_fact_items": {
+          "calls": 59218,
+          "rowsRead": 0,
+          "rowsWritten": 197374
+        },
+        "INSERT staged_fact_rows": {
+          "calls": 116,
+          "rowsRead": 0,
+          "rowsWritten": 232
+        },
+        "INSERT staged_fact_generations": {
+          "calls": 116,
+          "rowsRead": 58,
+          "rowsWritten": 174
+        },
+        "DELETE validated_fact_graphs": {
+          "calls": 116,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      "database_bytes": 120905728
+    },
+    {
+      "scenario": "identical_stage_retry",
+      "requests": 116,
+      "wall_ms": 2709.8842100000047,
+      "logical_changes": 118668,
+      "rowsRead": 60257,
+      "rowsWritten": 256940,
+      "process_cpu_ms": 2430,
+      "process_rss_sample_max": 255983616,
+      "groups": {
+        "queries": {
+          "calls": 232,
+          "rowsRead": 692,
+          "rowsWritten": 0
+        },
+        "DELETE staged_fact_items": {
+          "calls": 116,
+          "rowsRead": 59333,
+          "rowsWritten": 59218
+        },
+        "INSERT staged_fact_items": {
+          "calls": 59218,
+          "rowsRead": 0,
+          "rowsWritten": 197374
+        },
+        "INSERT staged_fact_rows": {
+          "calls": 116,
+          "rowsRead": 116,
+          "rowsWritten": 232
+        },
+        "INSERT staged_fact_generations": {
+          "calls": 116,
+          "rowsRead": 116,
+          "rowsWritten": 116
+        },
+        "DELETE validated_fact_graphs": {
+          "calls": 116,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      "database_bytes": 121204736
+    },
+    {
+      "scenario": "publish",
+      "details": {
+        "publication_outcome": "published",
+        "graphs_published": 58,
+        "rows_inserted": 59218,
+        "rows_reused": 0,
+        "rows_closed": 0,
+        "superseded_revisions": 0,
+        "omitted_graphs": 0
+      },
+      "requests": 1,
+      "wall_ms": 3208.3807500000003,
+      "logical_changes": 118729,
+      "rowsRead": 5288286,
+      "rowsWritten": 241287,
+      "process_cpu_ms": 3170,
+      "process_rss_sample_max": 256622592,
+      "groups": {
+        "queries": {
+          "calls": 2451,
+          "rowsRead": 5110194,
+          "rowsWritten": 0
+        },
+        "INSERT validated_fact_graphs": {
+          "calls": 58,
+          "rowsRead": 0,
+          "rowsWritten": 116
+        },
+        "UPDATE sequence": {
+          "calls": 1,
+          "rowsRead": 2,
+          "rowsWritten": 1
+        },
+        "INSERT records": {
+          "calls": 60,
+          "rowsRead": 0,
+          "rowsWritten": 180
+        },
+        "UPDATE fact_rows": {
+          "calls": 58,
+          "rowsRead": 58,
+          "rowsWritten": 0
+        },
+        "INSERT fact_rows": {
+          "calls": 58,
+          "rowsRead": 118487,
+          "rowsWritten": 181598
+        },
+        "DELETE staged_fact_rows": {
+          "calls": 58,
+          "rowsRead": 167,
+          "rowsWritten": 116
+        },
+        "DELETE staged_fact_items": {
+          "calls": 58,
+          "rowsRead": 59269,
+          "rowsWritten": 59218
+        },
+        "DELETE validated_fact_graphs": {
+          "calls": 58,
+          "rowsRead": 109,
+          "rowsWritten": 58
+        }
+      },
+      "database_bytes": 64446464
+    },
+    {
+      "scenario": "committed_publication_retry",
+      "receipt_identical": true,
+      "requests": 1,
+      "wall_ms": 2.9731250000004366,
+      "logical_changes": 0,
+      "rowsRead": 2,
+      "rowsWritten": 0,
+      "process_cpu_ms": 0,
+      "process_rss_sample_max": 256671744,
+      "groups": {
+        "queries": {
+          "calls": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      "database_bytes": 64446464
+    },
+    {
+      "scenario": "unchanged_republication_stage",
+      "requests": 116,
+      "wall_ms": 2438.760921999992,
+      "logical_changes": 59450,
+      "rowsRead": 513,
+      "rowsWritten": 197722,
+      "process_cpu_ms": 2200,
+      "process_rss_sample_max": 262864896,
+      "groups": {
+        "queries": {
+          "calls": 232,
+          "rowsRead": 397,
+          "rowsWritten": 0
+        },
+        "DELETE staged_fact_items": {
+          "calls": 116,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        },
+        "INSERT staged_fact_items": {
+          "calls": 59218,
+          "rowsRead": 0,
+          "rowsWritten": 197374
+        },
+        "INSERT staged_fact_rows": {
+          "calls": 116,
+          "rowsRead": 0,
+          "rowsWritten": 232
+        },
+        "INSERT staged_fact_generations": {
+          "calls": 116,
+          "rowsRead": 116,
+          "rowsWritten": 116
+        },
+        "DELETE validated_fact_graphs": {
+          "calls": 116,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      "database_bytes": 185245696
+    },
+    {
+      "scenario": "unchanged_republication",
+      "details": {
+        "publication_outcome": "published",
+        "graphs_published": 58,
+        "rows_inserted": 0,
+        "rows_reused": 59218,
+        "rows_closed": 0,
+        "superseded_revisions": 58,
+        "omitted_graphs": 0
+      },
+      "requests": 1,
+      "wall_ms": 3180.194958,
+      "logical_changes": 59511,
+      "rowsRead": 9011189,
+      "rowsWritten": 59689,
+      "process_cpu_ms": 3140,
+      "process_rss_sample_max": 260489216,
+      "groups": {
+        "queries": {
+          "calls": 2741,
+          "rowsRead": 8714546,
+          "rowsWritten": 0
+        },
+        "INSERT validated_fact_graphs": {
+          "calls": 58,
+          "rowsRead": 0,
+          "rowsWritten": 116
+        },
+        "UPDATE sequence": {
+          "calls": 1,
+          "rowsRead": 2,
+          "rowsWritten": 1
+        },
+        "INSERT records": {
+          "calls": 60,
+          "rowsRead": 0,
+          "rowsWritten": 180
+        },
+        "UPDATE fact_rows": {
+          "calls": 58,
+          "rowsRead": 118551,
+          "rowsWritten": 0
+        },
+        "INSERT fact_rows": {
+          "calls": 58,
+          "rowsRead": 118545,
+          "rowsWritten": 0
+        },
+        "DELETE staged_fact_rows": {
+          "calls": 58,
+          "rowsRead": 167,
+          "rowsWritten": 116
+        },
+        "DELETE staged_fact_items": {
+          "calls": 58,
+          "rowsRead": 59269,
+          "rowsWritten": 59218
+        },
+        "DELETE validated_fact_graphs": {
+          "calls": 58,
+          "rowsRead": 109,
+          "rowsWritten": 58
+        }
+      },
+      "database_bytes": 64688128
+    }
+  ],
+  "counter_calibration": {
+    "samples": [
+      {
+        "operation": "INSERT",
+        "rowsRead": 0,
+        "rowsWritten": 3,
+        "logical_changes": 1
+      },
+      {
+        "operation": "UPDATE",
+        "rowsRead": 1,
+        "rowsWritten": 2,
+        "logical_changes": 1
+      },
+      {
+        "operation": "DELETE",
+        "rowsRead": 1,
+        "rowsWritten": 1,
+        "logical_changes": 1
+      }
+    ],
+    "rollbackWrites": 3,
+    "rows_after_rollback": 0,
+    "__benchmark": {
+      "groups": {},
+      "logical_changes": 4,
+      "database_bytes": 102400
+    }
+  },
+  "scope": {
+    "graphs": 58,
+    "rows": 59218,
+    "batches": 116,
+    "encoded_bytes": 34201498
+  },
+  "request_wall_ms": {
+    "connection_status": [
+      2.208999999998923,
+      2.0478339999972377,
+      1.8437080000003334,
+      3.4485829999975977,
+      2.223374999997759,
+      1.796291000002384,
+      1.7055839999993623,
+      1.7055419999996957,
+      1.819666999999754,
+      1.839916999997513,
+      1.8067080000000715,
+      1.899334000001545,
+      1.8454160000001139,
+      1.745958999999857,
+      1.7597080000014103,
+      1.7210420000010345,
+      1.5027919999993173,
+      1.6081669999985024,
+      1.5579169999982696,
+      1.5373340000005555
+    ],
+    "workspace_snapshot": [
+      2.1538330000003043,
+      2.120333999999275,
+      2.0163329999995767,
+      2.257459000000381,
+      2.039082999999664,
+      2.386083999997936,
+      2.1025840000002063,
+      1.9973329999993439,
+      1.9877499999965949,
+      1.800375000002532,
+      2.0522080000009737,
+      1.7938749999993888,
+      2.125208000001294,
+      1.7651249999980791,
+      1.754292000001442,
+      1.9327910000029078,
+      1.5912920000009763,
+      1.5692920000001322,
+      1.5487500000017462,
+      1.5684170000022277
+    ]
+  }
+}
