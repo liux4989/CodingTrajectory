@@ -15,6 +15,8 @@ from coding_trajectory.contracts import command_schema
 from coding_trajectory.contracts.envelope import CORE_PROTOCOL
 from coding_trajectory.control_plane.authority import MethodAuthority
 from coding_trajectory.control_plane.fact_repository import (
+    ArtifactReadCache,
+    CloudflareArtifactRepository,
     CloudflareFactRepository,
     FactRepository,
     RemoteFactCache,
@@ -34,6 +36,7 @@ class RemoteRuntimeFactory:
         self._url = url
         self.workspace_id = workspace_id
         self._fact_cache = RemoteFactCache()
+        self._artifact_cache = ArtifactReadCache()
 
     def build(
         self,
@@ -90,12 +93,19 @@ class RemoteRuntimeFactory:
         except Exception:
             client.close()
             raise
-        historical: FactRepository = CloudflareFactRepository(
+        legacy = CloudflareFactRepository(
             client=client,
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
             cache=self._fact_cache,
             authenticated_cache_identity=sha256(access_token.encode()).hexdigest(),
+        )
+        historical: FactRepository = CloudflareArtifactRepository(
+            client=client,
+            workspace_id=self.workspace_id,
+            snapshot_sequence=sequence,
+            cache=self._artifact_cache,
+            fallback=legacy,
         )
         inventory = CloudflareProjectInventoryRepository(
             client=client,

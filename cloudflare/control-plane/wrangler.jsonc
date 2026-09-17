@@ -18,6 +18,7 @@
     "staging": {
       "name": "coding-trajectory-control-plane-staging",
       "durable_objects": {"bindings": [{"name": "WORKSPACES", "class_name": "Workspace"}]},
+      "r2_buckets": [{"binding": "ARTIFACTS", "bucket_name": "coding-trajectory-artifacts-staging"}],
       "secrets": {"required": ["CT_PRINCIPALS", "CT_CURSOR_KEY"]},
       "version_metadata": {"binding": "WORKER_VERSION"}
     }

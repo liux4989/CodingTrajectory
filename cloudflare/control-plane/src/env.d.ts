@@ -1,10 +1,11 @@
 /* eslint-disable */
-// Maintained by hand for the fact-based authority (no R2 artifact bucket).
+// Maintained by hand for the artifact-backed authority.
 interface __BaseEnv_Env {
 	WORKER_VERSION: WorkerVersionMetadata;
 	CT_PRINCIPALS: string;
 	CT_CURSOR_KEY: string;
 	WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
+	ARTIFACTS: R2Bucket;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -16,6 +17,7 @@ declare namespace Cloudflare {
 		CT_PRINCIPALS: string;
 		CT_CURSOR_KEY: string;
 		WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
+		ARTIFACTS: R2Bucket;
 	}
 	interface Env extends __BaseEnv_Env {}
 }

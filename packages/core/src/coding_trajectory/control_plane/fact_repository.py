@@ -9,6 +9,7 @@ owned exactly once.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import OrderedDict
 from collections.abc import Callable
@@ -18,6 +19,11 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from coding_trajectory.contracts import service_contract
+from coding_trajectory.control_plane.artifact_protocol import (
+    ARTIFACT_PREPARATION_VERSION,
+    ArtifactManifest,
+    PreparedGraphSummary,
+)
 from coding_trajectory.control_plane.fact_projection import (
     build_fact_rows,
     build_published_fact_set,
@@ -36,7 +42,7 @@ from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
     RemoteControlPlaneError,
 )
-from coding_trajectory.ingestion.common import format_datetime
+from coding_trajectory.ingestion.common import canonical_json, format_datetime
 from coding_trajectory.query import DocumentStore
 
 
@@ -201,6 +207,233 @@ class RemoteFactCache:
                 self._bytes -= len(self._values.popitem(last=False)[1])
             self._values[key] = value
             self._bytes += len(value)
+
+
+class ArtifactReadCache:
+    """Bound immutable indexes/summaries by encoded bytes and entry count."""
+
+    def __init__(self, *, max_bytes: int = 32 * 1024 * 1024, max_entries: int = 16):
+        self._max_bytes = max_bytes
+        self._max_entries = max_entries
+        self._values: OrderedDict[tuple[str, str, str], tuple[Any, int]] = OrderedDict()
+        self._bytes = 0
+        self._lock = Lock()
+
+    def get(self, key: tuple[str, str, str]) -> Any | None:
+        with self._lock:
+            entry = self._values.get(key)
+            if entry is None:
+                return None
+            self._values.move_to_end(key)
+            return entry[0]
+
+    def put(self, key: tuple[str, str, str], value: Any, encoded_bytes: int) -> None:
+        if encoded_bytes > self._max_bytes or self._max_entries < 1:
+            return
+        with self._lock:
+            previous = self._values.pop(key, None)
+            if previous is not None:
+                self._bytes -= previous[1]
+            while self._values and (
+                self._bytes + encoded_bytes > self._max_bytes
+                or len(self._values) >= self._max_entries
+            ):
+                self._bytes -= self._values.popitem(last=False)[1][1]
+            self._values[key] = (value, encoded_bytes)
+            self._bytes += encoded_bytes
+
+
+class CloudflareArtifactRepository:
+    """Read prepared lists and lazily load only a selected immutable graph."""
+
+    def __init__(
+        self,
+        *,
+        client: CloudflareRpcClient,
+        workspace_id: UUID,
+        snapshot_sequence: int,
+        cache: ArtifactReadCache,
+        fallback: CloudflareFactRepository,
+    ) -> None:
+        self._client = client
+        self.workspace_id = workspace_id
+        self.snapshot_sequence = snapshot_sequence
+        self._cache = cache
+        self._fallback = fallback
+        self._manifests_value: list[ArtifactManifest] | None = None
+        self._summaries_value: dict[UUID, PreparedGraphSummary] | None = None
+        self._artifact_unavailable = False
+
+    def pin_snapshot(self) -> int:
+        return self.snapshot_sequence
+
+    def close(self) -> None:
+        self._client.close()
+
+    def _manifests(self) -> list[ArtifactManifest]:
+        if self._artifact_unavailable:
+            return []
+        if self._manifests_value is None:
+            try:
+                raw = self._client.call(
+                    "ct_artifact_manifest",
+                    {
+                        "workspace_id": str(self.workspace_id),
+                        "snapshot_sequence": self.snapshot_sequence,
+                    },
+                )
+            except RemoteControlPlaneError as exc:
+                if exc.code == "artifact_snapshot_unavailable":
+                    self._artifact_unavailable = True
+                    return []
+                raise
+            if raw.get("workspace_id") != str(self.workspace_id) or (
+                raw.get("snapshot_sequence") != self.snapshot_sequence
+            ):
+                raise RemoteControlPlaneError("artifact manifest snapshot mismatch")
+            self._manifests_value = [
+                ArtifactManifest.model_validate(value)
+                for value in raw.get("manifests", [])
+            ]
+            if any(
+                manifest.preparation_version != ARTIFACT_PREPARATION_VERSION
+                for manifest in self._manifests_value
+            ):
+                raise RemoteControlPlaneError("artifact preparation version mismatch")
+        return self._manifests_value
+
+    def _read_object(self, *, kind: str, sha256: str) -> dict[str, Any]:
+        return self._client.call(
+            "ct_artifact_read",
+            {
+                "workspace_id": str(self.workspace_id),
+                "snapshot_sequence": self.snapshot_sequence,
+                "kind": kind,
+                "sha256": sha256,
+            },
+        )
+
+    def _summaries(self) -> dict[UUID, PreparedGraphSummary]:
+        if self._summaries_value is None:
+            summaries: dict[UUID, PreparedGraphSummary] = {}
+            for manifest in self._manifests():
+                for graph in manifest.graphs:
+                    key = (str(self.workspace_id), "summary", graph.summary.sha256)
+                    summary = self._cache.get(key)
+                    if summary is None:
+                        raw = self._read_object(
+                            kind="summary", sha256=graph.summary.sha256
+                        )
+                        encoded = canonical_json(raw).encode()
+                        if hashlib.sha256(encoded).hexdigest() != graph.summary.sha256:
+                            raise RemoteControlPlaneError(
+                                "prepared summary digest mismatch"
+                            )
+                        summary = PreparedGraphSummary.model_validate(raw)
+                        self._cache.put(key, summary, len(encoded))
+                    if (
+                        summary.graph_id != graph.graph_id
+                        or summary.fact_set_digest != graph.fact_set_digest
+                    ):
+                        raise RemoteControlPlaneError(
+                            "prepared summary identity mismatch"
+                        )
+                    summaries[graph.graph_id] = summary
+            self._summaries_value = summaries
+        return self._summaries_value
+
+    def response_for(
+        self, method: str, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        if method != "project.sessions":
+            return None
+        if not self._manifests():
+            return None
+        validated = service_contract(method).validate_request(params)
+        items = [
+            item
+            for summary in self._summaries().values()
+            for item in summary.project_sessions
+            if (
+                not validated.get("project_name")
+                or item.get("project") == validated["project_name"]
+            )
+            and (
+                not validated.get("agent_vendor")
+                or item.get("vendor") == validated["agent_vendor"]
+            )
+            and (
+                not validated.get("modified_since")
+                or item.get("modified") is not None
+                and item["modified"] >= format_datetime(validated["modified_since"])
+            )
+        ]
+        items.sort(
+            key=lambda item: (
+                item.get("project") or "",
+                item.get("lineage_root_session_id") or "",
+            )
+        )
+        return service_contract(method).validate_response({"items": items})
+
+    def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
+        manifests = self._manifests()
+        if not manifests:
+            return self._fallback.store_for(method, params)
+        aliases = entrypoint_ids_from_params(params)
+        if not aliases:
+            raise ValueError(f"{method} requires a graph or child entrypoint")
+        selected: UUID | None = None
+        summary_values = self._summaries()
+        for raw in aliases:
+            try:
+                alias = UUID(raw)
+            except ValueError:
+                continue
+            matches = [
+                graph_id
+                for graph_id, summary in summary_values.items()
+                if alias in summary.aliases
+            ]
+            if len(matches) > 1:
+                raise RemoteControlPlaneError("artifact alias maps to multiple graphs")
+            if matches:
+                if selected is not None and selected != matches[0]:
+                    raise ValueError("request entrypoints select different graphs")
+                selected = matches[0]
+        if selected is None:
+            raise RemoteControlPlaneError("artifact entrypoint was not found")
+        graph = next(
+            graph
+            for manifest in manifests
+            for graph in manifest.graphs
+            if graph.graph_id == selected
+        )
+        key = (str(self.workspace_id), "facts", graph.facts.sha256)
+        index = self._cache.get(key)
+        if index is None:
+            raw = self._read_object(kind="facts", sha256=graph.facts.sha256)
+            encoded = canonical_json(raw).encode()
+            if hashlib.sha256(encoded).hexdigest() != graph.facts.sha256:
+                raise RemoteControlPlaneError("graph artifact digest mismatch")
+            facts = PublishedFactSet.model_validate(raw)
+            if (
+                facts.graph_id != selected
+                or facts.fact_set_digest != graph.fact_set_digest
+            ):
+                raise RemoteControlPlaneError("graph artifact identity mismatch")
+            index = FactIndex.from_fact_sets([facts])
+            self._cache.put(key, index, len(encoded))
+        return index, f"remote artifact snapshot {self.snapshot_sequence}"
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "workspace_id": str(self.workspace_id),
+            "snapshot_sequence": self.snapshot_sequence,
+            "source": "remote",
+            "freshness": "authoritative",
+            "content_scope": "facts",
+        }
 
 
 class CloudflareFactRepository:
@@ -399,12 +632,13 @@ def entrypoint_ids_from_params(params: dict[str, Any]) -> list[str]:
     params = discovery_params(params)
     ids = [
         value
-        for key in ("session_id", "root_session_id", "turn_id")
+        for key in ("session_id", "root_session_id", "turn_id", "item_id")
         if isinstance((value := params.get(key)), str) and value
     ]
-    session_ids = params.get("session_ids")
-    if isinstance(session_ids, list):
-        ids.extend(value for value in session_ids if isinstance(value, str) and value)
+    for key in ("session_ids", "item_ids", "event_ids"):
+        values = params.get(key)
+        if isinstance(values, list):
+            ids.extend(value for value in values if isinstance(value, str) and value)
     return ids
 
 
@@ -449,6 +683,8 @@ def fact_store_key(
 
 
 __all__ = [
+    "ArtifactReadCache",
+    "CloudflareArtifactRepository",
     "CloudflareFactRepository",
     "FactRepository",
     "LocalPublishedFactRepository",

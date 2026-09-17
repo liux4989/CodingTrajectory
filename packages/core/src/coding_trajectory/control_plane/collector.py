@@ -21,6 +21,13 @@ from uuid import UUID, uuid4
 import httpx
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
+from coding_trajectory.control_plane.artifact_protocol import (
+    ARTIFACT_PREPARATION_VERSION,
+    ArtifactGraphPublication,
+    ArtifactObjectReference,
+    ArtifactPublicationRequest,
+    PreparedGraphSummary,
+)
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorRecoveryRequest,
     CollectorRecoveryResponse,
@@ -95,6 +102,12 @@ class CollectorRemote(Protocol):
 
     def publish_facts(
         self, request: FactPublicationRequest, *, idempotency_key: str
+    ) -> ObservationReceipt: ...
+
+    def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None: ...
+
+    def publish_artifacts(
+        self, request: ArtifactPublicationRequest, *, idempotency_key: str
     ) -> ObservationReceipt: ...
 
     def heartbeat(self, request: LeaseHeartbeatRequest) -> LeaseHeartbeatResponse: ...
@@ -201,6 +214,32 @@ class CloudflareCollectorRemote:
             self._rpc(
                 "ct_collector_publish_facts",
                 request.wire_payload(),
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None:
+        """Idempotently upload one content-addressed object before publication."""
+
+        url = self._url.removesuffix("/v1/core") + f"/v1/artifacts/{kind}/{sha256}"
+        try:
+            response = self._client.put(
+                url,
+                content=body,
+                headers={"Content-Type": "application/json"},
+                timeout=max(self._timeout, 90),
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise CollectorRemoteError("collector artifact upload unavailable") from exc
+
+    def publish_artifacts(
+        self, request: ArtifactPublicationRequest, *, idempotency_key: str
+    ) -> ObservationReceipt:
+        return ObservationReceipt.model_validate(
+            self._rpc(
+                "ct_collector_publish_artifacts",
+                request.model_dump(mode="json", exclude_none=True),
                 idempotency_key=idempotency_key,
             )
         )
@@ -431,7 +470,16 @@ class LocalCollector:
                 agent_vendor=agent_vendor,
             )
         fenced: list[_FencedCandidate] = []
-        failed = 0
+        discovered_paths = {candidate.path.resolve() for candidate in candidates}
+        # An absent file under a readable parent is an inventory deletion.  A
+        # missing parent is an unavailable source root, so preserve the last
+        # completed snapshot instead of publishing destructive omissions.
+        failed = sum(
+            1
+            for row in self._connection.execute("select path from registered_sources")
+            if Path(row["path"]).resolve() not in discovered_paths
+            and not Path(row["path"]).parent.exists()
+        )
         for candidate in candidates:
             try:
                 source = candidate.path
@@ -572,7 +620,15 @@ class LocalCollector:
                 prior_rejected == 0
                 and not self._fact_publication_blocked()
                 and failed == 0
-                and collected
+                and (
+                    collected
+                    or bool(
+                        self._get_meta(
+                            f"fact_publication:{self.identity.project_id}:last_digest",
+                            "",
+                        )
+                    )
+                )
                 and all(self._source_delivery_accepted(source) for source in collected)
             ):
                 recovery = remote.recover(
@@ -587,7 +643,11 @@ class LocalCollector:
                     str(recovery.next_publication_sequence),
                 )
                 self._connection.commit()
-                facts_queued = self._queue_fact_publication(collected)
+                facts_queued = self._queue_fact_publication(
+                    collected,
+                    artifact_mode=hasattr(remote, "upload_artifact")
+                    and hasattr(remote, "publish_artifacts"),
+                )
                 current_accepted, current_rejected = self._flush_facts(remote)
                 facts_accepted += current_accepted
                 facts_rejected += current_rejected
@@ -673,6 +733,41 @@ class LocalCollector:
             self._connection.commit()
         return accepted, rejected
 
+    def _prune_prepared_artifacts(
+        self, publication: ArtifactPublicationRequest
+    ) -> None:
+        """Bound the local preparation cache after durable remote acceptance."""
+
+        protected = {
+            reference.sha256
+            for graph in publication.graphs
+            for reference in (graph.facts, graph.summary)
+        }
+        for row in self._connection.execute(
+            "select request_json from publication_outbox where state in ('pending', 'in_flight')"
+        ):
+            value = json.loads(row["request_json"])
+            artifact = value.get("artifact_publication")
+            if artifact:
+                for graph in artifact["graphs"]:
+                    protected.update(
+                        (graph["facts"]["sha256"], graph["summary"]["sha256"])
+                    )
+        if protected:
+            placeholders = ",".join("?" for _ in protected)
+            values = sorted(protected)
+            self._connection.execute(
+                f"delete from prepared_graphs where facts_sha256 not in ({placeholders}) or summary_sha256 not in ({placeholders})",
+                (*values, *values),
+            )
+            self._connection.execute(
+                f"delete from artifact_objects where sha256 not in ({placeholders})",
+                values,
+            )
+        else:
+            self._connection.execute("delete from prepared_graphs")
+            self._connection.execute("delete from artifact_objects")
+
     def _fact_publication_blocked(self) -> bool:
         return (
             self._connection.execute(
@@ -706,7 +801,9 @@ class LocalCollector:
             and recovered.content_sha256 == source.content_sha256
         )
 
-    def _queue_fact_publication(self, sources: list[_CollectedSource]) -> int:
+    def _queue_fact_publication(
+        self, sources: list[_CollectedSource], *, artifact_mode: bool = False
+    ) -> int:
         if self.identity.project_id is None:
             raise ValueError("fact publication requires a project_id")
         session_sources: dict[UUID, tuple[Session, list[_CollectedSource]]] = {}
@@ -740,6 +837,7 @@ class LocalCollector:
             raise ValueError("fact publication has an incomplete source vector")
 
         publications: list[FactGraphPublication] = []
+        artifact_publications: list[ArtifactGraphPublication] = []
         fact_sets: list[PublishedFactSet] = []
         for graph in sorted(graphs, key=lambda entry: str(entry.root_session_id)):
             graph_sources = [
@@ -747,14 +845,102 @@ class LocalCollector:
                 for session in graph.sessions
                 for source in session_sources[session.session_id][1]
             ]
-            fact_set = build_published_fact_set(graph)
-            fact_sets.append(fact_set)
-            publications.append(
-                FactGraphPublication(
-                    graph_id=fact_set.graph_id,
-                    fact_set_digest=fact_set.fact_set_digest,
-                    fact_count=len(fact_set.rows),
-                    kind_counts=fact_set.kind_counts,
+            graph_input_sha256 = _sha256(
+                canonical_json(
+                    graph.model_dump(mode="json", exclude_none=True)
+                ).encode()
+            )
+            prepared = self._connection.execute(
+                "select * from prepared_graphs where preparation_version = ? and graph_input_sha256 = ?",
+                (ARTIFACT_PREPARATION_VERSION, graph_input_sha256),
+            ).fetchone()
+            if prepared is None:
+                fact_set = build_published_fact_set(graph)
+                fact_bytes = canonical_json(
+                    fact_set.model_dump(mode="json", exclude_none=True)
+                ).encode()
+                summary = _prepared_graph_summary(fact_set)
+                summary_bytes = canonical_json(
+                    summary.model_dump(mode="json", exclude_none=True)
+                ).encode()
+                facts_sha256 = _sha256(fact_bytes)
+                summary_sha256 = _sha256(summary_bytes)
+                self._connection.execute(
+                    "insert into artifact_objects (sha256, kind, body, encoded_bytes) values (?, 'facts', ?, ?) on conflict(sha256) do nothing",
+                    (facts_sha256, fact_bytes, len(fact_bytes)),
+                )
+                self._connection.execute(
+                    "insert into artifact_objects (sha256, kind, body, encoded_bytes) values (?, 'summary', ?, ?) on conflict(sha256) do nothing",
+                    (summary_sha256, summary_bytes, len(summary_bytes)),
+                )
+                self._connection.execute(
+                    "insert into prepared_graphs values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ARTIFACT_PREPARATION_VERSION,
+                        graph_input_sha256,
+                        str(fact_set.graph_id),
+                        fact_set.fact_set_digest,
+                        len(fact_set.rows),
+                        json.dumps(fact_set.kind_counts, sort_keys=True),
+                        facts_sha256,
+                        summary_sha256,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+            else:
+                facts_sha256 = prepared["facts_sha256"]
+                summary_sha256 = prepared["summary_sha256"]
+                fact_set = (
+                    None
+                    if artifact_mode
+                    else PublishedFactSet.model_validate_json(
+                        self._connection.execute(
+                            "select body from artifact_objects where sha256 = ?",
+                            (facts_sha256,),
+                        ).fetchone()["body"]
+                    )
+                )
+            fact_set_digest = (
+                fact_set.fact_set_digest
+                if fact_set is not None
+                else prepared["fact_set_digest"]
+            )
+            fact_count = (
+                len(fact_set.rows) if fact_set is not None else prepared["fact_count"]
+            )
+            if fact_set is not None:
+                fact_sets.append(fact_set)
+                publications.append(
+                    FactGraphPublication(
+                        graph_id=fact_set.graph_id,
+                        fact_set_digest=fact_set.fact_set_digest,
+                        fact_count=len(fact_set.rows),
+                        kind_counts=fact_set.kind_counts,
+                        source_ids=sorted(
+                            (
+                                source.source_id
+                                for source in graph_sources
+                                if source.source_id is not None
+                            ),
+                            key=str,
+                        ),
+                        observed_at=max(source.observed_at for source in graph_sources),
+                    )
+                )
+            facts_row = self._connection.execute(
+                "select encoded_bytes from artifact_objects where sha256 = ?",
+                (facts_sha256,),
+            ).fetchone()
+            summary_row = self._connection.execute(
+                "select encoded_bytes from artifact_objects where sha256 = ?",
+                (summary_sha256,),
+            ).fetchone()
+            artifact_publications.append(
+                ArtifactGraphPublication(
+                    graph_id=graph.root_session_id,
+                    graph_input_sha256=graph_input_sha256,
+                    fact_set_digest=fact_set_digest,
+                    fact_count=fact_count,
                     source_ids=sorted(
                         (
                             source.source_id
@@ -763,7 +949,20 @@ class LocalCollector:
                         ),
                         key=str,
                     ),
+                    vendors=sorted(
+                        {session.vendor.value for session in graph.sessions}
+                    ),
                     observed_at=max(source.observed_at for source in graph_sources),
+                    facts=ArtifactObjectReference(
+                        kind="facts",
+                        sha256=facts_sha256,
+                        bytes=facts_row["encoded_bytes"],
+                    ),
+                    summary=ArtifactObjectReference(
+                        kind="summary",
+                        sha256=summary_sha256,
+                        bytes=summary_row["encoded_bytes"],
+                    ),
                 )
             )
 
@@ -773,15 +972,19 @@ class LocalCollector:
                 for entry in source_vector
             ],
             "graphs": [
-                {
-                    "graph_id": str(graph.graph_id),
-                    "fact_set_digest": graph.fact_set_digest,
-                    "fact_count": graph.fact_count,
-                    "kind_counts": graph.kind_counts,
-                    "source_ids": [str(value) for value in graph.source_ids],
-                    "observed_at": graph.observed_at.isoformat(),
-                }
-                for graph in publications
+                (
+                    graph.model_dump(mode="json", exclude_none=True)
+                    if isinstance(graph, ArtifactGraphPublication)
+                    else {
+                        "graph_id": str(graph.graph_id),
+                        "fact_set_digest": graph.fact_set_digest,
+                        "fact_count": graph.fact_count,
+                        "kind_counts": graph.kind_counts,
+                        "source_ids": [str(value) for value in graph.source_ids],
+                        "observed_at": graph.observed_at.isoformat(),
+                    }
+                )
+                for graph in (artifact_publications if artifact_mode else publications)
             ],
         }
         publication_digest = _sha256(canonical_json(basis).encode())
@@ -789,27 +992,42 @@ class LocalCollector:
         if self._get_meta(f"{meta_prefix}:last_digest", "") == publication_digest:
             return 0
         sequence = int(self._get_meta(f"{meta_prefix}:next_sequence", "0"))
-        request = FactPublicationRequest(
-            workspace_id=self.identity.workspace_id,
-            agent_id=self.identity.agent_id,
-            project_id=self.identity.project_id,
-            publication_sequence=sequence,
-            source_vector=source_vector,
-            graphs=publications,
-        )
+        request: FactPublicationRequest | ArtifactPublicationRequest
+        if artifact_mode:
+            request = ArtifactPublicationRequest(
+                workspace_id=self.identity.workspace_id,
+                agent_id=self.identity.agent_id,
+                project_id=self.identity.project_id,
+                publication_sequence=sequence,
+                source_vector=source_vector,
+                graphs=artifact_publications,
+            )
+        else:
+            request = FactPublicationRequest(
+                workspace_id=self.identity.workspace_id,
+                agent_id=self.identity.agent_id,
+                project_id=self.identity.project_id,
+                publication_sequence=sequence,
+                source_vector=source_vector,
+                graphs=publications,
+            )
         idempotency_key = _sha256(
             (
                 f"{self.identity.agent_id}:{self.identity.project_id}:"
                 f"{sequence}:{publication_digest}"
             ).encode()
         )
-        staged = {
-            "publication": request.wire_payload(),
-            "fact_sets": [
-                fact_set.model_dump(mode="json", exclude_none=True)
-                for fact_set in fact_sets
-            ],
-        }
+        staged = (
+            {"artifact_publication": request.model_dump(mode="json", exclude_none=True)}
+            if artifact_mode
+            else {
+                "publication": request.wire_payload(),
+                "fact_sets": [
+                    fact_set.model_dump(mode="json", exclude_none=True)
+                    for fact_set in fact_sets
+                ],
+            }
+        )
         encoded = json.dumps(staged, separators=(",", ":"), sort_keys=True)
         self._connection.execute(
             "insert or ignore into publication_outbox (idempotency_key, project_id, publication_sequence, content_sha256, request_json, state, attempts, created_at) values (?, ?, ?, ?, ?, 'pending', 0, ?)",
@@ -841,31 +1059,56 @@ class LocalCollector:
             self._connection.commit()
             try:
                 staged = json.loads(row["request_json"])
-                request = FactPublicationRequest.model_validate(staged["publication"])
-                fact_sets = [
-                    PublishedFactSet.model_validate(fact_set)
-                    for fact_set in staged["fact_sets"]
-                ]
-                # A lost publication response may leave a committed receipt but
-                # no staging rows. Check retries before needlessly restaging.
-                committed = False
-                if row["attempts"] > 0:
-                    recovered = remote.recover(
-                        CollectorRecoveryRequest(
-                            workspace_id=request.workspace_id,
-                            agent_id=request.agent_id,
-                            project_id=request.project_id,
-                            publication_idempotency_key=row["idempotency_key"],
-                        )
+                if "artifact_publication" in staged:
+                    artifact_request = ArtifactPublicationRequest.model_validate(
+                        staged["artifact_publication"]
                     )
-                    committed = recovered.publication_receipt is not None
-                if not committed:
-                    self._stage_fact_rows(remote, request, fact_sets)
-                # Always replay the exact request: the server still checks the
-                # receipt's payload identity, including on the recovery path.
-                receipt = remote.publish_facts(
-                    request, idempotency_key=row["idempotency_key"]
-                )
+                    for graph in artifact_request.graphs:
+                        for reference in (graph.facts, graph.summary):
+                            artifact = self._connection.execute(
+                                "select body from artifact_objects where sha256 = ? and kind = ?",
+                                (reference.sha256, reference.kind),
+                            ).fetchone()
+                            if artifact is None:
+                                raise ValueError("prepared artifact is unavailable")
+                            remote.upload_artifact(
+                                kind=reference.kind,
+                                sha256=reference.sha256,
+                                body=bytes(artifact["body"]),
+                            )
+                    receipt = remote.publish_artifacts(
+                        artifact_request, idempotency_key=row["idempotency_key"]
+                    )
+                    request = None
+                    fact_sets = []
+                else:
+                    request = FactPublicationRequest.model_validate(
+                        staged["publication"]
+                    )
+                    fact_sets = [
+                        PublishedFactSet.model_validate(fact_set)
+                        for fact_set in staged["fact_sets"]
+                    ]
+                    # A lost publication response may leave a committed receipt but
+                    # no staging rows. Check retries before needlessly restaging.
+                    committed = False
+                    if row["attempts"] > 0:
+                        recovered = remote.recover(
+                            CollectorRecoveryRequest(
+                                workspace_id=request.workspace_id,
+                                agent_id=request.agent_id,
+                                project_id=request.project_id,
+                                publication_idempotency_key=row["idempotency_key"],
+                            )
+                        )
+                        committed = recovered.publication_receipt is not None
+                    if not committed:
+                        self._stage_fact_rows(remote, request, fact_sets)
+                    # Always replay the exact request: the server still checks the
+                    # receipt's payload identity, including on the recovery path.
+                    receipt = remote.publish_facts(
+                        request, idempotency_key=row["idempotency_key"]
+                    )
             except (CollectorRemoteError, OSError, ValueError):
                 self._connection.execute(
                     "update publication_outbox set state = 'pending', last_error = ? where idempotency_key = ?",
@@ -919,6 +1162,8 @@ class LocalCollector:
                     datetime.now(UTC).isoformat(),
                 ),
             )
+            if state == "accepted" and "artifact_publication" in staged:
+                self._prune_prepared_artifacts(artifact_request)
             self._connection.commit()
             if state == "rejected":
                 break
@@ -1481,6 +1726,18 @@ class LocalCollector:
               last_error text, created_at text not null,
               unique(project_id, publication_sequence)
             );
+            create table if not exists artifact_objects (
+              sha256 text primary key, kind text not null, body blob not null,
+              encoded_bytes integer not null
+            );
+            create table if not exists prepared_graphs (
+              preparation_version text not null, graph_input_sha256 text not null,
+              graph_id text not null, fact_set_digest text not null,
+              fact_count integer not null, kind_counts_json text not null,
+              facts_sha256 text not null, summary_sha256 text not null,
+              prepared_at text not null,
+              primary key (preparation_version, graph_input_sha256)
+            );
             create table if not exists remote_receipts (
               idempotency_key text primary key, receipt_id text not null, outcome text not null,
               committed_sequence integer, received_at text not null
@@ -1571,6 +1828,39 @@ def _expand_scoped_graph_candidates(
             }
         )
     return sorted(selected.values(), key=lambda value: str(value.path))
+
+
+def _prepared_graph_summary(fact_set: PublishedFactSet) -> PreparedGraphSummary:
+    """Prepare list cards and routing aliases once beside immutable facts."""
+
+    from coding_trajectory.control_plane.published_facts import FactIndex
+    from coding_trajectory.service.handlers import dispatch
+    from coding_trajectory.service.store import IndexCache
+
+    index = FactIndex.from_fact_sets([fact_set])
+    response = dispatch(
+        "project.sessions",
+        {},
+        store=index,
+        global_scope=True,
+        current_dir=Path.cwd(),
+        discovery_note="prepared artifact",
+        cache=IndexCache(),
+    )
+    aliases = sorted(
+        {
+            row.fact_id
+            for row in fact_set.rows
+            if row.kind in {"graph", "session", "turn", "item"}
+        },
+        key=str,
+    )
+    return PreparedGraphSummary(
+        graph_id=fact_set.graph_id,
+        fact_set_digest=fact_set.fact_set_digest,
+        aliases=aliases,
+        project_sessions=response["items"],
+    )
 
 
 def _fact_row_batches(fact_set: PublishedFactSet) -> list[list[Any]]:

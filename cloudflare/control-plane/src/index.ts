@@ -1,11 +1,13 @@
 import { authorityFailure, bounded, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
+import { artifactKey } from "./artifacts";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
   "ct_collector_publish_observation", "ct_collector_missing_fact_rows", "ct_collector_stage_fact_rows",
-  "ct_collector_publish_facts", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
-const READ = new Set(["ct_workspace_snapshot", "ct_fact_read", "ct_project_inventory_snapshot", "ct_remote_living"]);
+  "ct_collector_publish_facts", "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
+const READ = new Set(["ct_workspace_snapshot", "ct_fact_read", "ct_artifact_manifest", "ct_artifact_read", "ct_project_inventory_snapshot", "ct_remote_living"]);
 const PROTOCOL = "ct.core.v1";
+const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 
 function responseHeaders(env: Env): Record<string, string> {
   return { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
@@ -27,6 +29,30 @@ export default {
       const principal: Principal = { workspace_id: uuid(raw.workspace_id), agent_id: uuid(raw.agent_id), roles: raw.roles };
       requireThat(Array.isArray(principal.roles) && principal.roles.every(role => ["read", "collect", "owner"].includes(role)), "invalid_principal", 503);
       const url = new URL(request.url);
+      const artifactUpload = url.pathname.match(/^\/v1\/artifacts\/(facts|summary)\/([0-9a-f]{64})$/);
+      if (request.method === "PUT" && artifactUpload && url.search === "") {
+        requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
+        const [, kind, sha256] = artifactUpload;
+        const body = await bounded(request.body, MAX_ARTIFACT_BYTES);
+        requireThat(await digest(body) === sha256, "artifact_digest_mismatch");
+        let value;
+        try { value = object(JSON.parse(new TextDecoder().decode(body))); }
+        catch (error) { if (error instanceof Fault) throw error; throw new Fault(400, "invalid_artifact_json"); }
+        requireThat(kind === "facts"
+          ? value.schema_version === "ct.published_facts.v1"
+          : value.schema_version === "ct.prepared-summary.v1", "artifact_schema_mismatch");
+        const key = artifactKey(principal.workspace_id, kind, sha256);
+        const prior = await env.ARTIFACTS.head(key);
+        if (prior) {
+          requireThat(prior.size === body.length && prior.customMetadata?.sha256 === sha256,
+            "artifact_identity_conflict", 409);
+        } else {
+          await env.ARTIFACTS.put(key, body, { customMetadata: {
+            workspace_id: principal.workspace_id, kind, sha256,
+          }, httpMetadata: { contentType: "application/json" } });
+        }
+        return Response.json({ ok: true, sha256, bytes: body.length }, { headers: responseHeaders(env) });
+      }
       requireThat(request.method === "POST" && url.search === "" && url.pathname === "/v1/core", "not_found", 404);
       let message;
       let bodyBytes: Uint8Array;
@@ -59,6 +85,19 @@ export default {
       if (message.request_sha256 != null) envelope.request_sha256 = message.request_sha256;
       const workspace = env.WORKSPACES.getByName(principal.workspace_id);
       const result = object(JSON.parse(await workspace.invoke(methodName, JSON.stringify(envelope), JSON.stringify(principal))));
+      if (result.status >= 200 && result.status < 300 && result.body?.__artifact_key) {
+        const locator = result.body;
+        const instrumentation = locator.__benchmark;
+        const artifact = await env.ARTIFACTS.get(locator.__artifact_key);
+        requireThat(artifact, "artifact_object_missing", 503);
+        const bytes = new Uint8Array(await artifact.arrayBuffer());
+        requireThat(await digest(bytes) === locator.sha256, "artifact_object_corrupt", 503);
+        try { result.body = object(JSON.parse(new TextDecoder().decode(bytes))); }
+        catch { throw new Fault(503, "artifact_object_corrupt"); }
+        // Local benchmark subclasses may annotate the locator. Production
+        // Durable Objects never emit this field.
+        if (instrumentation) result.body.__benchmark = instrumentation;
+      }
       const ok = result.status >= 200 && result.status < 300;
       const failureCode = responseErrorCode(result.body);
       const response: Json = ok

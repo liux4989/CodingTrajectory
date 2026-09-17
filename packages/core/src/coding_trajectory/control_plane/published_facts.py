@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -567,6 +568,9 @@ class FactIndex:
     _rows_by_parent: dict[tuple[UUID, UUID], tuple[FactRowBase, ...]]
     _rows_by_graph: dict[UUID, tuple[FactRowBase, ...]]
     _entrypoint_kinds: dict[tuple[UUID, UUID], frozenset[str]]
+    _materialized_graphs: dict[UUID, SessionGraph] = dataclass_field(
+        default_factory=dict
+    )
 
     @classmethod
     def from_fact_sets(cls, fact_sets: list[PublishedFactSet]) -> FactIndex:
@@ -660,6 +664,10 @@ class FactIndex:
 def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGraph:
     """Materialize one selected canonical graph for existing semantic handlers."""
 
+    cached = facts._materialized_graphs.get(graph_id)
+    if cached is not None:
+        return cached
+
     graph_row = facts.row(graph_id, "graph", graph_id)
     if graph_row is None:
         raise ValueError("fact index requires exactly one selected graph row")
@@ -747,7 +755,7 @@ def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGr
     graph_payload = graph_row.payload
     assert isinstance(graph_payload, GraphFactPayload)
     canonical_sessions = [_to_session(session) for session in sessions]
-    return SessionGraph(
+    result = SessionGraph(
         root_session_id=graph_payload.summary.root_session_id,
         project_identifier=graph_payload.summary.project,
         summary=SessionGraphSummary(
@@ -768,6 +776,8 @@ def session_graph_from_fact_index(facts: FactIndex, graph_id: UUID) -> SessionGr
         ],
         sessions=canonical_sessions,
     )
+    facts._materialized_graphs[graph_id] = result
+    return result
 
 
 def _assemble_published_fact_set(

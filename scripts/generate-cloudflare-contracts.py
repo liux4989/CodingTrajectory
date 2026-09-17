@@ -11,8 +11,8 @@ from coding_trajectory.contracts import (
     LivingSessionsChange,
     service_contract,
 )
+from coding_trajectory.control_plane import artifact_protocol, fact_protocol
 from coding_trajectory.control_plane import collector_protocol as protocol
-from coding_trajectory.control_plane import fact_protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,9 +26,12 @@ def main():
         "ct_collector_stage_fact_rows": fact_protocol.StageFactRowsRequest,
         "ct_collector_missing_fact_rows": fact_protocol.MissingFactRowsRequest,
         "ct_collector_publish_facts": fact_protocol.FactPublicationRequest,
+        "ct_collector_publish_artifacts": artifact_protocol.ArtifactPublicationRequest,
         "ct_collector_heartbeat": protocol.LeaseHeartbeatRequest,
         "ct_collector_publish_living_observation": protocol.LivingObservationRequest,
         "ct_fact_read": fact_protocol.FactReadRequest,
+        "ct_artifact_manifest": artifact_protocol.ArtifactManifestRequest,
+        "ct_artifact_read": artifact_protocol.ArtifactReadRequest,
         "checkpoint": protocol.SourceCheckpointPayload,
         "living_events_change": LivingChange,
         "living_sessions_change": LivingSessionsChange,
