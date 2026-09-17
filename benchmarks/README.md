@@ -39,6 +39,17 @@ hashes remain unchanged and emits only aggregate counts, timings, and hashes.
 Keep raw journals and archives private and outside Git; do not publish them with
 the aggregate report. A small captured corpus is not a production capacity test.
 
+For Codex, place the frozen source tree under the disposable home's
+`.codex/sessions`, retaining directory structure, session segments, and any
+parent/child sources selected for the comparison. Invoke the same script with
+`--vendor codex_cli --logs "$bench_home/.codex/sessions"` and `HOME="$bench_home"`.
+Do not point `CT_AMP_LOG_DIR` at Codex files: the harness clears it for Codex and
+uses the real provider discovery. It records source, canonical-session, and
+manifest vendor counts, and measures detail reads on the smallest and largest
+graphs by fact count. Keep corpus selection independent of measured speed.
+Live pricing is disabled for both providers; missing offline prices remain
+unavailable rather than triggering network access.
+
 Cold timings mean fresh runtimes, not cold OS or locator caches. Artifact reads
 decode in-memory objects, excluding disk, network, authentication, and publication.
 Preparation (parse, project, prepare summaries, serialize) is reported separately;
