@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
 from typing import Any, Literal
 
 from coding_trajectory.analysis.shell_parser import split_shell_stages
@@ -17,6 +16,8 @@ from coding_trajectory.analysis.tool_summary_shared import (
     RUN_COMMAND,
     SEARCH_TEXT,
     WRITE_FILE,
+    safe_split,
+    scoped_shell_tokens,
     short_command,
     short_path,
 )
@@ -79,6 +80,7 @@ _RUNNER_SUBWORDS = frozenset({"run", "exec", "dlx", "tool", "task"})
 _SHELL_SETUP_HEADS = frozenset({"cd", "pushd", "popd", "export", "set", "unset"})
 
 
+@scoped_shell_tokens()
 def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, str]:
     cmd = shell_cmd(tool_input)
     if not cmd:
@@ -120,6 +122,7 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
     return RUN_COMMAND, description, "shell:command"
 
 
+@scoped_shell_tokens()
 def classify_verification_command(tool_input: Any) -> VerificationKind | None:
     """Recognize only commands suitable for the summary verification section."""
     cmd = shell_cmd(tool_input)
@@ -296,13 +299,6 @@ def unwrap_shell_command(cmd: str) -> str:
     ):
         return tokens[2].strip()
     return cmd
-
-
-def safe_split(cmd: str) -> list[str]:
-    try:
-        return shlex.split(cmd, posix=True)
-    except ValueError:
-        return cmd.split()
 
 
 def first_path_arg(cmd: str, head: str) -> str | None:

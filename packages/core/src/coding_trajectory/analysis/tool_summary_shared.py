@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 READ_FILE = "ReadFile"
@@ -150,6 +153,37 @@ def short_path(path: str | None) -> str | None:
     return path
 
 
+_shell_tokens: ContextVar[dict[str, list[str]] | None] = ContextVar(
+    "coding_trajectory_shell_tokens", default=None
+)
+
+
+@contextmanager
+def scoped_shell_tokens() -> Iterator[None]:
+    """Share read-only parsed tokens within one classification, never across calls."""
+    if _shell_tokens.get() is not None:
+        yield
+        return
+    token = _shell_tokens.set({})
+    try:
+        yield
+    finally:
+        _shell_tokens.reset(token)
+
+
+def safe_split(cmd: str) -> list[str]:
+    cache = _shell_tokens.get()
+    if cache is not None and cmd in cache:
+        return cache[cmd]
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        tokens = cmd.split()
+    if cache is not None:
+        cache[cmd] = tokens
+    return tokens
+
+
 def short_command(cmd: str, *, max_len: int = 60) -> str:
     """Return a bounded command while preserving its action and final target.
 
@@ -158,10 +192,7 @@ def short_command(cmd: str, *, max_len: int = 60) -> str:
     also avoids making commands that differ only in their final argument look
     identical in static activity views.
     """
-    try:
-        tokens = shlex.split(cmd, posix=True)
-    except ValueError:
-        tokens = cmd.split()
+    tokens = safe_split(cmd)
     cleaned = re.sub(r"\s+", " ", " ".join(tokens)).strip()
     if len(cleaned) <= max_len:
         return _balance_command_preview_quotes(cleaned)
