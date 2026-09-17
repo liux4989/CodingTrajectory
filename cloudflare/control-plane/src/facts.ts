@@ -48,6 +48,10 @@ export function initializeFacts(state: State) {
       PRIMARY KEY (agent_id, graph_id, fact_set_digest, batch_index, kind, fact_id));
     CREATE INDEX IF NOT EXISTS staged_fact_items_graph
       ON staged_fact_items(agent_id, graph_id, fact_set_digest, kind, fact_id);
+    -- Event ordering compares sequences; avoid scanning every event for each row.
+    CREATE INDEX IF NOT EXISTS staged_fact_items_event_sequence
+      ON staged_fact_items(agent_id, graph_id, fact_set_digest,
+        json_extract(payload,'$.payload.sequence')) WHERE kind='event';
     CREATE TABLE IF NOT EXISTS staged_fact_generations (
       agent_id TEXT NOT NULL, graph_id TEXT NOT NULL, generation INTEGER NOT NULL,
       PRIMARY KEY (agent_id, graph_id));
