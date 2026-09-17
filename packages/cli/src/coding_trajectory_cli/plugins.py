@@ -163,9 +163,18 @@ def plugin_names() -> list[str]:
 def run_plugin(name: str, plugin_args: list[str]) -> int:
     """Execute a plugin entry point from its source directory."""
     command = PLUGIN_COMMANDS[name]
+    # Running the entry script by path puts the script's own directory on
+    # sys.path, not the plugin root; expose the plugin root so the entry can
+    # import its package (e.g. ``from loop_plugin.models import ...``).
+    env = os.environ.copy()
+    python_path = [str(command.dir)]
+    if existing := env.get("PYTHONPATH"):
+        python_path.append(existing)
+    env["PYTHONPATH"] = os.pathsep.join(python_path)
     completed = subprocess.run(
         [sys.executable, str(command.entry_path), *plugin_args],
         cwd=command.dir,
+        env=env,
         check=False,
     )
     return completed.returncode
