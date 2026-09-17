@@ -157,25 +157,36 @@ export function writeStagedRows(state: State, request: Json): Json {
      ON CONFLICT(agent_id,graph_id) DO UPDATE SET generation=generation+1`,
     request.agent_id, graphId);
   state.sql.exec("DELETE FROM validated_fact_graphs WHERE agent_id=? AND graph_id=?", request.agent_id, graphId);
-  return missingFactRows(state, {
-    workspace_id: request.workspace_id, agent_id: request.agent_id, graph_id: graphId,
-    fact_set_digest: request.fact_set_digest, batch_count: request.batch_count,
-  });
+  // Rows and batch metadata were written in the same transaction. Acknowledge
+  // metadata here; explicit recovery and publication still verify row integrity.
+  const batches = state.sql.exec<{ batch_index: number }>(
+    `SELECT batch_index FROM staged_fact_rows
+     WHERE agent_id=? AND graph_id=? AND fact_set_digest=?`,
+    request.agent_id, graphId, request.fact_set_digest).toArray();
+  return stagedBatchResponse(request, batches.map(row => row.batch_index));
 }
 
 export function missingFactRows(state: State, request: Json): Json {
   validate("ct_collector_missing_fact_rows", request);
   const graphId = uuid(request.graph_id);
-  const staged = new Set(state.sql.exec<{ batch_index: number }>(
+  const staged = state.sql.exec<{ batch_index: number }>(
     `SELECT batch.batch_index FROM staged_fact_rows batch
      WHERE batch.agent_id=? AND batch.graph_id=? AND batch.fact_set_digest=?
        AND batch.row_count=(SELECT count(*) FROM staged_fact_items item
          WHERE item.agent_id=batch.agent_id AND item.graph_id=batch.graph_id
          AND item.fact_set_digest=batch.fact_set_digest AND item.batch_index=batch.batch_index)`,
-    request.agent_id, graphId, request.fact_set_digest).toArray().map(row => row.batch_index));
+    request.agent_id, graphId, request.fact_set_digest).toArray().map(row => row.batch_index);
+  const result = stagedBatchResponse(request, staged);
+  // The recovery contract has no staged_batches field (unlike stage receipts).
+  return { graph_id: result.graph_id, fact_set_digest: result.fact_set_digest,
+    missing_batches: result.missing_batches };
+}
+
+function stagedBatchResponse(request: Json, batches: number[]): Json {
+  const staged = new Set(batches);
   const missing: number[] = [];
   for (let index = 0; index < request.batch_count; index++) if (!staged.has(index)) missing.push(index);
-  return { graph_id: graphId, fact_set_digest: request.fact_set_digest,
+  return { graph_id: uuid(request.graph_id), fact_set_digest: request.fact_set_digest,
     staged_batches: request.batch_count - missing.length, missing_batches: missing };
 }
 
@@ -382,15 +393,11 @@ async function validateStagedGraph(state: State, agentId: string, publication: J
          AND target.fact_set_digest=row.fact_set_digest AND target.kind='session' AND target.fact_id=json_extract(row.payload,'$.payload.target_session_id')))
      LIMIT 1`, [...scope, graphId], "edge_session_ownership_mismatch");
   requireNoRows(state,
-    `SELECT 1 FROM staged_fact_items row WHERE ${where} AND row.kind='edge' AND EXISTS (
-       SELECT 1 FROM staged_fact_items other WHERE other.agent_id=row.agent_id AND other.graph_id=row.graph_id
-       AND other.fact_set_digest=row.fact_set_digest AND other.kind='edge' AND other.fact_id<>row.fact_id
-       AND json_array(json_extract(other.payload,'$.payload.kind'),json_extract(other.payload,'$.payload.source_session_id'),
-         json_extract(other.payload,'$.payload.target_session_id'),json_extract(other.payload,'$.payload.origin.turn_id'),
-         json_extract(other.payload,'$.payload.origin.item_id'))
-        =json_array(json_extract(row.payload,'$.payload.kind'),json_extract(row.payload,'$.payload.source_session_id'),
+    `SELECT 1 FROM staged_fact_items row WHERE ${where} AND row.kind='edge'
+     GROUP BY json_array(json_extract(row.payload,'$.payload.kind'),json_extract(row.payload,'$.payload.source_session_id'),
          json_extract(row.payload,'$.payload.target_session_id'),json_extract(row.payload,'$.payload.origin.turn_id'),
-         json_extract(row.payload,'$.payload.origin.item_id'))) LIMIT 1`, scope, "duplicate_edge_identity");
+         json_extract(row.payload,'$.payload.origin.item_id'))
+     HAVING count(DISTINCT row.fact_id)>1 LIMIT 1`, scope, "duplicate_edge_identity");
   requireNoRows(state,
     `SELECT 1 FROM staged_fact_items row WHERE ${where} AND row.kind='edge' AND
       ((json_extract(row.payload,'$.payload.origin.turn_id') IS NOT NULL AND NOT EXISTS (

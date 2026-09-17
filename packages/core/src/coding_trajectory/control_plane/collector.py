@@ -846,7 +846,23 @@ class LocalCollector:
                     PublishedFactSet.model_validate(fact_set)
                     for fact_set in staged["fact_sets"]
                 ]
-                self._stage_fact_rows(remote, request, fact_sets)
+                # A lost publication response may leave a committed receipt but
+                # no staging rows. Check retries before needlessly restaging.
+                committed = False
+                if row["attempts"] > 0:
+                    recovered = remote.recover(
+                        CollectorRecoveryRequest(
+                            workspace_id=request.workspace_id,
+                            agent_id=request.agent_id,
+                            project_id=request.project_id,
+                            publication_idempotency_key=row["idempotency_key"],
+                        )
+                    )
+                    committed = recovered.publication_receipt is not None
+                if not committed:
+                    self._stage_fact_rows(remote, request, fact_sets)
+                # Always replay the exact request: the server still checks the
+                # receipt's payload identity, including on the recovery path.
                 receipt = remote.publish_facts(
                     request, idempotency_key=row["idempotency_key"]
                 )
