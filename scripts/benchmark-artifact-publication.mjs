@@ -213,6 +213,13 @@ try {
       publication_sequence: sequence, inventory_state: 'complete', source_vector: [vector],
       graphs: values.map(value => value.publication) }, `publication:${sequence}`);
   }
+  async function setClaimExpiry(reference, expiresAt) {
+    const response = await mf.dispatchFetch('http://local/__benchmark/claim-expiry', {
+      method: 'POST', body: JSON.stringify({ kind: reference.kind, sha256: reference.sha256, expiresAt }),
+    });
+    const result = await response.json();
+    if (result.rowsWritten !== 1) throw Error('expected one artifact upload claim');
+  }
 
   let values = prepared(Array(graphCount).fill(0));
   let point = await checkpoint(0);
@@ -255,6 +262,29 @@ try {
     await publish(3, values, point.vector);
     report.correctness.uncommittedClaimProtectedFromNextCleanup = Boolean(await bucket.head(
       `workspaces/${workspace}/artifacts/facts/${stalled.reference.sha256}`));
+    await setClaimExpiry(stalled.reference, Math.floor(Date.now() / 1000) + 60);
+    values = prepared([4, ...Array(Math.max(graphCount - 1, 0)).fill(0)]);
+    point = await checkpoint(4);
+    await upload([values[0]]);
+    await publish(4, values, point.vector);
+    report.correctness.claimProtectedJustBeforeExpiry = Boolean(await bucket.head(
+      `workspaces/${workspace}/artifacts/facts/${stalled.reference.sha256}`));
+    await setClaimExpiry(stalled.reference, 0);
+    values = prepared([5, ...Array(Math.max(graphCount - 1, 0)).fill(0)]);
+    point = await checkpoint(5);
+    await upload([values[0]]);
+    await publish(5, values, point.vector);
+    report.correctness.unretainedObjectRemovedAtExpiry = !await bucket.head(
+      `workspaces/${workspace}/artifacts/facts/${stalled.reference.sha256}`);
+    const retained = values[0].facts;
+    await upload([{ facts: retained, summary: retained }]);
+    await setClaimExpiry(retained.reference, 0);
+    values = prepared([6, ...Array(Math.max(graphCount - 1, 0)).fill(0)]);
+    point = await checkpoint(6);
+    await upload([values[0]]);
+    await publish(6, values, point.vector);
+    report.correctness.retainedObjectSurvivedExpiredClaim = Boolean(await bucket.head(
+      `workspaces/${workspace}/artifacts/facts/${retained.reference.sha256}`));
     if (Object.values(report.correctness).some(value => !value)) throw Error('artifact lifetime qualification failed');
   }
   if (graphCount <= 2) await scenario('prepared_summary_and_selected_detail_reads', async () => {

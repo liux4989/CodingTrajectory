@@ -145,6 +145,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
         def __init__(self, authority: CloudflareCollectorRemote) -> None:
             self.authority = authority
             self.uploads: list[str] = []
+            self.lose_next_upload_response = False
             self.lose_next_publication_response = False
 
         def __getattr__(self, name: str):
@@ -153,6 +154,9 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
         def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None:
             self.uploads.append(sha256)
             self.authority.upload_artifact(kind=kind, sha256=sha256, body=body)
+            if self.lose_next_upload_response:
+                self.lose_next_upload_response = False
+                raise CollectorRemoteError("synthetic lost upload response")
 
         def publish_artifacts(self, request, *, idempotency_key: str):
             receipt = self.authority.publish_artifacts(
@@ -283,7 +287,33 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "unchanged inventory reuses preparations without republishing",
             )
             check(len(counted.uploads) == 4, "unchanged collector uploads nothing")
-            first_path.write_text(first_path.read_text().replace("first", "changed"))
+            first_path.write_text(
+                first_path.read_text().replace("first", "upload-lost")
+            )
+            counted.lose_next_upload_response = True
+            upload_lost = collector.collect(
+                current_dir=root,
+                agent_vendor="amp",
+                remote=counted,
+                heartbeat=False,
+            )
+            check(
+                upload_lost.facts_accepted == 0 and len(counted.uploads) == 5,
+                "lost upload response leaves an uncommitted publication pending",
+            )
+            upload_retried = collector.collect(
+                current_dir=root,
+                agent_vendor="amp",
+                remote=counted,
+                heartbeat=False,
+            )
+            check(
+                upload_retried.facts_accepted == 1 and len(counted.uploads) == 9,
+                "absent receipt refreshes claims and uploads the complete manifest",
+            )
+            first_path.write_text(
+                first_path.read_text().replace("upload-lost", "changed")
+            )
             counted.lose_next_publication_response = True
             changed = collector.collect(
                 current_dir=root,
@@ -300,7 +330,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "lost changed-publication response remains pending",
             )
             check(
-                len(counted.uploads) == 6,
+                len(counted.uploads) == 11,
                 "one changed graph normally uploads only its two new objects",
             )
             retried = collector.collect(
@@ -318,7 +348,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "lost response retry recovers the committed receipt",
             )
             check(
-                len(counted.uploads) == 6,
+                len(counted.uploads) == 11,
                 "committed lost response recovers without reuploading",
             )
             changed_prepared = {
@@ -358,7 +388,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "topology merge prepares one canonical graph",
             )
             check(
-                len(counted.uploads) == 8,
+                len(counted.uploads) == 13,
                 "topology merge uploads only the new combined graph",
             )
             parent_rows[2]["tool_name"] = "shell_command"
@@ -383,7 +413,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "topology split restores two canonical graphs",
             )
             check(
-                len(counted.uploads) == 12,
+                len(counted.uploads) == 17,
                 "topology split restores both graph artifacts",
             )
             (journals / "2.jsonl").unlink()

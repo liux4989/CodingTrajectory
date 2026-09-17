@@ -1,0 +1,215 @@
+{
+  "head": "fdeb0b1f91f3e740b4df48707edf94329fdc9a8d",
+  "localDiff": "",
+  "recordedAt": "2026-09-17T10:48:45.511Z",
+  "synthetic": true,
+  "scope": {
+    "graphs": 2,
+    "rowsPerGraph": 1,
+    "seededOrphans": 4101
+  },
+  "units": "Disposable local workerd SQL cursor counters, instrumented R2 method calls, HTTP request count, wall time; process CPU/RSS only on macOS and not Cloudflare billing or isolate limits",
+  "harnessSha256": {
+    "benchmark-artifact-publication.mjs": "2b3911e4249d8073cdeae39453904eaa51edec37b45cd3a3846bfad84e136455",
+    "artifact-benchmark-worker.ts": "eb168ac2e5bbedf6cfb165fcaf625ea967363fea6a11943f20884c03a68b4291"
+  },
+  "environment": {
+    "node": "v22.22.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "miniflare": "5.20260907.0-alpha",
+    "workerd": "1.20260907.1",
+    "processSampling": "macOS ps cumulative process CPU and 50 ms RSS samples; shared workerd process, not isolate heap or billed CPU"
+  },
+  "results": [
+    {
+      "scenario": "initial_publication",
+      "httpRequests": 5,
+      "wallMs": 19.583709,
+      "processCpuMs": 10,
+      "processRssSampleMax": 324173824,
+      "sql": {
+        "calls": 31,
+        "rowsRead": 40,
+        "rowsWritten": 23,
+        "logicalChanges": 12,
+        "groups": {
+          "INSERT artifact_upload_claims": {
+            "calls": 4,
+            "rowsRead": 0,
+            "rowsWritten": 8
+          },
+          "queries": {
+            "calls": 18,
+            "rowsRead": 18,
+            "rowsWritten": 0
+          },
+          "UPDATE sequence": {
+            "calls": 1,
+            "rowsRead": 2,
+            "rowsWritten": 1
+          },
+          "INSERT artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 0,
+            "rowsWritten": 4
+          },
+          "DELETE artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 2,
+            "rowsWritten": 0
+          },
+          "INSERT records": {
+            "calls": 2,
+            "rowsRead": 0,
+            "rowsWritten": 6
+          },
+          "DELETE records": {
+            "calls": 2,
+            "rowsRead": 10,
+            "rowsWritten": 0
+          },
+          "DELETE artifact_upload_claims": {
+            "calls": 2,
+            "rowsRead": 8,
+            "rowsWritten": 4
+          }
+        }
+      },
+      "r2": {
+        "calls": {
+          "head": 8,
+          "put": 4,
+          "list": 4,
+          "delete": 4
+        },
+        "uploadedBytes": 1432
+      },
+      "retained": {
+        "entries": 107,
+        "bytes": 1535
+      }
+    },
+    {
+      "scenario": "unchanged_collector_run",
+      "httpRequests": 0,
+      "wallMs": 2.381416999999601,
+      "processCpuMs": 0,
+      "processRssSampleMax": 359923712,
+      "sql": {
+        "calls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "logicalChanges": 0,
+        "groups": {}
+      },
+      "r2": {
+        "calls": {},
+        "uploadedBytes": 0
+      },
+      "retained": {
+        "entries": 107,
+        "bytes": 1535
+      }
+    },
+    {
+      "scenario": "one_changed_graph",
+      "httpRequests": 3,
+      "wallMs": 23.119292000000314,
+      "processCpuMs": 30,
+      "processRssSampleMax": 360103936,
+      "sql": {
+        "calls": 27,
+        "rowsRead": 39,
+        "rowsWritten": 17,
+        "logicalChanges": 8,
+        "groups": {
+          "INSERT artifact_upload_claims": {
+            "calls": 2,
+            "rowsRead": 0,
+            "rowsWritten": 4
+          },
+          "queries": {
+            "calls": 16,
+            "rowsRead": 16,
+            "rowsWritten": 0
+          },
+          "UPDATE sequence": {
+            "calls": 1,
+            "rowsRead": 2,
+            "rowsWritten": 1
+          },
+          "INSERT artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 0,
+            "rowsWritten": 4
+          },
+          "DELETE artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 4,
+            "rowsWritten": 0
+          },
+          "INSERT records": {
+            "calls": 2,
+            "rowsRead": 0,
+            "rowsWritten": 6
+          },
+          "DELETE records": {
+            "calls": 2,
+            "rowsRead": 15,
+            "rowsWritten": 0
+          },
+          "DELETE artifact_upload_claims": {
+            "calls": 2,
+            "rowsRead": 2,
+            "rowsWritten": 2
+          }
+        }
+      },
+      "r2": {
+        "calls": {
+          "head": 4,
+          "put": 2,
+          "list": 1,
+          "delete": 1
+        },
+        "uploadedBytes": 716
+      },
+      "retained": {
+        "entries": 6,
+        "bytes": 2148
+      }
+    },
+    {
+      "scenario": "prepared_summary_and_selected_detail_reads",
+      "httpRequests": 4,
+      "wallMs": 8.127249999999549,
+      "processCpuMs": 10,
+      "processRssSampleMax": 360251392,
+      "sql": {
+        "calls": 12,
+        "rowsRead": 60,
+        "rowsWritten": 0,
+        "logicalChanges": 0,
+        "groups": {
+          "queries": {
+            "calls": 12,
+            "rowsRead": 60,
+            "rowsWritten": 0
+          }
+        }
+      },
+      "r2": {
+        "calls": {
+          "get": 3
+        },
+        "uploadedBytes": 0
+      },
+      "retained": {
+        "entries": 6,
+        "bytes": 2148
+      }
+    }
+  ],
+  "correctness": {}
+}

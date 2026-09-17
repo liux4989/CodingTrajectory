@@ -40,6 +40,14 @@ export class Workspace extends SqlInstrumentedWorkspace {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, { ...env, ARTIFACTS: tracedBucket(env.ARTIFACTS) });
   }
+
+  /** Disposable qualification hook; this class is never the deployed entry point. */
+  setArtifactClaimExpiry(kind: string, sha256: string, expiresAt: number): number {
+    return this.ctx.storage.sql.exec(
+      "UPDATE artifact_upload_claims SET expires_at=? WHERE kind=? AND sha256=?",
+      expiresAt, kind, sha256,
+    ).rowsWritten;
+  }
 }
 
 export default {
@@ -57,6 +65,15 @@ export default {
         if (listGate) listGate.released = true;
       }
       return Response.json({ entered: listGate?.entered ?? false });
+    }
+    if (url.pathname === "/__benchmark/claim-expiry" && request.method === "POST") {
+      const value = await request.json<{ kind: string; sha256: string; expiresAt: number }>();
+      const stub = env.WORKSPACES.getByName("00000000-0000-0000-0000-000000000001") as unknown as {
+        setArtifactClaimExpiry(kind: string, sha256: string, expiresAt: number): Promise<number>;
+      };
+      return Response.json({ rowsWritten: await stub.setArtifactClaimExpiry(
+        value.kind, value.sha256, value.expiresAt,
+      ) });
     }
     return worker.fetch(request, { ...env, ARTIFACTS: tracedBucket(env.ARTIFACTS) }, ctx);
   },
