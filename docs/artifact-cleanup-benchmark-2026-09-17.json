@@ -1,12 +1,12 @@
 {
   "head": "3e7f03bee6b5f677d9c2cb3acc88c60463e95d01",
   "localDiff": "",
-  "recordedAt": "2026-09-17T10:25:17.301Z",
+  "recordedAt": "2026-09-17T10:25:17.308Z",
   "synthetic": true,
   "scope": {
     "graphs": 2,
     "rowsPerGraph": 1,
-    "seededOrphans": 0
+    "seededOrphans": 4101
   },
   "units": "Disposable local workerd SQL cursor counters, instrumented R2 method calls, HTTP request count, wall time; process CPU/RSS only on macOS and not Cloudflare billing or isolate limits",
   "harnessSha256": {
@@ -25,7 +25,7 @@
     {
       "scenario": "initial_publication",
       "httpRequests": 5,
-      "wallMs": 123.22395000000006,
+      "wallMs": 39.12287799999831,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -70,19 +70,20 @@
         "calls": {
           "head": 8,
           "put": 4,
-          "list": 1
+          "list": 4,
+          "delete": 4
         },
         "uploadedBytes": 1432
       },
       "retained": {
-        "entries": 4,
-        "bytes": 1432
+        "entries": 107,
+        "bytes": 1535
       }
     },
     {
       "scenario": "unchanged_collector_run",
       "httpRequests": 0,
-      "wallMs": 0.031317999999828317,
+      "wallMs": 0.03626599999915925,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -97,25 +98,25 @@
         "uploadedBytes": 0
       },
       "retained": {
-        "entries": 4,
-        "bytes": 1432
+        "entries": 107,
+        "bytes": 1535
       }
     },
     {
       "scenario": "one_changed_graph",
       "httpRequests": 3,
-      "wallMs": 37.332476999999926,
+      "wallMs": 16.685740000000806,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
         "calls": 24,
-        "rowsRead": 38,
+        "rowsRead": 39,
         "rowsWritten": 11,
         "logicalChanges": 4,
         "groups": {
           "queries": {
             "calls": 17,
-            "rowsRead": 17,
+            "rowsRead": 18,
             "rowsWritten": 0
           },
           "UPDATE sequence": {
@@ -149,7 +150,8 @@
         "calls": {
           "head": 6,
           "put": 2,
-          "list": 1
+          "list": 1,
+          "delete": 1
         },
         "uploadedBytes": 716
       },
@@ -161,7 +163,7 @@
     {
       "scenario": "prepared_summary_and_selected_detail_reads",
       "httpRequests": 4,
-      "wallMs": 36.12328500000012,
+      "wallMs": 13.848044000002119,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {

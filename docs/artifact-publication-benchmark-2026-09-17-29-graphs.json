@@ -1,10 +1,10 @@
 {
   "head": "3e7f03bee6b5f677d9c2cb3acc88c60463e95d01",
   "localDiff": "",
-  "recordedAt": "2026-09-17T10:25:17.301Z",
+  "recordedAt": "2026-09-17T10:25:17.316Z",
   "synthetic": true,
   "scope": {
-    "graphs": 2,
+    "graphs": 29,
     "rowsPerGraph": 1,
     "seededOrphans": 0
   },
@@ -24,8 +24,8 @@
   "results": [
     {
       "scenario": "initial_publication",
-      "httpRequests": 5,
-      "wallMs": 123.22395000000006,
+      "httpRequests": 59,
+      "wallMs": 692.8521470000001,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -68,21 +68,21 @@
       },
       "r2": {
         "calls": {
-          "head": 8,
-          "put": 4,
+          "head": 116,
+          "put": 58,
           "list": 1
         },
-        "uploadedBytes": 1432
+        "uploadedBytes": 20764
       },
       "retained": {
-        "entries": 4,
-        "bytes": 1432
+        "entries": 58,
+        "bytes": 20764
       }
     },
     {
       "scenario": "unchanged_collector_run",
       "httpRequests": 0,
-      "wallMs": 0.031317999999828317,
+      "wallMs": 0.04952500000035798,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -97,14 +97,14 @@
         "uploadedBytes": 0
       },
       "retained": {
-        "entries": 4,
-        "bytes": 1432
+        "entries": 58,
+        "bytes": 20764
       }
     },
     {
       "scenario": "one_changed_graph",
       "httpRequests": 3,
-      "wallMs": 37.332476999999926,
+      "wallMs": 77.67123199999969,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -147,45 +147,15 @@
       },
       "r2": {
         "calls": {
-          "head": 6,
+          "head": 60,
           "put": 2,
           "list": 1
         },
         "uploadedBytes": 716
       },
       "retained": {
-        "entries": 6,
-        "bytes": 2148
-      }
-    },
-    {
-      "scenario": "prepared_summary_and_selected_detail_reads",
-      "httpRequests": 4,
-      "wallMs": 36.12328500000012,
-      "processCpuMs": null,
-      "processRssSampleMax": null,
-      "sql": {
-        "calls": 12,
-        "rowsRead": 60,
-        "rowsWritten": 0,
-        "logicalChanges": 0,
-        "groups": {
-          "queries": {
-            "calls": 12,
-            "rowsRead": 60,
-            "rowsWritten": 0
-          }
-        }
-      },
-      "r2": {
-        "calls": {
-          "get": 3
-        },
-        "uploadedBytes": 0
-      },
-      "retained": {
-        "entries": 6,
-        "bytes": 2148
+        "entries": 60,
+        "bytes": 21480
       }
     }
   ]
