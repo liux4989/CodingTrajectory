@@ -1,7 +1,7 @@
 # Artifact publication local benchmark, 2026-09-17
 
 This synthetic, disposable Miniflare run measures the committed implementation
-at `3180441e4e310b5449affcb0a91aedd2b4b62a75`. The raw report is
+at `5b70ddacbf1c66b89d04ecef7793fc12b21beacc`. The raw report is
 [`artifact-publication-benchmark-2026-09-17.json`](artifact-publication-benchmark-2026-09-17.json).
 It uses local workerd SQL cursor counters and instrumented R2 calls. These are not
 production billing counters, billed Worker CPU, or isolate-memory measurements,
@@ -18,8 +18,8 @@ workerd process CPU/RSS; the same pinned harness enables those samples on macOS.
 | One changed graph | 5 | 38 | 11 | 8 head, 2 put, 1 list | 716 | 6 objects / 2,148 B |
 | Two summaries + one selected detail | 4 | 60 | 0 | 3 get | 0 | 6 objects / 2,148 B |
 
-Local wall times were 46.7 ms initial, 0.04 ms unchanged, 26.3 ms changed,
-and 18.9 ms for the three prepared-object reads. Payloads are deliberately tiny,
+Local wall times were 46.1 ms initial, 0.04 ms unchanged, 26.2 ms changed,
+and 17.9 ms for the three prepared-object reads. Payloads are deliberately tiny,
 so byte totals demonstrate accounting and content-addressed reuse rather than a
 representative real export size. A changed publication still checks all four
 object references; only the changed graph's two objects cause R2 puts.
@@ -44,6 +44,6 @@ pinned representative Mac run is required before approval of the real workload.
 Harness SHA-256:
 
 - `benchmark-artifact-publication.mjs`:
-  `520d52498422d50f9ac9833a04f432c07ddcde693218e0f9f8a32a240e86e839`
+  `9f1baa1b86f566bbc8618acff19a457c3accad9c1bf43b740d6068a036c53032`
 - `artifact-benchmark-worker.ts`:
   `ec8433688b99560170b01c223335f34d89f575e7f208870bbd5ee7f174c05290`

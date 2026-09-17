@@ -1,11 +1,11 @@
 {
-  "head": "3180441e4e310b5449affcb0a91aedd2b4b62a75",
+  "head": "5b70ddacbf1c66b89d04ecef7793fc12b21beacc",
   "localDiff": "",
-  "recordedAt": "2026-09-17T10:07:54.912Z",
+  "recordedAt": "2026-09-17T10:11:52.104Z",
   "synthetic": true,
   "units": "Disposable local workerd SQL cursor counters, instrumented R2 method calls, HTTP request count, wall time; process CPU/RSS only on macOS and not Cloudflare billing or isolate limits",
   "harnessSha256": {
-    "benchmark-artifact-publication.mjs": "520d52498422d50f9ac9833a04f432c07ddcde693218e0f9f8a32a240e86e839",
+    "benchmark-artifact-publication.mjs": "9f1baa1b86f566bbc8618acff19a457c3accad9c1bf43b740d6068a036c53032",
     "artifact-benchmark-worker.ts": "ec8433688b99560170b01c223335f34d89f575e7f208870bbd5ee7f174c05290"
   },
   "environment": {
@@ -20,7 +20,7 @@
     {
       "scenario": "initial_publication",
       "httpRequests": 5,
-      "wallMs": 46.73272199999997,
+      "wallMs": 46.08335099999999,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -77,7 +77,7 @@
     {
       "scenario": "unchanged_collector_run",
       "httpRequests": 0,
-      "wallMs": 0.04472400000008747,
+      "wallMs": 0.03840900000000147,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -99,7 +99,7 @@
     {
       "scenario": "one_changed_graph",
       "httpRequests": 5,
-      "wallMs": 26.309509000000162,
+      "wallMs": 26.19017199999996,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
@@ -156,7 +156,7 @@
     {
       "scenario": "prepared_summary_and_selected_detail_reads",
       "httpRequests": 4,
-      "wallMs": 18.875868999999966,
+      "wallMs": 17.947257000000036,
       "processCpuMs": null,
       "processRssSampleMax": null,
       "sql": {
