@@ -301,12 +301,14 @@ async function validateStagedGraph(state: State, agentId: string, publication: J
     ["event", "event_id", "event_fact_identity_mismatch"],
     ["request", "request_id", "request_fact_identity_mismatch"],
   ]) invalid(`row.fact_id<>json_extract(row.payload,'$.payload.${identityPath}')`, identityCode, kind);
+  // Group once per parent/sequence instead of rescanning siblings for each row.
+  // Keep NULL and distinct-fact semantics identical to the prior equality check.
   for (const kind of ["turn", "item"]) requireNoRows(state,
-    `SELECT 1 FROM staged_fact_items row WHERE ${where} AND row.kind=? AND
-       (row.order_index<>json_extract(row.payload,'$.payload.sequence') OR EXISTS (
-         SELECT 1 FROM staged_fact_items other WHERE other.agent_id=row.agent_id AND other.graph_id=row.graph_id
-         AND other.fact_set_digest=row.fact_set_digest AND other.kind=row.kind AND other.parent_id=row.parent_id
-         AND other.fact_id<>row.fact_id AND json_extract(other.payload,'$.payload.sequence')=json_extract(row.payload,'$.payload.sequence')))
+    `SELECT 1 FROM staged_fact_items row WHERE ${where} AND row.kind=?
+     GROUP BY row.parent_id,json_extract(row.payload,'$.payload.sequence')
+     HAVING max(row.order_index<>json_extract(row.payload,'$.payload.sequence'))=1
+       OR (row.parent_id IS NOT NULL AND json_extract(row.payload,'$.payload.sequence') IS NOT NULL
+         AND count(DISTINCT row.fact_id)>1)
      LIMIT 1`, [...scope, kind], `${kind}_ordering_invalid`);
   requireNoRows(state,
     `SELECT 1 FROM staged_fact_items row WHERE ${where} AND row.kind='item' AND

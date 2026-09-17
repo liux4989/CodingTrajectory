@@ -5,6 +5,29 @@ Measured locally against the exact frozen, privacy-reviewed export: **30 session
 production writes or raw-session output. The private input remains outside Git;
 [aggregate results](pilot-query-benchmark-2026-09-17.json) include its SHA-256.
 
+## Follow-up: grouped validation selected
+
+The next comparison on the same export selected grouped item/turn validation,
+now implemented locally in `facts.ts`. Item validation fell from **2.655 s /
+29,774,000 VM steps** to **35.0 ms / 300,100 steps** (about 99x fewer steps).
+The index alternative took 17.0 ms / 187,400 steps, but adds persistent index
+maintenance. Grouping avoids that write cost and requires no schema migration.
+Turn validation fell from 9.48 ms to 1.58 ms.
+
+Both paths accepted the full export. A transient local SQL equivalence experiment
+matched the old and new rejection decisions for 2,916 combinations of integer/null
+sequences, same/different parents and same/different fact IDs across both kinds.
+The grouped query preserves order-index mismatches, distinct-fact duplicates and
+NULL semantics; see [SQLite aggregates](https://www.sqlite.org/lang_aggfunc.html).
+
+[Follow-up measurements](grouped-validation-benchmark-2026-09-17.json) identify the
+working source by SHA-256; `source_commit` is its parent revision at measurement.
+The earlier results below remain historical evidence. Neither repair is deployed.
+TypeScript and lint checks passed, as did all **4,993 existing local Worker
+integration checks**, including 107 byte-bounded pages and rejection/atomicity
+scenarios. The metrics gate skipped because no metric-sensitive paths changed.
+No unit tests were added.
+
 ## Results
 
 | Path | Current / before | Local alternative / after | Meaning |
@@ -55,9 +78,8 @@ replace publication integrity checks.
 
 1. Deploy the already-verified pagination patch, then use a small read after quota
    recovery rather than repeating whole-project verification.
-2. Fix item duplicate-order validation before another sizable upload. Compare a
-   grouped validation query against the index candidate before selecting a fix;
-   grouped validation may avoid adding write overhead. It is not measured here.
+2. Grouped item/turn validation is now selected and implemented locally; include
+   it with pagination in the next deployment. No additional index is needed.
 3. Reuse existing readers/batching for related same-scope reads and narrow scopes
    where possible. The cache benefit is real without a new persistent cache.
 4. Keep staging acknowledgment optimization lower priority for this small pilot:
@@ -74,6 +96,6 @@ PYTHONPATH=packages/core/src uv run --no-sync python scripts/benchmark-pilot-que
   /path/to/reviewed-export.json --output /path/to/aggregate-report.json
 ```
 
-The benchmark requires the pre-fix commit `aec71b0` in local Git history. It never
+The benchmark requires baseline commits `aec71b0` and `949f295` in local Git history. It never
 connects to Cloudflare and creates no persistent database. It fails if compared
 pages, accepted validations or acknowledgment results differ.

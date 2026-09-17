@@ -107,6 +107,8 @@ def main() -> None:
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
         "sqlite_version": sqlite3.sqlite_version,
+        "worker_source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "ordering_baseline_commit": "949f295",
         "export_sha256": hashlib.sha256(raw).hexdigest(),
         "scope": {
             "graphs": len(facts),
@@ -116,10 +118,15 @@ def main() -> None:
         },
         "units": "local wall time and approximate SQLite VM steps; not billing counters",
     }
-    # Extract the current production query verbatim, resolving its SQL scope.
+    # Keep the correlated baseline pinned while measuring the current repair.
+    baseline_source = subprocess.check_output(
+        ["git", "show", "949f295:cloudflare/control-plane/src/facts.ts"],
+        cwd=ROOT,
+        text=True,
+    )
     ordering = re.search(
         r"`(SELECT 1 FROM staged_fact_items row WHERE \$\{where\} AND row.kind=\? AND.*?)`",
-        source,
+        baseline_source,
         re.DOTALL,
     ).group(1)
     ordering = ordering.replace(
@@ -138,7 +145,7 @@ def main() -> None:
     for kind in ("turn", "item"):
         result, metrics = measure(lambda kind=kind: validation(kind))
         assert not any(result)
-        report["ordering_validation"][kind] = {"current": metrics}
+        report["ordering_validation"][kind] = {"correlated_baseline": metrics}
     sql.execute(
         "CREATE INDEX benchmark_parent_sequence ON staged_fact_items(agent_id,graph_id,fact_set_digest,kind,parent_id,json_extract(payload,'$.payload.sequence'))"
     )
@@ -147,6 +154,29 @@ def main() -> None:
         assert not any(result)
         report["ordering_validation"][kind]["candidate_index"] = metrics
     sql.execute("DROP INDEX benchmark_parent_sequence")
+
+    grouped = (
+        re.search(
+            r"`(SELECT 1 FROM staged_fact_items row WHERE \$\{where\} AND row.kind=\?\s+GROUP BY.*?)`",
+            source,
+            re.DOTALL,
+        )
+        .group(1)
+        .replace("${where}", "agent_id=? AND graph_id=? AND fact_set_digest=?")
+    )
+    for kind in ("turn", "item"):
+
+        def grouped_validation(kind=kind):
+            return [
+                sql.execute(
+                    grouped, (AGENT, str(f.graph_id), f.fact_set_digest, kind)
+                ).fetchall()
+                for f in facts
+            ]
+
+        result, metrics = measure(grouped_validation)
+        assert not any(result)
+        report["ordering_validation"][kind]["grouped_no_new_index"] = metrics
 
     missing = re.search(
         r"`(SELECT batch.batch_index FROM staged_fact_rows batch.*?)`",
