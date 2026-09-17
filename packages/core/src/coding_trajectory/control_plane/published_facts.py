@@ -551,10 +551,11 @@ class PublishedFactSet(FactModel):
             self.fact_set_digest
         ):
             raise ValueError("fact set digest mismatch")
-        encoded = canonical_json(self.model_dump(mode="json", exclude_none=True))
+        dumped = self.model_dump(mode="json", exclude_none=True)
+        encoded = canonical_json(dumped)
         if len(encoded.encode()) > MAX_FACT_SET_BYTES:
             raise ValueError("fact set exceeds the 16 MiB bound")
-        _reject_embedded_content(self.model_dump(mode="json", exclude_none=True))
+        _reject_embedded_content(dumped)
         return self
 
 
