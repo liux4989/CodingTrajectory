@@ -243,6 +243,21 @@ def qualify(root: Path, url: str) -> dict[str, object]:
     first = rpc(url, TOKENS["owner"], "ct_workspace_replace", execute)["data"]
     check(first["sql_reset"] is True, "target SQL reset completed")
     check(first["deleted"] == 4000 and not first["complete"], "R2 reset is bounded")
+    blocked = rpc(
+        url,
+        TOKENS["owner"],
+        "ct_project_register",
+        {
+            "workspace_id": str(WORKSPACE),
+            "agent_id": str(AGENT),
+            "display_name": "Blocked while replacement is incomplete",
+        },
+        status=409,
+    )
+    check(
+        blocked["error"]["code"] == "workspace_replacement_incomplete",
+        "normal collection is blocked while reset is incomplete",
+    )
     snapshot = rpc(
         url,
         TOKENS["owner"],
@@ -254,10 +269,27 @@ def qualify(root: Path, url: str) -> dict[str, object]:
         "target SQL remains reset after partial R2 cleanup",
     )
     verify_replacement(other, url=url, access_token=TOKENS["owner_b"])
+    # Discard the successful response after server completion, then make the
+    # exact retry a client would make after a lost response.
+    lost = httpx.post(
+        url + "/v1/core",
+        headers={"Authorization": "Bearer " + TOKENS["owner"]},
+        json={
+            "protocol": "ct.core.v1",
+            "id": None,
+            "method": "ct_workspace_replace",
+            "params": execute,
+        },
+        timeout=60,
+    )
+    check(lost.status_code == 200, "server completed reset before response loss")
     second = rpc(url, TOKENS["owner"], "ct_workspace_replace", execute)["data"]
     check(
-        second["deleted"] == 103 and second["complete"],
-        "exact reset resumes to completion",
+        second["deleted"] == 0
+        and second["complete"]
+        and second["already_complete"]
+        and not second["sql_reset"],
+        "lost completion response retry is non-destructive",
     )
     verify_replacement(other, url=url, access_token=TOKENS["owner_b"])
 
@@ -290,6 +322,24 @@ def qualify(root: Path, url: str) -> dict[str, object]:
     )
     repeated = import_replacement(target, url=url, access_token=TOKENS["owner"])
     check(repeated == imported, "committed import retry is idempotent")
+    before_repeat = rpc(
+        url,
+        TOKENS["owner"],
+        "ct_workspace_snapshot",
+        {"workspace_id": str(WORKSPACE)},
+    )["data"]
+    protected = rpc(url, TOKENS["owner"], "ct_workspace_replace", execute)["data"]
+    check(
+        protected["deleted"] == 0
+        and protected["already_complete"]
+        and not protected["sql_reset"],
+        "execute after import is non-destructive",
+    )
+    after_repeat = verify_replacement(target, url=url, access_token=TOKENS["owner"])
+    check(
+        after_repeat["snapshot_sequence"] == before_repeat["snapshot_sequence"],
+        "execute after import preserves replacement SQL and R2",
+    )
     verify_replacement(other, url=url, access_token=TOKENS["owner_b"])
     return {
         "status": "ok",
@@ -301,7 +351,9 @@ def qualify(root: Path, url: str) -> dict[str, object]:
         "objects": target.manifest.object_count,
         "bytes": target.manifest.total_bytes,
         "first_reset_deleted": first["deleted"],
-        "resumed_reset_deleted": second["deleted"],
+        "completion_deleted_before_lost_response": 103,
+        "lost_response_retry_deleted": second["deleted"],
+        "post_import_retry_deleted": protected["deleted"],
         "other_workspace_verified": True,
     }
 

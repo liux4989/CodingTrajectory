@@ -4,7 +4,14 @@ import { artifactManifests, artifactReadLocator, claimArtifactUpload, cleanupArt
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { commitPublication, factRead, initializeFacts, missingFactRows, preparePublication, verifyStageRows, writeStagedRows } from "./facts";
 import { livingRead, livingWrite } from "./living";
-import { deleteWorkspaceArtifactPrefix, previewWorkspaceReplacement } from "./replacement";
+import { deleteWorkspaceArtifactPrefix, initializeReplacement, markWorkspaceReplacement, previewWorkspaceReplacement, workspaceReplacement } from "./replacement";
+
+const REPLACEMENT_MUTATIONS = new Set([
+  "ct_project_register", "ct_collector_register_source", "ct_collector_publish_observation",
+  "ct_collector_missing_fact_rows", "ct_collector_stage_fact_rows", "ct_collector_publish_facts",
+  "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation",
+  "ct_internal_artifact_claim",
+]);
 
 /** A workspace is the authorization, transaction and revision boundary. */
 export class Workspace extends DurableObject<Env> {
@@ -21,6 +28,7 @@ export class Workspace extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       initializeFacts(this.state);
       initializeArtifacts(this.state);
+      initializeReplacement(this.state);
     });
   }
 
@@ -54,15 +62,36 @@ export class Workspace extends DurableObject<Env> {
         }
         requireThat(request.mode === "execute", "workspace_replacement_mode_invalid");
         return this.ctx.blockConcurrencyWhile(async () => {
-          await this.ctx.storage.deleteAll();
-          this.state = new State(this.ctx.storage.sql);
-          this.initialize();
+          const prior = workspaceReplacement(this.state);
+          const same = prior != null && prior.workspace_id === request.workspace_id
+            && prior.export_sha256 === request.expected_export_sha256;
+          if (prior && same && prior.status === "complete") {
+            return { status: 200, body: {
+              workspace_id: request.workspace_id, sql_reset: false,
+              prefix: `workspaces/${request.workspace_id}/artifacts/`,
+              deleted: 0, complete: true, already_complete: true,
+            } };
+          }
+          const resetSql = !same;
+          if (!same) {
+            await this.ctx.storage.deleteAll();
+            this.state = new State(this.ctx.storage.sql);
+            this.initialize();
+            markWorkspaceReplacement(this.state, request.workspace_id,
+              request.expected_export_sha256, "incomplete");
+          }
+          const deletion = await deleteWorkspaceArtifactPrefix(this.env, request.workspace_id);
+          markWorkspaceReplacement(this.state, request.workspace_id,
+            request.expected_export_sha256, deletion.complete ? "complete" : "incomplete");
           return { status: 200, body: {
-            workspace_id: request.workspace_id, sql_reset: true,
-            ...await deleteWorkspaceArtifactPrefix(this.env, request.workspace_id),
+            workspace_id: request.workspace_id, sql_reset: resetSql,
+            ...deletion, already_complete: false,
           } };
         });
       }
+      const replacement = workspaceReplacement(this.state);
+      requireThat(replacement?.status !== "incomplete" || !REPLACEMENT_MUTATIONS.has(method),
+        "workspace_replacement_incomplete", 409);
       if (method === "ct_internal_artifact_claim") {
         requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
         requireThat(["facts", "summary"].includes(request.kind)

@@ -65,6 +65,15 @@ With `W` as the confirmed workspace, replacement clears:
    most four 1,000-key pages. It always relists from the prefix start, so the
    same exact request safely resumes after interruption or an incomplete batch.
 
+Before deleting R2, the target Durable Object persists the exact workspace and
+export identity with `incomplete` status. While incomplete, normal collector
+mutations and artifact claims are rejected. Completion is persisted before the
+response is returned. Every later execute for that same workspace/export is a
+non-destructive success (`already_complete: true`, zero deletion, no SQL reset),
+including a retry after a lost completion response or after import. A newly
+approved export hash is a distinct destructive replacement and must repeat the
+full approval process.
+
 It preserves principal/cursor secrets, deployed bindings and configuration,
 the Durable Object namespace/class, all other workspace Durable Objects, and
 all other R2 prefixes. It does not reset or reduce Cloudflare daily read/write
@@ -117,9 +126,15 @@ These commands are a future runbook, not authorization to run them now.
    There is no automatic retry or busy loop. A missing response has unknown
    outcome: preview/snapshot the exact target before deciding whether to rerun.
    If `complete` is false, inspect the returned count and explicitly repeat the
-   same command. Repetition resets only the same target and resumes its prefix.
-6. Require snapshot zero, empty project inventory, and `complete: true`, then
-   import. Import uses only normal authenticated project/source/checkpoint,
+   same command. Repetition resumes the same prefix without another SQL reset.
+   If the successful response is lost, the exact retry returns
+   `already_complete: true` without touching replacement data.
+6. Require snapshot zero, empty project inventory, and `complete: true`. Disable
+   both `CT_REPLACEMENT_*` gates immediately and verify the method is unavailable
+   **before import**. This operational teardown is defense in depth; the durable
+   completion record already makes an accidentally repeated authorized execute
+   non-destructive.
+7. Import using only normal authenticated project/source/checkpoint,
    immutable upload, and atomic artifact-publication APIs:
 
    ```bash
@@ -133,12 +148,11 @@ These commands are a future runbook, not authorization to run them now.
    retry reuses its receipt. Resume is refused unless remote inventory is empty
    or consists of the sole exact frozen project, and complete source inventory
    is still enforced by publication.
-7. Run `verify` with the same confirmations. It pins a snapshot, verifies the
+8. Run `verify` with the same confirmations. It pins a snapshot, verifies the
    sole project and complete graph/reference metadata, exact object count/bytes,
    and performs only the minimum artifact content reads: facts and summary for
    the first graph.
-8. Disable both replacement gates and remove the bearer from the environment.
-   Verify the replacement method is unavailable. Do not add a scheduler.
+9. Remove the bearer from the environment. Do not add a scheduler.
 
 ## Offline qualification
 
@@ -157,10 +171,12 @@ PYTHONPATH=packages/core/src uv run python \
 
 The qualification proves exact preview counts; role/workspace/hash/confirmation
 rejection; target-only SQL and R2 deletion; a 4,000-object bound followed by
-explicit 103-object resume; unrelated-workspace survival before and after both
-calls and import; privacy rejection; import continuation after project
-registration; committed retry idempotency; exact counts/bytes; and minimum
-facts/summary reads. All fixtures are synthetic and remain offline.
+explicit 103-object resume; collector rejection during the incomplete state;
+lost-completion-response retry; non-destructive execute after import;
+unrelated-workspace survival before and after reset and import; privacy
+rejection; import continuation after project registration; committed retry
+idempotency; exact counts/bytes; and minimum facts/summary reads. All fixtures
+are synthetic and remain offline.
 
 Inactive workspaces still receive no scheduled maintenance. Abandoned objects
 or claims can remain until a changed publication or an explicitly authorized

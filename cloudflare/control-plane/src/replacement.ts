@@ -6,8 +6,36 @@ const TABLES = [
   "sequence", "records", "resources", "staged_fact_rows", "fact_rows",
   "fact_schema", "staged_fact_items", "staged_fact_generations",
   "validated_fact_graphs", "artifact_manifests", "artifact_cleanup",
-  "artifact_upload_claims",
+  "artifact_upload_claims", "workspace_replacement",
 ] as const;
+
+type ReplacementStatus = {
+  workspace_id: string;
+  export_sha256: string;
+  status: "incomplete" | "complete";
+};
+
+export function initializeReplacement(state: State) {
+  state.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_replacement (
+    id INTEGER PRIMARY KEY CHECK (id=1), workspace_id TEXT NOT NULL,
+    export_sha256 TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('incomplete','complete'))
+  )`);
+}
+
+export function workspaceReplacement(state: State): ReplacementStatus | undefined {
+  return state.sql.exec<ReplacementStatus>(
+    "SELECT workspace_id,export_sha256,status FROM workspace_replacement WHERE id=1",
+  ).toArray()[0];
+}
+
+export function markWorkspaceReplacement(
+  state: State, workspaceId: string, exportSha256: string, status: "incomplete" | "complete",
+) {
+  state.sql.exec(`INSERT INTO workspace_replacement VALUES(1,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,
+      export_sha256=excluded.export_sha256,status=excluded.status`,
+  workspaceId, exportSha256, status);
+}
 
 export function replacementPrefix(workspaceId: string): string {
   return `workspaces/${workspaceId}/artifacts/`;
@@ -30,6 +58,7 @@ export async function previewWorkspaceReplacement(
   return {
     mode: "preview", workspace_id: workspaceId, expected_export_sha256: exportSha256,
     sql: { delete_all: true, tables, record_kinds: recordKinds },
+    replacement: workspaceReplacement(state) ?? null,
     r2: objects,
     preserved: ["CT_PRINCIPALS", "CT_CURSOR_KEY", "WORKSPACES binding",
       "ARTIFACTS binding", "other workspace Durable Objects", "other R2 prefixes"],
