@@ -10,8 +10,10 @@ owned exactly once.
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
+from threading import Lock
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -149,6 +151,49 @@ class LocalPublishedFactRepository:
             save()
 
 
+class RemoteFactCache:
+    """Small process-local cache of immutable, integrity-checked fact sets.
+
+    The HTTP factory authenticates and pins a snapshot before giving a repository
+    access. Serialized values prevent mutable handler views escaping a request.
+    """
+
+    def __init__(self, *, max_bytes: int = 32 * 1024 * 1024, max_entries: int = 4):
+        self._max_bytes = max_bytes
+        self._max_entries = max_entries
+        self._values: OrderedDict[tuple[str, str, int, str], bytes] = OrderedDict()
+        self._bytes = 0
+        self._lock = Lock()
+
+    def get(self, key: tuple[str, str, int, str]) -> list[PublishedFactSet] | None:
+        with self._lock:
+            value = self._values.get(key)
+            if value is None:
+                return None
+            self._values.move_to_end(key)
+        return [PublishedFactSet.model_validate(item) for item in json.loads(value)]
+
+    def put(
+        self, key: tuple[str, str, int, str], facts: list[PublishedFactSet]
+    ) -> None:
+        value = json.dumps(
+            [fact.model_dump(mode="json") for fact in facts], separators=(",", ":")
+        ).encode()
+        if len(value) > self._max_bytes or self._max_entries < 1:
+            return
+        with self._lock:
+            previous = self._values.pop(key, None)
+            if previous is not None:
+                self._bytes -= len(previous)
+            while self._values and (
+                self._bytes + len(value) > self._max_bytes
+                or len(self._values) >= self._max_entries
+            ):
+                self._bytes -= len(self._values.popitem(last=False)[1])
+            self._values[key] = value
+            self._bytes += len(value)
+
+
 class CloudflareFactRepository:
     """Fetch selected SQL fact pages from the remote workspace authority."""
 
@@ -158,12 +203,16 @@ class CloudflareFactRepository:
         client: CloudflareRpcClient,
         workspace_id: UUID,
         snapshot_sequence: int | None = None,
+        cache: RemoteFactCache | None = None,
+        authenticated_cache_identity: str | None = None,
     ) -> None:
         if snapshot_sequence is not None and snapshot_sequence < 0:
             raise ValueError("snapshot_sequence must not be negative")
         self._client = client
         self.workspace_id = workspace_id
         self.snapshot_sequence = snapshot_sequence
+        self._cache = cache
+        self._cache_identity = authenticated_cache_identity
         self._indexes: dict[str, tuple[FactIndex, str]] = {}
 
     def close(self) -> None:
@@ -185,7 +234,26 @@ class CloudflareFactRepository:
         scope = fact_read_scope(validated)
         key = json.dumps(scope, sort_keys=True, default=str)
         if key not in self._indexes:
-            fact_sets = self._read_fact_sets(scope)
+            cache_key = (
+                (
+                    self._cache_identity,
+                    str(self.workspace_id),
+                    self.snapshot_sequence,
+                    key,
+                )
+                if self._cache_identity is not None
+                and self.snapshot_sequence is not None
+                else None
+            )
+            fact_sets = (
+                self._cache.get(cache_key)
+                if self._cache is not None and cache_key is not None
+                else None
+            )
+            if fact_sets is None:
+                fact_sets = self._read_fact_sets(scope)
+                if self._cache is not None and cache_key is not None:
+                    self._cache.put(cache_key, fact_sets)
             self._indexes[key] = (
                 FactIndex.from_fact_sets(fact_sets),
                 f"remote workspace snapshot {self.snapshot_sequence}",
