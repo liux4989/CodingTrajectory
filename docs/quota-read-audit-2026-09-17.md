@@ -34,6 +34,9 @@ Local verification:
 These local measurements are not Cloudflare billing counters. The patch is
 committed but not deployed; the deployed Worker and current quota remain unchanged.
 
+Actual seven-day workload measurements are now recorded in the
+[local benchmark report](pilot-query-benchmark-2026-09-17.md).
+
 ## Other findings, in practical priority order
 
 | Finding | Evidence | Smallest next action |

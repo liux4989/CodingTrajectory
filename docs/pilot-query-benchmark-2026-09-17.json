@@ -1,0 +1,104 @@
+{
+  "source_commit": "002800d2334ea15863e752e35a7a2e2240844ac3",
+  "sqlite_version": "3.49.1",
+  "export_sha256": "bb64366e3c4c4a4cb7c078fd236bcf7c1d5e4f162c1647732114ae18632853c0",
+  "scope": {
+    "graphs": 29,
+    "rows": 29681,
+    "kind_counts": {
+      "edge": 1,
+      "event": 15886,
+      "graph": 29,
+      "item": 5752,
+      "measurement": 30,
+      "model": 14,
+      "output_evidence": 4961,
+      "request": 1324,
+      "runtime": 1469,
+      "session": 30,
+      "turn": 185
+    },
+    "batches": 73
+  },
+  "units": "local wall time and approximate SQLite VM steps; not billing counters",
+  "ordering_validation": {
+    "turn": {
+      "current": {
+        "median_seconds": 0.008688,
+        "median_vm_steps_approx": 58100,
+        "runs": 3
+      },
+      "candidate_index": {
+        "median_seconds": 0.001403,
+        "median_vm_steps_approx": 9300,
+        "runs": 3
+      }
+    },
+    "item": {
+      "current": {
+        "median_seconds": 2.477585,
+        "median_vm_steps_approx": 29774000,
+        "runs": 3
+      },
+      "candidate_index": {
+        "median_seconds": 0.014899,
+        "median_vm_steps_approx": 187400,
+        "runs": 3
+      }
+    }
+  },
+  "staging_acknowledgments": {
+    "current": {
+      "seconds": 0.009949999999999997,
+      "vm_steps_approx": 354800
+    },
+    "metadata_candidate": {
+      "seconds": 0.0001969999999999997,
+      "vm_steps_approx": 1300
+    },
+    "normalized_rows_recounted": 115697,
+    "batch_metadata_rows_returned": 241,
+    "candidate_condition": "Valid transactional stage data only; full integrity verification must remain before publication"
+  },
+  "repository_repeated_reads": {
+    "separate_repositories": {
+      "calls": 57,
+      "fact_rows_delivered": 89043,
+      "row_array_bytes_delivered": 57304281,
+      "seconds": 6.861615,
+      "requests": 3
+    },
+    "shared_repository": {
+      "calls": 19,
+      "fact_rows_delivered": 29681,
+      "row_array_bytes_delivered": 19101427,
+      "seconds": 1.839908,
+      "requests": 3
+    }
+  },
+  "write_amplification": {
+    "staged_fact_inserts": 29681,
+    "published_fact_inserts": 29681,
+    "staged_fact_deletes": 29681,
+    "logical_fact_mutations": 89043,
+    "excluded": "batch/generation/receipt metadata, retries, canary, and all index maintenance; not actual Cloudflare writes",
+    "candidate_index_extra_entries": 29681,
+    "candidate_index_note": "One additional full index entry per staged fact; creation, subsequent inserts and deletes add work"
+  },
+  "pagination": {
+    "before": {
+      "median_seconds": 2.265511,
+      "median_vm_steps_approx": 41642800,
+      "runs": 3
+    },
+    "after": {
+      "median_seconds": 0.038321,
+      "median_vm_steps_approx": 480800,
+      "runs": 3
+    },
+    "pages": 19,
+    "new_matching_candidates": 29699,
+    "exact_page_equality": true,
+    "excludes": "graph discovery, HTTP, cursor signing; uses only present fact kinds"
+  }
+}
