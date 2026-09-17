@@ -1,0 +1,70 @@
+{
+  "schema_version": "ct.artifact-replacement-retry-qualification.v1",
+  "recorded_at": "2026-09-17",
+  "base": "924a07705e84e11a7cbf19722af612afb2251599",
+  "qualified_successor": "eb290faf86ff06b186c3afec4f5f9f9a3e9eacc6",
+  "production_actions": [],
+  "changed_file_sha256": {
+    "cloudflare/control-plane/src/replacement.ts": "ab0f34d820f8df428f6fca3628a5e13d07d5763ed35e1ad262ce1c4c5310ff31",
+    "cloudflare/control-plane/src/workspace.ts": "6e57bd1cfbe3c3d0eb0c66b579834ef6a804ec498852890249c0b43507ba643c",
+    "docs/artifact-replacement-workflow.md": "35ef864a061a1fa01ad6888fe3f806e86c5306a3e923a32fc616265c074b6365",
+    "scripts/qualify-artifact-replacement.py": "48b7295a21ff95ba0de2d58671cebfa8c1ecb5204bbf86a0e8f3825600900ba0"
+  },
+  "unchanged_from_initial_tooling_commit": [
+    "cloudflare/control-plane/src/env.d.ts",
+    "cloudflare/control-plane/src/index.ts",
+    "packages/core/src/coding_trajectory/control_plane/artifact_replacement.py",
+    "scripts/artifact-replacement.py"
+  ],
+  "replacement_qualification": {
+    "command": "PYTHONPATH=packages/core/src uv run python scripts/qualify-artifact-replacement.py qualify /tmp/ct-replacement-successor --url http://127.0.0.1:8798",
+    "captured_output_sha256": "c27970f78ef302971d119cf3a94bc4c5f7d3cdb867a124a3c3d22f78cfd8cd34",
+    "result": {
+      "status": "ok",
+      "checks": 31,
+      "workspace_id": "00000000-0000-0000-0000-000000000001",
+      "replacement_sha256": "e3091d5eb563dd7daf4c6aa4c27d5c3c18f08fbc2d5409534ed17adddae38f7c",
+      "sources": 1,
+      "graphs": 1,
+      "objects": 2,
+      "bytes": 8587,
+      "first_reset_deleted": 4000,
+      "completion_deleted_before_lost_response": 103,
+      "lost_response_retry_deleted": 0,
+      "post_import_retry_deleted": 0,
+      "other_workspace_verified": true
+    },
+    "verified": [
+      "initial exact target SQL reset and bounded R2 deletion",
+      "normal collection rejected while reset status is incomplete",
+      "incomplete exact retry resumes without another SQL reset",
+      "completion persisted before the discarded response",
+      "retry after lost completion response is a zero-delete no-op",
+      "replacement import and committed import retry succeed",
+      "same authorized execute after import preserves snapshot and artifact reads",
+      "other workspace remains intact throughout"
+    ]
+  },
+  "existing_artifact_qualification": {
+    "command": "CT_QUALIFY_URL=http://127.0.0.1:8799 PYTHONPATH=packages/core/src uv run python scripts/qualify-artifact-publication.py",
+    "captured_output_sha256": "0bd5b9458d2f77c3d14a5e162ae92ef7d7bdaa6599936c36f9214299ab282e9c",
+    "result": {
+      "status": "ok",
+      "checks": 34,
+      "snapshots": 4
+    }
+  },
+  "other_checks": {
+    "npm_run_check": "PASS: schemas and tsc --noEmit",
+    "ruff": "PASS: qualification harness lint and format",
+    "metrics_baselines": "PASS: four committed scenarios",
+    "metrics_gate": "PASS: skipped because no metric-sensitive paths changed",
+    "git_diff_check": "PASS"
+  },
+  "execution_dependencies": [
+    "fresh privacy-filtered seven-day Mac export remains unavailable",
+    "Mac source logs and account access remain unavailable to the orb",
+    "exact production workspace and destructive scope are not confirmed",
+    "no production reset, delete, upload, deployment, push, schedule or access change occurred"
+  ]
+}
