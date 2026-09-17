@@ -734,37 +734,43 @@ export async function factRead(state: State, request: Json, cursorSecret: string
       rows: [], graph_digests: {}, graph_fact_counts: {}, next_cursor: null };
   }
   const limit = integer(request.limit ?? FACT_READ_PAGE_MAX, 1, FACT_READ_PAGE_MAX);
-  const bindings: unknown[] = [JSON.stringify(graphIds), sequence, sequence];
-  let where = `WHERE graph_id IN (SELECT value FROM json_each(?))
-    AND valid_from_sequence <= ? AND (valid_to_sequence IS NULL OR valid_to_sequence >= ?)`;
-  if (kinds) { where += " AND kind IN (SELECT value FROM json_each(?))"; bindings.push(JSON.stringify(kinds)); }
-  if (after) {
-    where += " AND (graph_id > ? OR (graph_id = ? AND (kind > ? OR (kind = ? AND fact_id > ?))))";
-    bindings.push(after[0], after[0], after[1], after[1], after[2]);
+  type PageRow = { graph_id: string; kind: string; fact_id: string; payload: string; payload_bytes: number };
+  const page: PageRow[] = [];
+  let pageBytes = 2; // JSON array brackets; each subsequent row also needs a comma.
+  let hasMore = false;
+  // Seek each primary-key prefix directly. A workspace-wide IN/OR cursor query
+  // can rescan earlier facts; window functions also process the entire suffix.
+  // Consume synchronously and stop after one lookahead, including at byte limits.
+  readPage: for (const graphId of [...graphIds].sort()) {
+    if (after && graphId < after[0]) continue;
+    for (const kind of kinds ?? [...FACT_KINDS].sort()) {
+      if (after && graphId === after[0] && kind < after[1]) continue;
+      const afterId = after && graphId === after[0] && kind === after[1] ? after[2] : null;
+      const bindings: unknown[] = [graphId, kind, sequence, sequence];
+      if (afterId !== null) bindings.push(afterId);
+      const candidates = state.sql.exec<PageRow>(
+        `SELECT graph_id, kind, fact_id, payload, length(CAST(payload AS BLOB)) AS payload_bytes
+         FROM fact_rows WHERE graph_id=? AND kind=?
+         AND valid_from_sequence <= ? AND (valid_to_sequence IS NULL OR valid_to_sequence >= ?)
+         ${afterId === null ? "" : "AND fact_id > ?"}
+         ORDER BY fact_id LIMIT ?`, ...bindings as any[], limit - page.length + 1);
+      for (const row of candidates) {
+        const encodedBytes = row.payload_bytes + (page.length ? 1 : 0);
+        if (page.length === limit || pageBytes + encodedBytes > FACT_READ_PAGE_MAX_BYTES) {
+          hasMore = true;
+          break readPage;
+        }
+        page.push(row);
+        pageBytes += encodedBytes;
+      }
+    }
   }
-  const page = state.sql.exec<{ graph_id: string; kind: string; fact_id: string; payload: string }>(
-    `WITH ordered AS (
-       SELECT graph_id, kind, fact_id, payload, length(CAST(payload AS BLOB)) AS payload_bytes,
-         row_number() OVER (ORDER BY graph_id, kind, fact_id) AS row_number
-       FROM fact_rows ${where}
-     ), budgeted AS (
-       SELECT *, sum(payload_bytes) OVER (ORDER BY graph_id, kind, fact_id) AS cumulative_bytes
-       FROM ordered
-     )
-     SELECT graph_id, kind, fact_id, payload FROM budgeted
-     WHERE row_number <= ? AND cumulative_bytes + row_number <= ?
-     ORDER BY graph_id, kind, fact_id`, ...bindings as any[], limit, FACT_READ_PAGE_MAX_BYTES - 1).toArray();
   if (!page.length) {
     return { workspace_id: request.workspace_id, snapshot_sequence: sequence,
       rows: [], graph_digests: digests, graph_fact_counts: counts, next_cursor: null };
   }
   const rows = page.map(row => JSON.parse(row.payload));
   const last = page[page.length - 1];
-  const moreBindings = [...bindings, last.graph_id, last.graph_id, last.kind, last.kind, last.fact_id];
-  const hasMore = state.sql.exec<{ present: number }>(
-    `SELECT 1 AS present FROM fact_rows ${where}
-     AND (graph_id > ? OR (graph_id = ? AND (kind > ? OR (kind = ? AND fact_id > ?)))) LIMIT 1`,
-    ...moreBindings as any[]).toArray().length > 0;
   return { workspace_id: request.workspace_id, snapshot_sequence: sequence, rows,
     graph_digests: digests, graph_fact_counts: counts,
     next_cursor: hasMore
