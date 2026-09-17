@@ -1,0 +1,88 @@
+{
+  "schema_version": "ct.artifact-replacement-qualification.v1",
+  "recorded_at": "2026-09-17",
+  "repository_base": "f9a55eba1751b5f3afde0b776e99a8f887bdf704",
+  "qualified_tooling_commit": "3ee7021fd44fe3d58c31f4f9d00fe1a5a07d9388",
+  "previous_deployed_runtime": "fdeb0b1f91f3e740b4df48707edf94329fdc9a8d",
+  "production_actions": [],
+  "environment": {
+    "platform": "linux-x64-orb",
+    "node": "v26.8.2",
+    "python": "3.12.14",
+    "wrangler": "4.129.1"
+  },
+  "file_sha256": {
+    "cloudflare/control-plane/src/env.d.ts": "c5fbd47870dde047b89703bfb6608ec3bf92d2956608505b5aac3d4f1b320b02",
+    "cloudflare/control-plane/src/index.ts": "a863007e31abf2d03d768ef4cb320531cd63defc728c3f76ca27fa54b4f9ebcb",
+    "cloudflare/control-plane/src/replacement.ts": "376ec0292651ab227f3a9076bb35cb6989f731f2c8767548ac3102c2b7cc0822",
+    "cloudflare/control-plane/src/workspace.ts": "36c7bc85b39074a9c8526036631c830a7ed3018443b9520eecc3a06944da17d2",
+    "docs/artifact-replacement-workflow.md": "947e9366f53d1ee6e767c77b895a5c113e848923c1704a99821d9260324cfa96",
+    "packages/core/src/coding_trajectory/control_plane/artifact_replacement.py": "f3c81eced0eb317b59550abaa8ede00f25d8dd7db312422833d76392648388cf",
+    "scripts/artifact-replacement.py": "19fa573d237ccba3755dc9525126e9ff3471c6257c95cc51f6ffd5f95ce084ec",
+    "scripts/qualify-artifact-replacement.py": "821906d5668a594630f8699917c796bd92f54d051d0d5fc17bfbd06c7e6bea31"
+  },
+  "qualification": {
+    "replacement": {
+      "command": "PYTHONPATH=packages/core/src uv run python scripts/qualify-artifact-replacement.py qualify /tmp/ct-replacement-qualification --url http://127.0.0.1:8796",
+      "fixture": "synthetic disposable loopback Wrangler Durable Objects and R2; two workspaces",
+      "result": {
+        "status": "ok",
+        "checks": 24,
+        "workspace_id": "00000000-0000-0000-0000-000000000001",
+        "replacement_sha256": "e3091d5eb563dd7daf4c6aa4c27d5c3c18f08fbc2d5409534ed17adddae38f7c",
+        "sources": 1,
+        "graphs": 1,
+        "objects": 2,
+        "bytes": 8587,
+        "first_reset_deleted": 4000,
+        "resumed_reset_deleted": 103,
+        "other_workspace_verified": true
+      },
+      "captured_output_sha256": "de1f71426d67f61c055b17c9133dc5be183a8638e5edd374e3ec4cb9bd6cbaad"
+    },
+    "existing_artifact_publication": {
+      "command": "CT_QUALIFY_URL=http://127.0.0.1:8797 PYTHONPATH=packages/core/src uv run python scripts/qualify-artifact-publication.py",
+      "result": {
+        "status": "ok",
+        "checks": 34,
+        "snapshots": 4
+      },
+      "captured_output_sha256": "0bd5b9458d2f77c3d14a5e162ae92ef7d7bdaa6599936c36f9214299ab282e9c"
+    },
+    "typescript": {
+      "command": "npm run check",
+      "result": "PASS: generated schemas and tsc --noEmit"
+    },
+    "python": {
+      "command": "uv run ruff check ... && uv run ruff format --check ...",
+      "result": "PASS"
+    },
+    "metrics": {
+      "baseline_command": "uv run python scripts/validate-metrics-baselines.py",
+      "baseline_result": "PASS: 4 scenarios",
+      "gate_command": "scripts/check-metrics-quality-gate.sh",
+      "gate_result": "PASS: skipped because no metric-sensitive path changed"
+    },
+    "whitespace": {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  },
+  "verified_boundaries": [
+    "exact owner/workspace/export/confirmation gate",
+    "target Durable Object SQL only",
+    "target workspaces/<workspace>/artifacts/ R2 prefix only",
+    "bounded reset with explicit interruption resume",
+    "unrelated workspace preserved",
+    "validated seven-day published-facts-only bundle",
+    "partial import continuation and committed retry",
+    "exact project, graph, object count and byte verification",
+    "minimum one-graph facts and summary post-upload reads"
+  ],
+  "unverified_or_external_dependencies": [
+    "fresh privacy-filtered seven-day Mac export is not prepared",
+    "secure target-scoped owner access and exact destructive scope are not confirmed",
+    "last production preflight was quota-blocked; recovery was not checked in this phase",
+    "no production reset, delete, upload, deployment, push, schedule, credential change or raw-log access occurred"
+  ]
+}
