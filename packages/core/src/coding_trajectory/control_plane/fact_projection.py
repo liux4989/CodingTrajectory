@@ -87,10 +87,12 @@ from coding_trajectory.ingestion.models import (
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
 
 if TYPE_CHECKING:
-    from coding_trajectory.control_plane.published_facts import PublishedFactSet
+    from coding_trajectory.control_plane.published_facts import (
+        FactRowBase,
+        PublishedFactSet,
+    )
 
 MAX_FACT_ITEM_EVENT_IDS = 64
-MAX_FACT_SESSION_EVENTS = 16384
 MAX_FACT_EVIDENCE_FIELDS = 8
 EVIDENCE_PROCESSOR_VERSION = 1
 _SYNTHETIC_REQUEST_NAMESPACE = uuid5(
@@ -488,10 +490,7 @@ class ChronicleSession(ChronicleModel):
     measurements: ChronicleSessionMeasurements = Field(
         default_factory=ChronicleSessionMeasurements
     )
-    events: list[ChronicleEvent] = Field(
-        default_factory=list,
-        max_length=MAX_FACT_SESSION_EVENTS,
-    )
+    events: list[ChronicleEvent] = Field(default_factory=list)
     turns: list[ChronicleTurn] = Field(default_factory=list)
 
 
@@ -544,6 +543,16 @@ class ChronicleCoverage(ChronicleModel):
 def build_published_fact_set(session_graph: SessionGraph) -> PublishedFactSet:
     """Project one canonical graph directly onto bounded publication facts."""
 
+    from coding_trajectory.control_plane.published_facts import PublishedFactSet
+
+    return PublishedFactSet.from_rows(
+        session_graph.root_session_id, build_fact_rows(session_graph)
+    )
+
+
+def build_fact_rows(session_graph: SessionGraph) -> list[FactRowBase]:
+    """Project all graph facts without imposing publication transport budgets."""
+
     index = build_session_graph_index(session_graph)
     counter = counter_for_session_graph(session_graph)
     tokenizer = counter.name
@@ -582,10 +591,10 @@ def build_published_fact_set(session_graph: SessionGraph) -> PublishedFactSet:
     )
     edges = [_build_chronicle_edge(edge) for edge in session_graph.edges]
     from coding_trajectory.control_plane.published_facts import (
-        _assemble_published_fact_set,
+        _assemble_fact_rows,
     )
 
-    return _assemble_published_fact_set(
+    return _assemble_fact_rows(
         summary=summary,
         sessions=sessions,
         edges=edges,
@@ -1801,7 +1810,6 @@ def output_evidence_from_item(item: Item) -> ChronicleToolOutputEvidence | None:
 
 __all__ = [
     "MAX_FACT_ITEM_EVENT_IDS",
-    "MAX_FACT_SESSION_EVENTS",
     "ChronicleEdge",
     "ChronicleEvent",
     "ChronicleGraphSummary",
@@ -1812,6 +1820,7 @@ __all__ = [
     "ChronicleSessionMeasurements",
     "ChronicleToolOutputEvidence",
     "ChronicleTurn",
+    "build_fact_rows",
     "build_published_fact_set",
     "output_evidence_from_item",
 ]

@@ -1,7 +1,7 @@
 """One internal ``FactRepository`` contract for historical fact authorities.
 
-Local execution derives validated ``PublishedFactSet`` rows from canonical
-session graphs; remote execution fetches the same rows from the Cloudflare
+Local execution derives typed fact rows from canonical session graphs without
+publication size budgets; remote execution fetches the same rows from the Cloudflare
 authority. Both expose one indexed read view to the shared Python historical
 handlers, so summary, overview, search, metrics, and display semantics remain
 owned exactly once.
@@ -18,7 +18,10 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from coding_trajectory.contracts import service_contract
-from coding_trajectory.control_plane.fact_projection import build_published_fact_set
+from coding_trajectory.control_plane.fact_projection import (
+    build_fact_rows,
+    build_published_fact_set,
+)
 from coding_trajectory.control_plane.fact_protocol import (
     FACT_READ_PAGE_MAX,
     FactReadResponse,
@@ -61,13 +64,19 @@ def published_fact_set_for_store(store: DocumentStore) -> list[PublishedFactSet]
 
 
 def fact_index_for_store(store: DocumentStore) -> FactIndex:
-    """Project a canonical store once into the bounded historical read view."""
+    """Index every local fact independently of remote publication budgets."""
 
-    return FactIndex.from_fact_sets(published_fact_set_for_store(store))
+    return FactIndex.from_rows(
+        row
+        for graph in sorted(
+            store.session_graphs.values(), key=lambda graph: str(graph.root_session_id)
+        )
+        for row in build_fact_rows(graph)
+    )
 
 
 class LocalPublishedFactRepository:
-    """Serve historical reads from an in-memory published fact set."""
+    """Serve historical reads from all locally projected fact rows."""
 
     def __init__(
         self,

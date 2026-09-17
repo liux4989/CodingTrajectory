@@ -1,7 +1,7 @@
 """Typed bounded publication facts and direct canonical reconstruction.
 
-The ``PublishedFactSet`` is the single bounded representation consumed by both
-standard local and remote historical APIs. Facts never contain raw tool
+Local and remote historical APIs consume the same typed fact rows. Publication
+alone wraps them in a bounded ``PublishedFactSet``. Facts never contain raw tool
 input/output, command
 stdout/stderr, patch or file bodies, full prompts/transcripts/reasoning, raw
 event payloads, vendor_data blobs, media, secrets, or host-absolute paths.
@@ -15,6 +15,7 @@ non-integer numbers are normalized to decimal strings at derivation.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -478,6 +479,18 @@ class PublishedFactSet(FactModel):
     kind_counts: dict[str, int]
     rows: list[FactRow] = Field(max_length=MAX_FACT_ROWS_PER_GRAPH)
 
+    @classmethod
+    def from_rows(cls, graph_id: UUID, rows: list[FactRowBase]) -> PublishedFactSet:
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[row.kind] = counts.get(row.kind, 0) + 1
+        return cls(
+            graph_id=graph_id,
+            fact_set_digest=compute_fact_set_digest(graph_id, rows),
+            kind_counts=counts,
+            rows=rows,
+        )
+
     @model_validator(mode="after")
     def validate_integrity(self) -> PublishedFactSet:
         if not self.rows:
@@ -546,7 +559,7 @@ class PublishedFactSet(FactModel):
 
 @dataclass(slots=True)
 class FactIndex:
-    """Non-semantic read indexes over validated published fact rows."""
+    """Non-semantic read indexes over typed local or published fact rows."""
 
     _canonical_rows: tuple[FactRowBase, ...]
     _rows_by_kind: dict[str, tuple[FactRowBase, ...]]
@@ -565,6 +578,13 @@ class FactIndex:
             for fact_set in sorted(fact_sets, key=lambda value: str(value.graph_id))
             for row in fact_set.rows
         )
+        return cls.from_rows(rows)
+
+    @classmethod
+    def from_rows(cls, rows: Iterable[FactRowBase]) -> FactIndex:
+        """Index trusted typed rows without applying publication size budgets."""
+
+        rows = tuple(rows)
         by_kind: dict[str, list[FactRowBase]] = {}
         by_id: dict[tuple[UUID, UUID], list[FactRowBase]] = {}
         by_parent: dict[tuple[UUID, UUID], list[FactRowBase]] = {}
@@ -757,7 +777,24 @@ def _assemble_published_fact_set(
     edges: list[ChronicleEdge],
     coverage: ChronicleCoverage,
 ) -> PublishedFactSet:
-    """Assemble already-projected payloads into the typed fact contract."""
+    """Assemble already-projected payloads into the bounded publication contract."""
+
+    return PublishedFactSet.from_rows(
+        summary.root_session_id,
+        _assemble_fact_rows(
+            summary=summary, sessions=sessions, edges=edges, coverage=coverage
+        ),
+    )
+
+
+def _assemble_fact_rows(
+    *,
+    summary: ChronicleGraphSummary,
+    sessions: list[ChronicleSession],
+    edges: list[ChronicleEdge],
+    coverage: ChronicleCoverage,
+) -> list[FactRowBase]:
+    """Assemble every projected fact; publication budgets belong to the wrapper."""
 
     graph_id = summary.root_session_id
     rows: list[FactRowBase] = [
@@ -915,15 +952,7 @@ def _assemble_published_fact_set(
 
     rows.extend(_model_fact_rows(sessions, graph_id=graph_id))
     rows.sort(key=lambda row: (row.kind, str(row.fact_id)))
-    counts: dict[str, int] = {}
-    for row in rows:
-        counts[row.kind] = counts.get(row.kind, 0) + 1
-    return PublishedFactSet(
-        graph_id=graph_id,
-        fact_set_digest=compute_fact_set_digest(graph_id, rows),
-        kind_counts=counts,
-        rows=rows,
-    )
+    return rows
 
 
 def _model_fact_rows(
