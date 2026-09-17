@@ -50,6 +50,17 @@ function runtimeUsage() {
   const pieces = time.split(':').map(Number);
   return { cpu_ms: pieces.reduce((sum, part) => sum * 60 + part, 0) * 1000, rss_bytes: Number(rss) * 1024 };
 }
+function findRuntimePid() {
+  if (process.platform !== 'darwin') return undefined;
+  const rows = execFileSync('ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' }).trim().split('\n')
+    .map(line => line.trim().split(/\s+/, 3))
+    .map(([pid, parent, command]) => ({ pid: Number(pid), parent: Number(parent), command }));
+  const descendants = new Set([process.pid]);
+  for (let pass = 0; pass < rows.length; pass++) {
+    for (const row of rows) if (descendants.has(row.parent)) descendants.add(row.pid);
+  }
+  return rows.find(row => descendants.has(row.pid) && row.command?.endsWith('/workerd'))?.pid;
+}
 async function fetch(path, init = {}) {
   requests++;
   return mf.dispatchFetch(`http://local${path}`, init);
@@ -149,13 +160,11 @@ const report = {
 };
 
 try {
-  const processes = execFileSync('ps', ['-axo', 'pid,ppid,comm'], { encoding: 'utf8' });
-  runtimePid = processes.split('\n').map(line => line.trim().split(/\s+/))
-    .find(([, parent, command]) => Number(parent) === process.pid && command?.endsWith('/workerd'))?.[0];
-  report.environment.processSampling = runtimePid ? 'macOS ps cumulative process CPU and 50 ms RSS samples' : 'unavailable';
   const project = (await rpc('ct_project_register', { agent_id: agent, display_name: 'Artifact benchmark' }, 'project')).data;
   const source = (await rpc('ct_collector_register_source', { agent_id: agent, project_id: project.project_id,
     vendor: 'amp', native_session_id: 'artifact-benchmark' }, 'source')).data;
+  runtimePid = findRuntimePid();
+  report.environment.processSampling = runtimePid ? 'macOS ps cumulative process CPU and 50 ms RSS samples; shared workerd process, not isolate heap or billed CPU' : 'unavailable';
   const graphs = ['00000000-0000-0000-0000-000000000101', '00000000-0000-0000-0000-000000000102'];
   let sourceSequence = -1;
   async function checkpoint(revision) {
