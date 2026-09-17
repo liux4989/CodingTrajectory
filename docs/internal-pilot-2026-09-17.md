@@ -33,6 +33,13 @@ After quota reset or an approved upgrade, first read the workspace snapshot and
 again. The earlier inefficient publication scans may have contributed to quota
 consumption, but an account-wide usage breakdown was not established.
 
+## Latest deployment
+
+The [query-cost repair deployment](quota-fixes-deployment-2026-09-17.md) supersedes
+the Worker version below. Uploaded snapshot63 is unchanged by the deployment;
+fresh reads remain quota-blocked. The table below records the original successful
+upload build.
+
 ## Deployment and credentials
 
 | Item | Verified value |

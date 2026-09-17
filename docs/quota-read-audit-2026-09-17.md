@@ -1,5 +1,8 @@
 # Remote query cost review — 2026-09-17
 
+**Execution update:** the combined fixes are now [deployed](quota-fixes-deployment-2026-09-17.md).
+The findings and pre-deployment measurements below are historical evidence.
+
 The user requested two agents: one to fix pagination and one to audit other
 likely cost/failure risks. This work used local synthetic data only. No production
 probes, uploads, resets, billing changes or deployments were performed.

@@ -1,5 +1,8 @@
 # Seven-day session query benchmark — 2026-09-17
 
+**Execution update:** the combined fixes are now [deployed](quota-fixes-deployment-2026-09-17.md).
+The findings and pre-deployment measurements below are historical evidence.
+
 Measured locally against the exact frozen, privacy-reviewed export: **30 sessions,
 29 graphs, 29,681 facts and 73 staging batches**. No network calls, credentials,
 production writes or raw-session output. The private input remains outside Git;
