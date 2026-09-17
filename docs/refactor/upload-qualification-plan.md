@@ -113,9 +113,9 @@ The replacement path assumes one trusted publisher per workspace. Every upload
 first records a seven-day Durable Object claim, then writes the content-addressed
 R2 object. Bounded cleanup runs under that workspace object's concurrency barrier
 and protects retained manifests plus live claims; publication releases claims
-only after its complete manifest commits. This prevents an older cleanup from
-deleting a pending upload or an object that becomes visible in a newer manifest.
-A stalled upload may retain an orphan for seven days.
+in bounded batches only after its complete manifest commits. This prevents an
+older cleanup from deleting a pending upload or an object that becomes visible
+in a newer manifest. A stalled upload may retain an orphan for seven days.
 
 The authority HEAD-checks every novel or expired `(kind, sha256, bytes)`
 reference. An exact reference in one of the three retained manifests reuses that

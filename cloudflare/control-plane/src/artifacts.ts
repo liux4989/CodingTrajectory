@@ -29,13 +29,15 @@ export function initializeArtifacts(state: State) {
 /** Fence cleanup before an authenticated collector reads or writes an object. */
 export function claimArtifactUpload(state: State, kind: string, sha256: string) {
   const now = Math.floor(Date.now() / 1000);
-  state.sql.exec("DELETE FROM artifact_upload_claims WHERE expires_at<=?", now);
   state.sql.exec(`INSERT INTO artifact_upload_claims VALUES(?,?,?)
     ON CONFLICT(kind,sha256) DO UPDATE SET expires_at=excluded.expires_at`,
   kind, sha256, now + UPLOAD_CLAIM_SECONDS);
 }
 
-export interface ArtifactPublicationPlan { complete: true }
+export interface ArtifactPublicationPlan {
+  complete: true;
+  releaseClaims: Array<{ kind: string; sha256: string }>;
+}
 
 /** Verify all immutable objects and source fences before making a manifest visible. */
 export async function prepareArtifactPublication(
@@ -70,6 +72,7 @@ export async function prepareArtifactPublication(
     }
   }
   const graphIds = new Set<string>();
+  const releaseClaims: Array<{ kind: string; sha256: string }> = [];
   for (const graph of request.graphs) {
     requireThat(!graphIds.has(graph.graph_id), "duplicate_graph_publication");
     graphIds.add(graph.graph_id);
@@ -83,9 +86,10 @@ export async function prepareArtifactPublication(
         && head.customMetadata?.kind === object.kind
         && head.customMetadata?.sha256 === object.sha256,
       "artifact_upload_incomplete", 409);
+      releaseClaims.push({ kind: object.kind, sha256: object.sha256 });
     }
   }
-  return { complete: true };
+  return { complete: true, releaseClaims };
 }
 
 /** Commit one complete inventory and retain only a bounded rollback window. */
@@ -143,10 +147,13 @@ export function commitArtifactPublication(
       SELECT MIN(sequence) FROM records WHERE kind='artifact_project_publisher' AND key=?
       UNION SELECT workspace_sequence FROM artifact_manifests WHERE project_id=?)`,
   request.project_id, request.project_id, request.project_id);
-  for (const graph of request.graphs) {
-    for (const object of [graph.facts, graph.summary]) {
-      state.sql.exec("DELETE FROM artifact_upload_claims WHERE kind=? AND sha256=?",
-        object.kind, object.sha256);
+  for (const kind of ["facts", "summary"]) {
+    const hashes = plan.releaseClaims.filter(claim => claim.kind === kind)
+      .map(claim => claim.sha256);
+    for (let offset = 0; offset < hashes.length; offset += 50) {
+      const batch = hashes.slice(offset, offset + 50);
+      state.sql.exec(`DELETE FROM artifact_upload_claims WHERE kind=? AND sha256 IN
+        (${batch.map(() => "?").join(",")})`, kind, ...batch);
     }
   }
   return receipt("accepted", sequence, {
