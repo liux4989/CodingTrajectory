@@ -1,0 +1,162 @@
+{
+  "head": "3e7f03bee6b5f677d9c2cb3acc88c60463e95d01",
+  "localDiff": "",
+  "recordedAt": "2026-09-17T10:26:35.997Z",
+  "synthetic": true,
+  "scope": {
+    "graphs": 29,
+    "rowsPerGraph": 1,
+    "seededOrphans": 0
+  },
+  "units": "Disposable local workerd SQL cursor counters, instrumented R2 method calls, HTTP request count, wall time; process CPU/RSS only on macOS and not Cloudflare billing or isolate limits",
+  "harnessSha256": {
+    "benchmark-artifact-publication.mjs": "76d554b1f4bc4c57c5660ca14dcbaa69ee01073f0cc20d2f425e07346ad2045b",
+    "artifact-benchmark-worker.ts": "ec8433688b99560170b01c223335f34d89f575e7f208870bbd5ee7f174c05290"
+  },
+  "environment": {
+    "node": "v22.22.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "miniflare": "5.20260907.0-alpha",
+    "workerd": "1.20260907.1",
+    "processSampling": "macOS ps cumulative process CPU and 50 ms RSS samples; shared workerd process, not isolate heap or billed CPU"
+  },
+  "results": [
+    {
+      "scenario": "initial_publication",
+      "httpRequests": 59,
+      "wallMs": 124.77470900000003,
+      "processCpuMs": 80,
+      "processRssSampleMax": 96239616,
+      "sql": {
+        "calls": 26,
+        "rowsRead": 32,
+        "rowsWritten": 11,
+        "logicalChanges": 4,
+        "groups": {
+          "queries": {
+            "calls": 19,
+            "rowsRead": 18,
+            "rowsWritten": 0
+          },
+          "UPDATE sequence": {
+            "calls": 1,
+            "rowsRead": 2,
+            "rowsWritten": 1
+          },
+          "INSERT artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 0,
+            "rowsWritten": 4
+          },
+          "DELETE artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 2,
+            "rowsWritten": 0
+          },
+          "INSERT records": {
+            "calls": 2,
+            "rowsRead": 0,
+            "rowsWritten": 6
+          },
+          "DELETE records": {
+            "calls": 2,
+            "rowsRead": 10,
+            "rowsWritten": 0
+          }
+        }
+      },
+      "r2": {
+        "calls": {
+          "head": 116,
+          "put": 58,
+          "list": 1
+        },
+        "uploadedBytes": 20764
+      },
+      "retained": {
+        "entries": 58,
+        "bytes": 20764
+      }
+    },
+    {
+      "scenario": "unchanged_collector_run",
+      "httpRequests": 0,
+      "wallMs": 2.0212079999998878,
+      "processCpuMs": 0,
+      "processRssSampleMax": 98910208,
+      "sql": {
+        "calls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "logicalChanges": 0,
+        "groups": {}
+      },
+      "r2": {
+        "calls": {},
+        "uploadedBytes": 0
+      },
+      "retained": {
+        "entries": 58,
+        "bytes": 20764
+      }
+    },
+    {
+      "scenario": "one_changed_graph",
+      "httpRequests": 3,
+      "wallMs": 19.24412499999994,
+      "processCpuMs": 20,
+      "processRssSampleMax": 103333888,
+      "sql": {
+        "calls": 24,
+        "rowsRead": 38,
+        "rowsWritten": 11,
+        "logicalChanges": 4,
+        "groups": {
+          "queries": {
+            "calls": 17,
+            "rowsRead": 17,
+            "rowsWritten": 0
+          },
+          "UPDATE sequence": {
+            "calls": 1,
+            "rowsRead": 2,
+            "rowsWritten": 1
+          },
+          "INSERT artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 0,
+            "rowsWritten": 4
+          },
+          "DELETE artifact_manifests": {
+            "calls": 1,
+            "rowsRead": 4,
+            "rowsWritten": 0
+          },
+          "INSERT records": {
+            "calls": 2,
+            "rowsRead": 0,
+            "rowsWritten": 6
+          },
+          "DELETE records": {
+            "calls": 2,
+            "rowsRead": 15,
+            "rowsWritten": 0
+          }
+        }
+      },
+      "r2": {
+        "calls": {
+          "head": 60,
+          "put": 2,
+          "list": 1
+        },
+        "uploadedBytes": 716
+      },
+      "retained": {
+        "entries": 60,
+        "bytes": 21480
+      }
+    }
+  ]
+}

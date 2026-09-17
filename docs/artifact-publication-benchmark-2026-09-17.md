@@ -40,7 +40,11 @@ The [29-graph](artifact-publication-benchmark-2026-09-17-29-graphs.json) and
 [116-graph](artifact-publication-benchmark-2026-09-17-116-graphs.json) runs use
 one-row synthetic graph artifacts. Registration and checkpoint publication are
 outside the timed scenarios; these are artifact-path counts, not full collector
-lifecycle totals.
+lifecycle totals. Pinned macOS reruns are available for
+[29 graphs](artifact-publication-benchmark-2026-09-17-29-graphs-mac.json)
+(SHA-256 `988ac5b086ede504f46013caa4142536371a6992e50d432e3b71d28dbca89581`)
+and [116 graphs](artifact-publication-benchmark-2026-09-17-116-graphs-mac.json)
+(SHA-256 `e61f6870531fd2ecc823d09e07f62d952ca78d605578d0f63a5820017780a1f4`).
 
 | Graphs | Scenario | HTTP | SQL reads/writes | R2 calls | Uploaded / retained |
 | ---: | --- | ---: | ---: | --- | ---: |
@@ -48,6 +52,12 @@ lifecycle totals.
 | 29 | One changed | 3 | 38 / 11 | 60 head, 2 put, 1 list | 716 / 21,480 B |
 | 116 | Initial | 233 | 32 / 11 | 464 head, 232 put, 1 list | 83,056 / 83,056 B |
 | 116 | One changed | 3 | 38 / 11 | 234 head, 2 put, 1 list | 716 / 83,772 B |
+
+The Mac run measured initial/changed shared-workerd CPU at 80/20 ms for 29
+graphs and 230/50 ms for 116 graphs. Absolute shared-process RSS samples rose
+from 96.2 to 103.3 MB in the 29-graph process and from 125.6 to 143.7 MB in the
+116-graph process. These are 10 ms-resolution process samples, not per-scenario
+isolate heap or billed CPU.
 
 The unchanged operation callback is zero by construction after the real
 collector suppresses publication; it is not an end-to-end collector timing. The
@@ -59,6 +69,10 @@ The [cleanup run](artifact-cleanup-benchmark-2026-09-17.json) seeded 4,101
 unreferenced objects. Initial publication stopped at the four-page bound with
 103 orphans remaining; the next successful changed publication resumed from the
 stored cursor with one list/delete page and reached exactly six retained objects.
+The [pinned Mac cleanup run](artifact-cleanup-benchmark-2026-09-17-mac.json)
+(SHA-256 `56f3199e546d2759725614f0673f066b8a58f620d171664b1a903443f5f027f5`)
+reproduced those counts. Seeding occurred outside timing and drove the shared
+simulator process to roughly 354 MB RSS; this is not production memory evidence.
 
 ## Comparison and interpretation
 
