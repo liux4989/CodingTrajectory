@@ -97,3 +97,47 @@ Harness SHA-256:
   `76d554b1f4bc4c57c5660ca14dcbaa69ee01073f0cc20d2f425e07346ad2045b`
 - `artifact-benchmark-worker.ts`:
   `ec8433688b99560170b01c223335f34d89f575e7f208870bbd5ee7f174c05290`
+
+## Final successor evidence
+
+The reviewed runtime is `fdeb0b1f91f3e740b4df48707edf94329fdc9a8d`.
+Two independent reviews passed it within the documented single-publisher,
+sole-R2-mutator boundary. The exact Mac evidence is
+[2 graphs](artifact-successor-fdeb0b1-2-mac.json),
+[29 graphs](artifact-successor-fdeb0b1-29-mac.json),
+[116 graphs](artifact-successor-fdeb0b1-116-mac.json), and
+[cleanup](artifact-successor-fdeb0b1-cleanup-mac.json). Their SHA-256 values are,
+respectively, `9060f2315e3a722f2d465a05908063c4c15fa601bb8b8c7c26e0576b1345a013`,
+`7a3494719474dee722a8c2dd7601336aaccb8bb2ece6511f69ece0e3d63c2578`,
+`cff2e7751f8c7e803655baaf8d29c137c21e90f251fe39aa3c3f67a9c8df3bb8`,
+and `73cd8af19fc011f2cf9e30bf5f4e32c9da3afb9c752c2486b0308e1365f8af33`.
+
+| Graphs | Scenario | HTTP | SQL calls/reads/writes | R2 calls | Wall / process CPU |
+| ---: | --- | ---: | ---: | --- | ---: |
+| 29 | Initial | 59 | 85 / 148 / 185 | 116 head, 58 put, 1 list | 109.145 / 80 ms |
+| 29 | One changed | 3 | 27 / 39 / 17 | 4 head, 2 put, 1 list | 11.365 / 10 ms |
+| 116 | Initial | 233 | 263 / 496 / 707 | 464 head, 232 put, 1 list | 384.676 / 250 ms |
+| 116 | One changed | 3 | 27 / 39 / 17 | 4 head, 2 put, 1 list | 26.770 / 20 ms |
+
+The 4,101-orphan Mac run again stopped after four list/delete pages with 103
+orphans, then cleared them with one page on the next changed publication. The
+post-suppression unchanged phase performs zero remote operations but is not an
+end-to-end collector timer. The
+[exact qualifier record](artifact-successor-fdeb0b1-qualifier-mac.txt)
+functionally exercises the real collector, committed-response recovery without
+re-upload, and partial-upload invisibility.
+
+The follow-up [expiry qualification](artifact-successor-fdeb0b1-expiry-linux.json)
+uses benchmark-only SQL timestamp control against the unchanged `fdeb0b1`
+runtime. It verifies that a claim protects an object immediately before expiry,
+an unretained object is removed at expiry, and a retained object survives an
+expired claim. It also repeats the deterministic cleanup/upload interleaving.
+The production qualifier now additionally injects a lost upload response: an
+absent receipt causes complete re-upload and claim refresh, while a committed
+receipt causes exact replay without more uploads. Waiting more than seven days
+between a direct upload and publication is unsupported and requires re-upload.
+
+All of these are tiny one-row synthetic artifacts and local workerd/process
+measurements. Registration and checkpoints are outside timed scenarios; Mac RSS
+is the shared simulator process; no result establishes Cloudflare billing,
+Free-plan capacity, or broader multi-mutator durability.

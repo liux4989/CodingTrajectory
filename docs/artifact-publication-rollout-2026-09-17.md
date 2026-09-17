@@ -17,9 +17,10 @@ The Worker/Durable Object is intentionally thin:
 
 - one authenticated collector owns publication for a project;
 - uploads are workspace-keyed, content-addressed, bounded, schema-checked, and
-  idempotent;
-- publication verifies every R2 object and every accepted source checkpoint,
-  then commits one complete manifest atomically;
+  idempotent; each upload records a seven-day workspace claim before touching R2;
+- publication verifies every novel R2 object and every accepted source
+  checkpoint, reuses exact `(kind, sha256, bytes)` attestations from retained
+  manifests, then commits one complete manifest atomically;
 - readers fetch prepared summaries for lists and only the selected graph's facts
   for details; graph-root, session, turn, and item IDs are routing aliases;
 - the shared reader cache is bounded to 16 entries and 32 MiB, and materialized
@@ -48,19 +49,23 @@ empty manifest is allowed only after a prior completed publication establishes
 the project boundary.
 
 Uploads are invisible until the manifest transaction commits. An interruption
-leaves only content-addressed orphans; replay uploads missing objects and reuses
-present ones, while the same idempotency key recovers the same receipt. Cleanup
-runs after commit and is safe to repeat. Each publication scans at most four
+leaves only content-addressed orphans. A retry first recovers a committed
+receipt; without one it refreshes claims and uploads the complete manifest,
+while the same idempotency key recovers the same receipt. Cleanup runs after
+commit under the workspace Durable Object concurrency barrier, protects all
+retained references and unexpired upload claims, and is safe to repeat. Each
+publication scans at most four
 1,000-object R2 pages and persists its continuation cursor, so later successful
 publications finish large orphan sets without an unbounded request. A cleanup
 failure or a run of interrupted publications affects quota until a later
 successful publication retries cleanup, but does not affect visibility.
 
 Normal changed-graph runs upload only object hashes absent from the collector's
-last acknowledged manifest. The Durable Object still heads every reference in
-the proposed complete manifest before commit, including reused objects. After an
-uncertain response the collector uploads every object before replaying the exact
-request, so a missing retained object cannot permanently poison recovery.
+last acknowledged manifest. The Durable Object HEAD-checks novel or expired
+references and trusts exact retained references under the early-internal
+invariant that this Worker and its serialized cleanup are the only R2 mutators.
+An unsupported direct caller that waits more than seven days between upload and
+publication must re-upload to refresh its claim first.
 
 ## Local qualification
 
@@ -82,10 +87,10 @@ node scripts/benchmark-artifact-publication.mjs /tmp/artifact-publication.json
 ```
 
 The qualification covers authorization and malformed uploads, interrupted
-publication, retry-all lost-response recovery, initial and unchanged collection,
-changed-only uploads, graph merge/split, deletion, unavailable roots, prepared
-list/detail reads, root and child aliases, retained and expired snapshots, and
-cache entry/byte eviction. The
+publication, absent-receipt complete retry, committed-receipt recovery, initial
+and unchanged collection, changed-only uploads, graph merge/split, deletion,
+unavailable roots, prepared list/detail reads, root and child aliases, retained
+and expired snapshots, and cache entry/byte eviction. The
 benchmark records local workerd SQL cursor counters, HTTP and instrumented R2
 operations, retained bytes, and wall time. macOS runs additionally sample the
 shared workerd process CPU and RSS; these are neither isolate measurements nor
@@ -115,8 +120,10 @@ Cloudflare billing counters and cannot guarantee Free-plan capacity.
    available.
 
 Known limitations: the prototype still parses the whole inventory before graph
-reuse; complete-manifest integrity still requires Worker-side R2 heads for all
-objects even though only changed objects traverse PUT; R2 cleanup is post-commit
-and requires a later successful publication to resume; retention is exactly three
-completed artifact snapshots; and operation measurements are local workerd
-evidence, not production load or billing evidence.
+reuse; R2 cleanup is publication-triggered and requires a later changed
+publication to resume, so inactive workspaces have no bound on abandoned-object
+age; seven-day expiry was tested with disposable timestamp control rather than a
+seven-day wall-clock wait; retention is exactly three completed artifact
+snapshots; an out-of-band R2 mutator violates the retained-attestation invariant;
+and operation measurements are local workerd evidence, not production load or
+billing evidence.
