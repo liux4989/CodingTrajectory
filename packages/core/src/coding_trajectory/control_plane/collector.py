@@ -1084,14 +1084,27 @@ class LocalCollector:
                     acknowledged = self._previous_artifact_references(
                         artifact_request.publication_sequence
                     )
-                    # The manifest commit still heads every reference. Skip
-                    # already-acknowledged immutable objects on the normal path;
-                    # after any uncertain response, upload all so an externally
-                    # missing retained object cannot poison retries forever.
-                    force_upload = row["attempts"] > 0
+                    committed = False
+                    if row["attempts"] > 0:
+                        recovered = remote.recover(
+                            CollectorRecoveryRequest(
+                                workspace_id=artifact_request.workspace_id,
+                                agent_id=artifact_request.agent_id,
+                                project_id=artifact_request.project_id,
+                                publication_idempotency_key=row["idempotency_key"],
+                            )
+                        )
+                        committed = recovered.publication_receipt is not None
+                    # The authority validates new references and attests exact
+                    # retained ones. Skip locally acknowledged immutable objects;
+                    # after an uncommitted uncertain response, upload all. A
+                    # recovered receipt needs only an exact idempotent replay.
+                    force_upload = row["attempts"] > 0 and not committed
                     for graph in artifact_request.graphs:
                         for reference in (graph.facts, graph.summary):
-                            if not force_upload and reference.sha256 in acknowledged:
+                            if committed or (
+                                not force_upload and reference.sha256 in acknowledged
+                            ):
                                 continue
                             artifact = self._connection.execute(
                                 "select body from artifact_objects where sha256 = ? and kind = ?",

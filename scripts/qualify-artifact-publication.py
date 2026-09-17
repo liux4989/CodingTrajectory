@@ -318,8 +318,8 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "lost response retry recovers the committed receipt",
             )
             check(
-                len(counted.uploads) == 10,
-                "uncertain response retry reuploads the complete manifest",
+                len(counted.uploads) == 6,
+                "committed lost response recovers without reuploading",
             )
             changed_prepared = {
                 row["facts_sha256"]
@@ -358,7 +358,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "topology merge prepares one canonical graph",
             )
             check(
-                len(counted.uploads) == 12,
+                len(counted.uploads) == 8,
                 "topology merge uploads only the new combined graph",
             )
             parent_rows[2]["tool_name"] = "shell_command"
@@ -383,7 +383,7 @@ def qualify_collector(remote: CloudflareCollectorRemote, tag: str) -> None:
                 "topology split restores two canonical graphs",
             )
             check(
-                len(counted.uploads) == 16,
+                len(counted.uploads) == 12,
                 "topology split restores both graph artifacts",
             )
             (journals / "2.jsonl").unlink()

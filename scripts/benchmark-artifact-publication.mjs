@@ -163,6 +163,7 @@ const report = {
   environment: { node: process.version, platform: process.platform, arch: process.arch,
     miniflare: require('miniflare/package.json').version, workerd: require('workerd/package.json').version },
   results: [],
+  correctness: {},
 };
 
 try {
@@ -196,12 +197,16 @@ try {
     });
   }
   async function upload(values) {
+    const sql = [];
     for (const graph of values) for (const value of [graph.facts, graph.summary]) {
       const response = await fetch(`/v1/artifacts/${value.kind}/${value.reference.sha256}`, {
         method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: value.body,
       });
       if (!response.ok) throw Error(`upload failed: ${response.status}`);
+      const result = await response.json();
+      if (result.__benchmark) sql.push(result.__benchmark);
     }
+    return sql;
   }
   async function publish(sequence, values, vector) {
     return rpc('ct_collector_publish_artifacts', { agent_id: agent, project_id: project.project_id,
@@ -217,11 +222,41 @@ try {
       await bucket.put(`workspaces/${workspace}/artifacts/facts/orphan-${String(index).padStart(8, '0')}`, 'x');
     }
   }
-  await scenario('initial_publication', async () => { await upload(values); const result = await publish(0, values, point.vector); return [result.sql]; });
+  await scenario('initial_publication', async () => { const sql = await upload(values); const result = await publish(0, values, point.vector); return [...sql, result.sql]; });
   await scenario('unchanged_collector_run', async () => []);
   values = prepared([1, ...Array(Math.max(graphCount - 1, 0)).fill(0)]);
   point = await checkpoint(1);
-  await scenario('one_changed_graph', async () => { await upload([values[0]]); const result = await publish(1, values, point.vector); return [result.sql]; });
+  await scenario('one_changed_graph', async () => { const sql = await upload([values[0]]); const result = await publish(1, values, point.vector); return [...sql, result.sql]; });
+  if (graphCount <= 2 && !orphanCount) {
+    await mf.dispatchFetch('http://local/__benchmark/list-gate', { method: 'POST' });
+    values = prepared([2, ...Array(Math.max(graphCount - 1, 0)).fill(0)]);
+    point = await checkpoint(2);
+    await upload([values[0]]);
+    await publish(2, values, point.vector);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const status = await (await mf.dispatchFetch('http://local/__benchmark/list-gate')).json();
+      if (status.entered) break;
+      await new Promise(resolve => setTimeout(resolve, 1));
+      if (attempt === 99) throw Error('cleanup did not enter the deterministic list gate');
+    }
+    const stalled = artifact('facts', graphs[0], 999);
+    let uploadSettled = false;
+    const stalledUpload = upload([{ facts: stalled, summary: stalled }]).then(() => { uploadSettled = true; });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    report.correctness.uploadClaimWaitedForPriorCleanup = !uploadSettled;
+    await mf.dispatchFetch('http://local/__benchmark/list-gate', { method: 'DELETE' });
+    await stalledUpload;
+    const bucket = await mf.getR2Bucket('ARTIFACTS');
+    report.correctness.uploadSurvivedPriorCleanup = Boolean(await bucket.head(
+      `workspaces/${workspace}/artifacts/facts/${stalled.reference.sha256}`));
+    values = prepared([3, ...Array(Math.max(graphCount - 1, 0)).fill(0)]);
+    point = await checkpoint(3);
+    await upload([values[0]]);
+    await publish(3, values, point.vector);
+    report.correctness.uncommittedClaimProtectedFromNextCleanup = Boolean(await bucket.head(
+      `workspaces/${workspace}/artifacts/facts/${stalled.reference.sha256}`));
+    if (Object.values(report.correctness).some(value => !value)) throw Error('artifact lifetime qualification failed');
+  }
   if (graphCount <= 2) await scenario('prepared_summary_and_selected_detail_reads', async () => {
     const sql = [];
     const manifest = await rpc('ct_artifact_manifest', { snapshot_sequence: null }); sql.push(manifest.sql);

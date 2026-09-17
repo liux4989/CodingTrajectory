@@ -42,6 +42,13 @@ export default {
           ? value.schema_version === "ct.published_facts.v1"
           : value.schema_version === "ct.prepared-summary.v1", "artifact_schema_mismatch");
         const key = artifactKey(principal.workspace_id, kind, sha256);
+        const workspace = env.WORKSPACES.getByName(principal.workspace_id);
+        const claim = object(JSON.parse(await workspace.invoke(
+          "ct_internal_artifact_claim",
+          JSON.stringify({ request: { workspace_id: principal.workspace_id, kind, sha256 } }),
+          JSON.stringify(principal),
+        )));
+        requireThat(claim.status === 200, "artifact_claim_failed", 503);
         const prior = await env.ARTIFACTS.head(key);
         if (prior) {
           requireThat(prior.size === body.length && prior.customMetadata?.sha256 === sha256,
@@ -51,7 +58,11 @@ export default {
             workspace_id: principal.workspace_id, kind, sha256,
           }, httpMetadata: { contentType: "application/json" } });
         }
-        return Response.json({ ok: true, sha256, bytes: body.length }, { headers: responseHeaders(env) });
+        const result: Json = { ok: true, sha256, bytes: body.length };
+        // Local benchmark subclasses may annotate the internal claim response.
+        // Production Durable Objects never emit this field.
+        if (claim.body?.__benchmark) result.__benchmark = claim.body.__benchmark;
+        return Response.json(result, { headers: responseHeaders(env) });
       }
       requireThat(request.method === "POST" && url.search === "" && url.pathname === "/v1/core", "not_found", 404);
       let message;

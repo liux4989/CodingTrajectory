@@ -8,6 +8,7 @@ type R2Metrics = {
 };
 
 let r2Metrics: R2Metrics = { calls: {}, uploadedBytes: 0 };
+let listGate: { entered: boolean; released: boolean } | undefined;
 
 function tracedBucket(bucket: R2Bucket): R2Bucket {
   return new Proxy(bucket, {
@@ -21,6 +22,13 @@ function tracedBucket(bucket: R2Bucket): R2Bucket {
           const body = args[1];
           if (body instanceof Uint8Array) r2Metrics.uploadedBytes += body.byteLength;
           else if (typeof body === "string") r2Metrics.uploadedBytes += new TextEncoder().encode(body).byteLength;
+        }
+        if (operation === "list" && listGate && !listGate.entered) {
+          listGate.entered = true;
+          return (async () => {
+            while (listGate && !listGate.released) await scheduler.wait(1);
+            return member.apply(target, args);
+          })();
         }
         return member.apply(target, args);
       };
@@ -41,6 +49,14 @@ export default {
       const result = structuredClone(r2Metrics);
       if (url.searchParams.has("reset")) r2Metrics = { calls: {}, uploadedBytes: 0 };
       return Response.json(result);
+    }
+    if (url.pathname === "/__benchmark/list-gate") {
+      if (request.method === "POST") {
+        listGate = { entered: false, released: false };
+      } else if (request.method === "DELETE") {
+        if (listGate) listGate.released = true;
+      }
+      return Response.json({ entered: listGate?.entered ?? false });
     }
     return worker.fetch(request, { ...env, ARTIFACTS: tracedBucket(env.ARTIFACTS) }, ctx);
   },

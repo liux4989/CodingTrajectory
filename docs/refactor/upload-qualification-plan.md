@@ -107,6 +107,31 @@ bypass uncertainty. Keep collection schedules paused until the manual flow works
 and unattended collection is explicitly enabled. Configuration, checks and reads
 must never initiate collection.
 
+### Immutable-artifact pilot boundary
+
+The replacement path assumes one trusted publisher per workspace. Every upload
+first records a seven-day Durable Object claim, then writes the content-addressed
+R2 object. Bounded cleanup runs under that workspace object's concurrency barrier
+and protects retained manifests plus live claims; publication releases claims
+only after its complete manifest commits. This prevents an older cleanup from
+deleting a pending upload or an object that becomes visible in a newer manifest.
+A stalled upload may retain an orphan for seven days.
+
+The authority HEAD-checks every novel or expired `(kind, sha256, bytes)`
+reference. An exact reference in one of the three retained manifests reuses that
+authoritative attestation; this relies on the Worker and its serialized cleanup
+being the only R2 mutators. Readers return an explicit 503 if that storage
+invariant is violated. Lost publication responses are recovered before the
+collector considers a complete re-upload, while a missing receipt keeps the
+conservative re-upload behavior.
+
+Cleanup scans at most four 1,000-key pages after a successful changed
+publication and resumes from a persisted cursor. Unchanged and inactive
+collectors do not run maintenance, so abandoned storage age is not bounded for
+inactive workspaces. That limitation is accepted for manual early internal use;
+scheduled garbage collection is a later operational gate. Rollback snapshots
+are bounded to three manifests.
+
 ## Deferred until the workload requires it
 
 - Full 16 MiB graph / 96 MiB publication boundary and sustained-load qualification.

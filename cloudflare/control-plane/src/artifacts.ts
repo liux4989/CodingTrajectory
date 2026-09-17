@@ -5,6 +5,7 @@ const MANIFEST_SCHEMA = "ct.artifact-manifest.v1";
 const PREPARATION_VERSION = "ct.graph-preparation.v1";
 const RETAINED_MANIFESTS = 3;
 const CLEANUP_PAGES_PER_PUBLICATION = 4;
+const UPLOAD_CLAIM_SECONDS = 7 * 24 * 60 * 60;
 
 export function artifactKey(workspaceId: string, kind: string, sha256: string): string {
   return `workspaces/${workspaceId}/artifacts/${kind}/${sha256}`;
@@ -19,7 +20,19 @@ export function initializeArtifacts(state: State) {
     CREATE INDEX IF NOT EXISTS artifact_manifests_snapshot
       ON artifact_manifests(workspace_sequence);
     CREATE TABLE IF NOT EXISTS artifact_cleanup (
-      workspace_id TEXT PRIMARY KEY, cursor TEXT NOT NULL);`);
+      workspace_id TEXT PRIMARY KEY, cursor TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS artifact_upload_claims (
+      kind TEXT NOT NULL, sha256 TEXT NOT NULL, expires_at INTEGER NOT NULL,
+      PRIMARY KEY(kind, sha256));`);
+}
+
+/** Fence cleanup before an authenticated collector reads or writes an object. */
+export function claimArtifactUpload(state: State, kind: string, sha256: string) {
+  const now = Math.floor(Date.now() / 1000);
+  state.sql.exec("DELETE FROM artifact_upload_claims WHERE expires_at<=?", now);
+  state.sql.exec(`INSERT INTO artifact_upload_claims VALUES(?,?,?)
+    ON CONFLICT(kind,sha256) DO UPDATE SET expires_at=excluded.expires_at`,
+  kind, sha256, now + UPLOAD_CLAIM_SECONDS);
 }
 
 export interface ArtifactPublicationPlan { complete: true }
@@ -47,12 +60,22 @@ export async function prepareArtifactPublication(
       && checkpoint?.content_sha256 === entry.content_sha256,
     "source_vector_requires_accepted_project_checkpoints");
   }
+  const retained = new Map<string, number>();
+  for (const row of state.sql.exec<{ manifest: string }>("SELECT manifest FROM artifact_manifests").toArray()) {
+    const manifest = JSON.parse(row.manifest);
+    for (const graph of manifest.graphs) {
+      for (const object of [graph.facts, graph.summary]) {
+        retained.set(`${object.kind}:${object.sha256}`, object.bytes);
+      }
+    }
+  }
   const graphIds = new Set<string>();
   for (const graph of request.graphs) {
     requireThat(!graphIds.has(graph.graph_id), "duplicate_graph_publication");
     graphIds.add(graph.graph_id);
     requireThat(graph.source_ids.every((sourceId: string) => vector.has(sourceId)), "invalid_graph_sources");
     for (const object of [graph.facts, graph.summary]) {
+      if (retained.get(`${object.kind}:${object.sha256}`) === object.bytes) continue;
       const key = artifactKey(request.workspace_id, object.kind, object.sha256);
       const head = await env.ARTIFACTS.head(key);
       requireThat(head && head.size === object.bytes
@@ -120,6 +143,12 @@ export function commitArtifactPublication(
       SELECT MIN(sequence) FROM records WHERE kind='artifact_project_publisher' AND key=?
       UNION SELECT workspace_sequence FROM artifact_manifests WHERE project_id=?)`,
   request.project_id, request.project_id, request.project_id);
+  for (const graph of request.graphs) {
+    for (const object of [graph.facts, graph.summary]) {
+      state.sql.exec("DELETE FROM artifact_upload_claims WHERE kind=? AND sha256=?",
+        object.kind, object.sha256);
+    }
+  }
   return receipt("accepted", sequence, {
     publication_outcome: "published",
     graphs_published: request.graphs.length,
@@ -180,6 +209,13 @@ export async function cleanupArtifactObjects(state: State, env: Env, workspaceId
       referenced.add(artifactKey(workspaceId, "facts", graph.facts.sha256));
       referenced.add(artifactKey(workspaceId, "summary", graph.summary.sha256));
     }
+  }
+  const now = Math.floor(Date.now() / 1000);
+  state.sql.exec("DELETE FROM artifact_upload_claims WHERE expires_at<=?", now);
+  for (const claim of state.sql.exec<{ kind: string; sha256: string }>(
+    "SELECT kind,sha256 FROM artifact_upload_claims",
+  ).toArray()) {
+    referenced.add(artifactKey(workspaceId, claim.kind, claim.sha256));
   }
   let cursor = state.sql.exec<{ cursor: string }>(
     "SELECT cursor FROM artifact_cleanup WHERE workspace_id=?", workspaceId,

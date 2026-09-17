@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { authorityFailure, digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
-import { artifactManifests, artifactReadLocator, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
+import { artifactManifests, artifactReadLocator, claimArtifactUpload, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { commitPublication, factRead, initializeFacts, missingFactRows, preparePublication, verifyStageRows, writeStagedRows } from "./facts";
 import { livingRead, livingWrite } from "./living";
@@ -29,6 +29,15 @@ export class Workspace extends DurableObject<Env> {
     try {
       const request = envelope.request;
       requireThat(request.workspace_id === principal.workspace_id, "workspace_denied", 403);
+      if (method === "ct_internal_artifact_claim") {
+        requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
+        requireThat(["facts", "summary"].includes(request.kind)
+          && typeof request.sha256 === "string"
+          && /^[0-9a-f]{64}$/.test(request.sha256), "invalid_artifact_claim");
+        this.ctx.storage.transactionSync(() =>
+          claimArtifactUpload(this.state, request.kind, request.sha256));
+        return { status: 200, body: {} };
+      }
       // Compute identity before schema defaults normalize the request.
       const identity = await digest(stable(request));
       validate(method, request);
@@ -88,8 +97,9 @@ export class Workspace extends DurableObject<Env> {
           pruneArtifactReceipts(this.state);
           return result;
         });
-        this.ctx.waitUntil(cleanupArtifactObjects(this.state, this.env, request.workspace_id)
-          .catch(() => console.error(JSON.stringify({ event: "artifact_cleanup_deferred" }))));
+        this.ctx.waitUntil(this.ctx.blockConcurrencyWhile(() =>
+          cleanupArtifactObjects(this.state, this.env, request.workspace_id)
+            .catch(() => console.error(JSON.stringify({ event: "artifact_cleanup_deferred" })))));
         return { status: 200, body };
       }
       if (method === "ct_collector_publish_observation") {
