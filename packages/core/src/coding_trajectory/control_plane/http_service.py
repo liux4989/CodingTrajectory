@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from hashlib import sha256
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,9 +16,7 @@ from coding_trajectory.control_plane.authority import MethodAuthority
 from coding_trajectory.control_plane.fact_repository import (
     ArtifactReadCache,
     CloudflareArtifactRepository,
-    CloudflareFactRepository,
     FactRepository,
-    RemoteFactCache,
 )
 from coding_trajectory.control_plane.remote import CloudflareRpcClient
 from coding_trajectory.control_plane.remote_inventory import (
@@ -35,7 +32,6 @@ class RemoteRuntimeFactory:
     def __init__(self, *, url: str, workspace_id: UUID) -> None:
         self._url = url
         self.workspace_id = workspace_id
-        self._fact_cache = RemoteFactCache()
         self._artifact_cache = ArtifactReadCache()
 
     def build(
@@ -70,8 +66,7 @@ class RemoteRuntimeFactory:
         ):
             raise ValueError("snapshot_sequence must be a non-negative integer")
         client = CloudflareRpcClient(url=self._url, access_token=access_token)
-        # Never use cached facts until this credential passes a fresh remote
-        # read-authority check, including for explicitly pinned snapshots.
+        # Authenticate and pin the artifact authority before constructing a runtime.
         snapshot_request: dict[str, Any] = {"workspace_id": str(self.workspace_id)}
         if snapshot_sequence is not None:
             snapshot_request["snapshot_sequence"] = snapshot_sequence
@@ -93,13 +88,6 @@ class RemoteRuntimeFactory:
         except Exception:
             client.close()
             raise
-        legacy = CloudflareFactRepository(
-            client=client,
-            workspace_id=self.workspace_id,
-            snapshot_sequence=sequence,
-            cache=self._fact_cache,
-            authenticated_cache_identity=sha256(access_token.encode()).hexdigest(),
-        )
         inventory = CloudflareProjectInventoryRepository(
             client=client,
             workspace_id=self.workspace_id,
@@ -110,7 +98,6 @@ class RemoteRuntimeFactory:
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
             cache=self._artifact_cache,
-            fallback=legacy,
             inventory=inventory,
         )
         living = CloudflareLivingAuthority(

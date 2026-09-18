@@ -46,7 +46,11 @@ export async function previewWorkspaceReplacement(
   state: State, env: Env, workspaceId: string, exportSha256: string,
 ): Promise<Json> {
   const tables: Record<string, number> = {};
+  const existing = new Set(state.sql.exec<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type='table'",
+  ).toArray().map(row => row.name));
   for (const table of TABLES) {
+    if (!existing.has(table)) continue;
     tables[table] = state.sql.exec<{ count: number }>(
       `SELECT COUNT(*) AS count FROM ${table}`,
     ).one().count;

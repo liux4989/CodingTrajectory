@@ -3,9 +3,8 @@ import { artifactKey } from "./artifacts";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
-  "ct_collector_publish_observation", "ct_collector_missing_fact_rows", "ct_collector_stage_fact_rows",
-  "ct_collector_publish_facts", "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
-const READ = new Set(["ct_workspace_snapshot", "ct_fact_read", "ct_artifact_manifest", "ct_artifact_read", "ct_project_inventory_snapshot", "ct_remote_living"]);
+  "ct_collector_publish_observation", "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
+const READ = new Set(["ct_workspace_snapshot", "ct_legacy_fact_cleanup_status", "ct_artifact_manifest", "ct_artifact_read", "ct_project_inventory_snapshot", "ct_remote_living"]);
 const REPLACE = "ct_workspace_replace";
 const PROTOCOL = "ct.core.v1";
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;

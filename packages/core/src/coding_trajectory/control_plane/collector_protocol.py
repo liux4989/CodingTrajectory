@@ -13,10 +13,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from coding_trajectory.control_plane.published_facts import (
-    FACT_SET_SCHEMA_VERSION,
-    MAX_FACT_ROWS_PER_GRAPH,
-)
 from coding_trajectory.ingestion.common import canonical_json
 
 
@@ -49,7 +45,6 @@ class CollectorRecoveryRequest(CollectorModel):
     agent_instance_id: UUID | None = None
     vendor: str | None = None
     native_session_id: str | None = None
-    graph_ids: list[UUID] | None = Field(default=None, max_length=128)
     publication_idempotency_key: str | None = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
@@ -68,24 +63,12 @@ class RecoveredSource(CollectorModel):
     content_sha256: str | None = None
 
 
-class RecoveredGraph(CollectorModel):
-    """One published graph fact set visible to collector recovery."""
-
-    graph_id: UUID
-    schema_version: Literal["ct.published_facts.v1"] = FACT_SET_SCHEMA_VERSION
-    fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    fact_count: int = Field(ge=1, le=MAX_FACT_ROWS_PER_GRAPH)
-    published_sequence: int = Field(ge=0)
-    observed_at: datetime
-
-
 class CollectorRecoveryResponse(CollectorModel):
     next_publication_sequence: int = Field(ge=0)
     next_living_sequence: int | None = Field(default=None, ge=1)
     source: RecoveredSource | None = None
     authority_incarnation: UUID | None = None
     authority_sequence: int | None = Field(default=None, ge=0)
-    graphs: list[RecoveredGraph] = Field(default_factory=list)
     publication_receipt: dict[str, Any] | None = None
 
 

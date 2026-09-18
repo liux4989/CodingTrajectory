@@ -716,7 +716,6 @@ def main(args):
                             workspace_id=WORKSPACE,
                             snapshot_sequence=1,
                             cache=ArtifactReadCache(),
-                            fallback=None,
                         )
                     )
                     runtime = ServiceRuntime(

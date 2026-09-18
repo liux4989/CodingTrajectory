@@ -30,10 +30,6 @@ from coding_trajectory.control_plane.collector_protocol import (
     ObservationReceipt,
     SourceRegistrationResponse,
 )
-from coding_trajectory.control_plane.fact_protocol import (
-    MissingFactRowsResponse,
-    StageFactRowsResponse,
-)
 from coding_trajectory.control_plane.published_facts import FactIndex, PublishedFactSet
 from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.service import handlers as handler_module
@@ -130,25 +126,12 @@ class OfflineRemote:
             committed_sequence=1,
         )
 
-    def missing_fact_rows(self, request):
-        self.calls["missing"] += 1
-        return MissingFactRowsResponse(
-            graph_id=request.graph_id,
-            fact_set_digest=request.fact_set_digest,
-            missing_batches=list(range(request.batch_count)),
-        )
+    def upload_artifact(self, *, kind, sha256, body):
+        del kind, sha256
+        self.calls["upload"] += 1
+        self.bytes += len(body)
 
-    def stage_fact_rows(self, request):
-        self.calls["stage"] += 1
-        self.rows += len(request.rows)
-        self.bytes += len(request.model_dump_json(exclude_none=True).encode())
-        return StageFactRowsResponse(
-            graph_id=request.graph_id,
-            fact_set_digest=request.fact_set_digest,
-            staged_batches=request.batch_index + 1,
-        )
-
-    def publish_facts(self, request, *, idempotency_key):
+    def publish_artifacts(self, request, *, idempotency_key):
         self.calls["publish"] += 1
         self.sequence += 1
         self.bytes += len(request.model_dump_json(exclude_none=True).encode())

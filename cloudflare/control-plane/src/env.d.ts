@@ -6,6 +6,7 @@ interface __BaseEnv_Env {
 	CT_CURSOR_KEY: string;
 	CT_REPLACEMENT_WORKSPACE_ID?: string;
 	CT_REPLACEMENT_EXPORT_SHA256?: string;
+	CT_LEGACY_FACT_CLEANUP_WORKSPACE_ID?: string;
 	WORKSPACES: DurableObjectNamespace<import("./index").Workspace>;
 	ARTIFACTS: R2Bucket;
 }

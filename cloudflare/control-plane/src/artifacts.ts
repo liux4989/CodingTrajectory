@@ -99,8 +99,7 @@ export function commitArtifactPublication(
   plan: ArtifactPublicationPlan,
 ): Json {
   requireThat(plan.complete, "artifact_upload_incomplete", 409);
-  const publisher = state.get("artifact_project_publisher", request.project_id)
-    ?? state.get("publisher", `${request.agent_id}:${request.project_id}`);
+  const publisher = state.get("artifact_project_publisher", request.project_id);
   const current = publisher?.publication_sequence ?? -1;
   if (request.publication_sequence <= current) {
     return receipt("conflict", publisher?.committed_sequence ?? null,

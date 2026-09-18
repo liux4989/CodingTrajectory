@@ -28,10 +28,6 @@ from coding_trajectory.control_plane.fact_projection import (
     build_fact_rows,
     build_published_fact_set,
 )
-from coding_trajectory.control_plane.fact_protocol import (
-    FACT_READ_PAGE_MAX,
-    FactReadResponse,
-)
 from coding_trajectory.control_plane.graph_preparation import (
     PreparedGraph,
     filter_session_cards,
@@ -40,9 +36,7 @@ from coding_trajectory.control_plane.graph_preparation import (
 )
 from coding_trajectory.control_plane.published_facts import (
     FactIndex,
-    FactRow,
     PublishedFactSet,
-    compute_fact_set_digest,
 )
 from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
@@ -51,7 +45,7 @@ from coding_trajectory.control_plane.remote import (
 from coding_trajectory.control_plane.remote_inventory import (
     CloudflareProjectInventoryRepository,
 )
-from coding_trajectory.ingestion.common import canonical_json, format_datetime
+from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.project_identity import graph_project_id
 from coding_trajectory.query import DocumentStore
 
@@ -228,49 +222,6 @@ class LocalPublishedFactRepository:
             save()
 
 
-class RemoteFactCache:
-    """Small process-local cache of immutable, integrity-checked fact sets.
-
-    The HTTP factory authenticates and pins a snapshot before giving a repository
-    access. Serialized values prevent mutable handler views escaping a request.
-    """
-
-    def __init__(self, *, max_bytes: int = 32 * 1024 * 1024, max_entries: int = 4):
-        self._max_bytes = max_bytes
-        self._max_entries = max_entries
-        self._values: OrderedDict[tuple[str, str, int, str], bytes] = OrderedDict()
-        self._bytes = 0
-        self._lock = Lock()
-
-    def get(self, key: tuple[str, str, int, str]) -> list[PublishedFactSet] | None:
-        with self._lock:
-            value = self._values.get(key)
-            if value is None:
-                return None
-            self._values.move_to_end(key)
-        return [PublishedFactSet.model_validate(item) for item in json.loads(value)]
-
-    def put(
-        self, key: tuple[str, str, int, str], facts: list[PublishedFactSet]
-    ) -> None:
-        value = json.dumps(
-            [fact.model_dump(mode="json") for fact in facts], separators=(",", ":")
-        ).encode()
-        if len(value) > self._max_bytes or self._max_entries < 1:
-            return
-        with self._lock:
-            previous = self._values.pop(key, None)
-            if previous is not None:
-                self._bytes -= len(previous)
-            while self._values and (
-                self._bytes + len(value) > self._max_bytes
-                or len(self._values) >= self._max_entries
-            ):
-                self._bytes -= len(self._values.popitem(last=False)[1])
-            self._values[key] = value
-            self._bytes += len(value)
-
-
 class ArtifactReadCache:
     """Bound immutable indexes/summaries by encoded bytes and entry count."""
 
@@ -315,14 +266,12 @@ class CloudflareArtifactRepository:
         workspace_id: UUID,
         snapshot_sequence: int,
         cache: ArtifactReadCache,
-        fallback: CloudflareFactRepository,
         inventory: CloudflareProjectInventoryRepository | None = None,
     ) -> None:
         self._client = client
         self.workspace_id = workspace_id
         self.snapshot_sequence = snapshot_sequence
         self._cache = cache
-        self._fallback = fallback
         self._inventory = inventory or CloudflareProjectInventoryRepository(
             client=client,
             workspace_id=workspace_id,
@@ -330,7 +279,6 @@ class CloudflareArtifactRepository:
         )
         self._manifests_value: list[ArtifactManifest] | None = None
         self._summaries_value: dict[UUID, PreparedGraphSummary] | None = None
-        self._artifact_unavailable = False
 
     def pin_snapshot(self) -> int:
         return self.snapshot_sequence
@@ -339,22 +287,14 @@ class CloudflareArtifactRepository:
         self._client.close()
 
     def _manifests(self) -> list[ArtifactManifest]:
-        if self._artifact_unavailable:
-            return []
         if self._manifests_value is None:
-            try:
-                raw = self._client.call(
-                    "ct_artifact_manifest",
-                    {
-                        "workspace_id": str(self.workspace_id),
-                        "snapshot_sequence": self.snapshot_sequence,
-                    },
-                )
-            except RemoteControlPlaneError as exc:
-                if exc.code == "artifact_snapshot_unavailable":
-                    self._artifact_unavailable = True
-                    return []
-                raise
+            raw = self._client.call(
+                "ct_artifact_manifest",
+                {
+                    "workspace_id": str(self.workspace_id),
+                    "snapshot_sequence": self.snapshot_sequence,
+                },
+            )
             if raw.get("workspace_id") != str(self.workspace_id) or (
                 raw.get("snapshot_sequence") != self.snapshot_sequence
             ):
@@ -420,8 +360,6 @@ class CloudflareArtifactRepository:
     ) -> dict[str, Any] | None:
         if method != "project.sessions":
             return None
-        if not self._manifests():
-            return None
         validated = service_contract(method).validate_request(params)
         project_id = validated.get("project_id")
         if validated.get("project_name"):
@@ -434,14 +372,25 @@ class CloudflareArtifactRepository:
             for manifest in self._manifests()
             if project_id is None or str(manifest.project_id) == project_id
             for graph in manifest.graphs
-            for item in summaries[graph.graph_id].project_sessions
+            for item in self._summary_for(summaries, graph.graph_id).project_sessions
         ]
         return filter_session_cards(items, {**validated, "project_name": None})
+
+    @staticmethod
+    def _summary_for(
+        summaries: dict[UUID, PreparedGraphSummary], graph_id: UUID
+    ) -> PreparedGraphSummary:
+        try:
+            return summaries[graph_id]
+        except KeyError as exc:
+            raise RemoteControlPlaneError(
+                f"artifact manifest is missing detail for graph {graph_id}"
+            ) from exc
 
     def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
         manifests = self._manifests()
         if not manifests:
-            return self._fallback.store_for(method, params)
+            raise RemoteControlPlaneError("artifact snapshot contains no graphs")
         aliases = entrypoint_ids_from_params(params)
         if not aliases:
             raise ValueError(f"{method} requires a graph or child entrypoint")
@@ -496,182 +445,6 @@ class CloudflareArtifactRepository:
             "freshness": "authoritative",
             "content_scope": "facts",
         }
-
-
-class CloudflareFactRepository:
-    """Fetch selected SQL fact pages from the remote workspace authority."""
-
-    def __init__(
-        self,
-        *,
-        client: CloudflareRpcClient,
-        workspace_id: UUID,
-        snapshot_sequence: int | None = None,
-        cache: RemoteFactCache | None = None,
-        authenticated_cache_identity: str | None = None,
-    ) -> None:
-        if snapshot_sequence is not None and snapshot_sequence < 0:
-            raise ValueError("snapshot_sequence must not be negative")
-        self._client = client
-        self.workspace_id = workspace_id
-        self.snapshot_sequence = snapshot_sequence
-        self._cache = cache
-        self._cache_identity = authenticated_cache_identity
-        self._indexes: dict[str, tuple[FactIndex, str]] = {}
-
-    def close(self) -> None:
-        self._client.close()
-
-    def pin_snapshot(self) -> int:
-        if self.snapshot_sequence is None:
-            raw = self._client.call(
-                "ct_workspace_snapshot",
-                {"workspace_id": str(self.workspace_id)},
-            )
-            self.snapshot_sequence = _validated_sequence(
-                raw.get("snapshot_sequence"), self.snapshot_sequence
-            )
-        return self.snapshot_sequence
-
-    def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
-        validated = service_contract(method).validate_request(params)
-        scope = fact_read_scope(validated)
-        key = json.dumps(scope, sort_keys=True, default=str)
-        if key not in self._indexes:
-            cache_key = (
-                (
-                    self._cache_identity,
-                    str(self.workspace_id),
-                    self.snapshot_sequence,
-                    key,
-                )
-                if self._cache_identity is not None
-                and self.snapshot_sequence is not None
-                else None
-            )
-            fact_sets = (
-                self._cache.get(cache_key)
-                if self._cache is not None and cache_key is not None
-                else None
-            )
-            if fact_sets is None:
-                fact_sets = self._read_fact_sets(scope)
-                if self._cache is not None and cache_key is not None:
-                    self._cache.put(cache_key, fact_sets)
-            self._indexes[key] = (
-                FactIndex.from_fact_sets(fact_sets),
-                f"remote workspace snapshot {self.snapshot_sequence}",
-            )
-        return self._indexes[key]
-
-    def _read_fact_sets(self, scope: dict[str, Any]) -> list[PublishedFactSet]:
-        rows: list[FactRow] = []
-        digests: dict[str, str] = {}
-        counts: dict[str, int] = {}
-        cursor: str | None = None
-        pages = 0
-        while True:
-            request: dict[str, Any] = {
-                "workspace_id": str(self.workspace_id),
-                "limit": FACT_READ_PAGE_MAX,
-                **scope,
-            }
-            if self.snapshot_sequence is not None:
-                request["snapshot_sequence"] = self.snapshot_sequence
-            if cursor is not None:
-                request["cursor"] = cursor
-            response = FactReadResponse.model_validate(
-                self._client.call("ct_fact_read", request)
-            )
-            if response.workspace_id != self.workspace_id:
-                raise RemoteControlPlaneError("fact read workspace mismatch")
-            self.snapshot_sequence = _validated_sequence(
-                response.snapshot_sequence, self.snapshot_sequence
-            )
-            rows.extend(response.rows)
-            digests.update(response.graph_digests)
-            counts.update(response.graph_fact_counts)
-            cursor = response.next_cursor
-            pages += 1
-            if cursor is None:
-                break
-            if pages > 4096:
-                raise RemoteControlPlaneError("fact read exceeded the page bound")
-        return _fact_sets_from_rows(rows, digests=digests, counts=counts)
-
-    def metadata(self) -> dict[str, Any] | None:
-        if self.snapshot_sequence is None:
-            return None
-        return {
-            "workspace_id": str(self.workspace_id),
-            "snapshot_sequence": self.snapshot_sequence,
-            "source": "remote",
-            "freshness": "authoritative",
-            "content_scope": "facts",
-        }
-
-
-def _validated_sequence(value: Any, pinned: int | None) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise RemoteControlPlaneError("fact read returned an invalid snapshot")
-    if pinned is not None and value != pinned:
-        raise RemoteControlPlaneError("fact read snapshot mismatch")
-    return value
-
-
-def _fact_sets_from_rows(
-    rows: list[FactRow], *, digests: dict[str, str], counts: dict[str, int]
-) -> list[PublishedFactSet]:
-    grouped: dict[str, list[FactRow]] = {}
-    for row in rows:
-        grouped.setdefault(str(row.graph_id), []).append(row)
-    if set(grouped) != set(digests):
-        raise RemoteControlPlaneError("fact read omitted a selected graph")
-    fact_sets: list[PublishedFactSet] = []
-    for graph_id in sorted(grouped):
-        graph_rows = sorted(
-            grouped[graph_id], key=lambda row: (row.kind, str(row.fact_id))
-        )
-        expected = digests[graph_id]
-        if compute_fact_set_digest(UUID(graph_id), graph_rows) != expected:
-            raise RemoteControlPlaneError("fact read graph digest mismatch")
-        kind_counts: dict[str, int] = {}
-        for row in graph_rows:
-            kind_counts[row.kind] = kind_counts.get(row.kind, 0) + 1
-        if (
-            counts.get(graph_id) is not None
-            and sum(kind_counts.values()) != counts[graph_id]
-        ):
-            raise RemoteControlPlaneError("fact read graph count mismatch")
-        try:
-            fact_sets.append(
-                PublishedFactSet(
-                    graph_id=UUID(graph_id),
-                    fact_set_digest=expected,
-                    kind_counts=kind_counts,
-                    rows=graph_rows,
-                )
-            )
-        except ValueError as exc:
-            raise RemoteControlPlaneError(
-                f"fact read graph failed integrity validation: {exc}"
-            ) from exc
-    return fact_sets
-
-
-def fact_read_scope(params: dict[str, Any]) -> dict[str, Any]:
-    scope: dict[str, Any] = {}
-    root_session_id = params.get("root_session_id")
-    if isinstance(root_session_id, str) and root_session_id:
-        # The graph is identified by its root session id on the wire.
-        scope["graph_id"] = root_session_id
-    for key in ("session_id", "project_id", "project_name", "agent_vendor"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            scope[key] = value
-    if "modified_since" in params and params["modified_since"] is not None:
-        scope["modified_since"] = format_datetime(params["modified_since"])
-    return scope
 
 
 def requires_graph_scope(method: str) -> bool:
@@ -748,7 +521,6 @@ def fact_store_key(
 __all__ = [
     "ArtifactReadCache",
     "CloudflareArtifactRepository",
-    "CloudflareFactRepository",
     "FactRepository",
     "LocalPublishedFactRepository",
     "discovery_params",

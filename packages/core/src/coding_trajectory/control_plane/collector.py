@@ -45,16 +45,6 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceVectorEntry,
 )
 from coding_trajectory.control_plane.fact_projection import build_published_fact_set
-from coding_trajectory.control_plane.fact_protocol import (
-    FACT_ROW_BATCH_MAX,
-    FACT_STAGE_BATCH_MAX_BYTES,
-    FactGraphPublication,
-    FactPublicationRequest,
-    MissingFactRowsRequest,
-    MissingFactRowsResponse,
-    StageFactRowsRequest,
-    StageFactRowsResponse,
-)
 from coding_trajectory.control_plane.graph_preparation import (
     graph_input_digest,
     prepare_graph,
@@ -95,18 +85,6 @@ class CollectorRemote(Protocol):
 
     def publish_observation(
         self, request: ObservationRequest, *, idempotency_key: str
-    ) -> ObservationReceipt: ...
-
-    def stage_fact_rows(
-        self, request: StageFactRowsRequest
-    ) -> StageFactRowsResponse: ...
-
-    def missing_fact_rows(
-        self, request: MissingFactRowsRequest
-    ) -> MissingFactRowsResponse: ...
-
-    def publish_facts(
-        self, request: FactPublicationRequest, *, idempotency_key: str
     ) -> ObservationReceipt: ...
 
     def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None: ...
@@ -192,37 +170,6 @@ class CloudflareCollectorRemote:
             )
         )
 
-    def stage_fact_rows(self, request: StageFactRowsRequest) -> StageFactRowsResponse:
-        return StageFactRowsResponse.model_validate(
-            self._rpc(
-                "ct_collector_stage_fact_rows",
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def missing_fact_rows(
-        self, request: MissingFactRowsRequest
-    ) -> MissingFactRowsResponse:
-        return MissingFactRowsResponse.model_validate(
-            self._rpc(
-                "ct_collector_missing_fact_rows",
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def publish_facts(
-        self, request: FactPublicationRequest, *, idempotency_key: str
-    ) -> ObservationReceipt:
-        """Commit staged fact sets as one atomic workspace publication."""
-
-        return ObservationReceipt.model_validate(
-            self._rpc(
-                "ct_collector_publish_facts",
-                request.wire_payload(),
-                idempotency_key=idempotency_key,
-            )
-        )
-
     def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None:
         """Idempotently upload one content-addressed object before publication."""
 
@@ -273,12 +220,6 @@ class CloudflareCollectorRemote:
             else None
         )
         try:
-            # Fact rows are staged separately; the manifest commits atomically.
-            timeout = (
-                max(self._timeout, 90)
-                if name == "ct_collector_publish_facts"
-                else self._timeout
-            )
             response = self._client.post(
                 self._url,
                 json={
@@ -295,7 +236,7 @@ class CloudflareCollectorRemote:
                         else {}
                     ),
                 },
-                timeout=timeout,
+                timeout=self._timeout,
             )
             payload = response.json()
             if response.is_error:
@@ -395,9 +336,7 @@ class LocalCollector:
         self._connection.execute(
             "update observation_outbox set state = 'pending' where state = 'in_flight'"
         )
-        self._connection.execute(
-            "update publication_outbox set state = 'pending' where state = 'in_flight'"
-        )
+        self._reset_artifact_publications()
         self._reject_invalid_observations()
         self._connection.commit()
 
@@ -425,6 +364,7 @@ class LocalCollector:
     ) -> CollectorRunResult:
         """Discover, fence, publish checkpoints, and publish local graph facts."""
 
+        self._reject_pending_legacy_publications()
         if remote is not None and global_scope:
             raise ValueError(
                 "remote chronicle publication requires project-scoped collection"
@@ -648,11 +588,7 @@ class LocalCollector:
                     str(recovery.next_publication_sequence),
                 )
                 self._connection.commit()
-                facts_queued = self._queue_fact_publication(
-                    collected,
-                    artifact_mode=hasattr(remote, "upload_artifact")
-                    and hasattr(remote, "publish_artifacts"),
-                )
+                facts_queued = self._queue_fact_publication(collected)
                 current_accepted, current_rejected = self._flush_facts(remote)
                 facts_accepted += current_accepted
                 facts_rejected += current_rejected
@@ -688,6 +624,7 @@ class LocalCollector:
     def flush(self, remote: CollectorRemote) -> tuple[int, int]:
         """Publish pending work with the exact key and payload originally queued."""
 
+        self._reject_pending_legacy_publications()
         accepted = 0
         rejected = 0
         rows = self._connection.execute(
@@ -824,9 +761,7 @@ class LocalCollector:
             and recovered.content_sha256 == source.content_sha256
         )
 
-    def _queue_fact_publication(
-        self, sources: list[_CollectedSource], *, artifact_mode: bool = False
-    ) -> int:
+    def _queue_fact_publication(self, sources: list[_CollectedSource]) -> int:
         if self.identity.project_id is None:
             raise ValueError("fact publication requires a project_id")
         session_sources: dict[UUID, tuple[Session, list[_CollectedSource]]] = {}
@@ -859,9 +794,7 @@ class LocalCollector:
         if len(source_vector) != len(sources):
             raise ValueError("fact publication has an incomplete source vector")
 
-        publications: list[FactGraphPublication] = []
         artifact_publications: list[ArtifactGraphPublication] = []
-        fact_sets: list[PublishedFactSet] = []
         for graph in sorted(graphs, key=lambda entry: str(entry.root_session_id)):
             graph_sources = [
                 source
@@ -910,16 +843,7 @@ class LocalCollector:
             else:
                 facts_sha256 = prepared["facts_sha256"]
                 summary_sha256 = prepared["summary_sha256"]
-                fact_set = (
-                    None
-                    if artifact_mode
-                    else PublishedFactSet.model_validate_json(
-                        self._connection.execute(
-                            "select body from artifact_objects where sha256 = ?",
-                            (facts_sha256,),
-                        ).fetchone()["body"]
-                    )
-                )
+                fact_set = None
             fact_set_digest = (
                 fact_set.fact_set_digest
                 if fact_set is not None
@@ -928,25 +852,6 @@ class LocalCollector:
             fact_count = (
                 len(fact_set.rows) if fact_set is not None else prepared["fact_count"]
             )
-            if fact_set is not None:
-                fact_sets.append(fact_set)
-                publications.append(
-                    FactGraphPublication(
-                        graph_id=fact_set.graph_id,
-                        fact_set_digest=fact_set.fact_set_digest,
-                        fact_count=len(fact_set.rows),
-                        kind_counts=fact_set.kind_counts,
-                        source_ids=sorted(
-                            (
-                                source.source_id
-                                for source in graph_sources
-                                if source.source_id is not None
-                            ),
-                            key=str,
-                        ),
-                        observed_at=max(source.observed_at for source in graph_sources),
-                    )
-                )
             facts_row = self._connection.execute(
                 "select encoded_bytes from artifact_objects where sha256 = ?",
                 (facts_sha256,),
@@ -992,19 +897,8 @@ class LocalCollector:
                 for entry in source_vector
             ],
             "graphs": [
-                (
-                    graph.model_dump(mode="json", exclude_none=True)
-                    if isinstance(graph, ArtifactGraphPublication)
-                    else {
-                        "graph_id": str(graph.graph_id),
-                        "fact_set_digest": graph.fact_set_digest,
-                        "fact_count": graph.fact_count,
-                        "kind_counts": graph.kind_counts,
-                        "source_ids": [str(value) for value in graph.source_ids],
-                        "observed_at": graph.observed_at.isoformat(),
-                    }
-                )
-                for graph in (artifact_publications if artifact_mode else publications)
+                graph.model_dump(mode="json", exclude_none=True)
+                for graph in artifact_publications
             ],
         }
         publication_digest = _sha256(canonical_json(basis).encode())
@@ -1012,42 +906,23 @@ class LocalCollector:
         if self._get_meta(f"{meta_prefix}:last_digest", "") == publication_digest:
             return 0
         sequence = int(self._get_meta(f"{meta_prefix}:next_sequence", "0"))
-        request: FactPublicationRequest | ArtifactPublicationRequest
-        if artifact_mode:
-            request = ArtifactPublicationRequest(
-                workspace_id=self.identity.workspace_id,
-                agent_id=self.identity.agent_id,
-                project_id=self.identity.project_id,
-                publication_sequence=sequence,
-                source_vector=source_vector,
-                graphs=artifact_publications,
-            )
-        else:
-            request = FactPublicationRequest(
-                workspace_id=self.identity.workspace_id,
-                agent_id=self.identity.agent_id,
-                project_id=self.identity.project_id,
-                publication_sequence=sequence,
-                source_vector=source_vector,
-                graphs=publications,
-            )
+        request = ArtifactPublicationRequest(
+            workspace_id=self.identity.workspace_id,
+            agent_id=self.identity.agent_id,
+            project_id=self.identity.project_id,
+            publication_sequence=sequence,
+            source_vector=source_vector,
+            graphs=artifact_publications,
+        )
         idempotency_key = _sha256(
             (
                 f"{self.identity.agent_id}:{self.identity.project_id}:"
                 f"{sequence}:{publication_digest}"
             ).encode()
         )
-        staged = (
-            {"artifact_publication": request.model_dump(mode="json", exclude_none=True)}
-            if artifact_mode
-            else {
-                "publication": request.wire_payload(),
-                "fact_sets": [
-                    fact_set.model_dump(mode="json", exclude_none=True)
-                    for fact_set in fact_sets
-                ],
-            }
-        )
+        staged = {
+            "artifact_publication": request.model_dump(mode="json", exclude_none=True)
+        }
         encoded = json.dumps(staged, separators=(",", ":"), sort_keys=True)
         self._connection.execute(
             "insert or ignore into publication_outbox (idempotency_key, project_id, publication_sequence, content_sha256, request_json, state, attempts, created_at) values (?, ?, ?, ?, ?, 'pending', 0, ?)",
@@ -1066,6 +941,7 @@ class LocalCollector:
         return 1
 
     def _flush_facts(self, remote: CollectorRemote) -> tuple[int, int]:
+        self._reject_pending_legacy_publications()
         accepted = 0
         rejected = 0
         rows = self._connection.execute(
@@ -1079,79 +955,48 @@ class LocalCollector:
             self._connection.commit()
             try:
                 staged = json.loads(row["request_json"])
-                if "artifact_publication" in staged:
-                    artifact_request = ArtifactPublicationRequest.model_validate(
-                        staged["artifact_publication"]
-                    )
-                    acknowledged = self._previous_artifact_references(
-                        artifact_request.publication_sequence
-                    )
-                    committed = False
-                    if row["attempts"] > 0:
-                        recovered = remote.recover(
-                            CollectorRecoveryRequest(
-                                workspace_id=artifact_request.workspace_id,
-                                agent_id=artifact_request.agent_id,
-                                project_id=artifact_request.project_id,
-                                publication_idempotency_key=row["idempotency_key"],
-                            )
+                artifact_request = ArtifactPublicationRequest.model_validate(
+                    staged["artifact_publication"]
+                )
+                acknowledged = self._previous_artifact_references(
+                    artifact_request.publication_sequence
+                )
+                committed = False
+                if row["attempts"] > 0:
+                    recovered = remote.recover(
+                        CollectorRecoveryRequest(
+                            workspace_id=artifact_request.workspace_id,
+                            agent_id=artifact_request.agent_id,
+                            project_id=artifact_request.project_id,
+                            publication_idempotency_key=row["idempotency_key"],
                         )
-                        committed = recovered.publication_receipt is not None
-                    # The authority validates new references and attests exact
-                    # retained ones. Skip locally acknowledged immutable objects;
-                    # after an uncommitted uncertain response, upload all. A
-                    # recovered receipt needs only an exact idempotent replay.
-                    force_upload = row["attempts"] > 0 and not committed
-                    for graph in artifact_request.graphs:
-                        for reference in (graph.facts, graph.summary):
-                            if committed or (
-                                not force_upload and reference.sha256 in acknowledged
-                            ):
-                                continue
-                            artifact = self._connection.execute(
-                                "select body from artifact_objects where sha256 = ? and kind = ?",
-                                (reference.sha256, reference.kind),
-                            ).fetchone()
-                            if artifact is None:
-                                raise ValueError("prepared artifact is unavailable")
-                            remote.upload_artifact(
-                                kind=reference.kind,
-                                sha256=reference.sha256,
-                                body=bytes(artifact["body"]),
-                            )
-                    receipt = remote.publish_artifacts(
-                        artifact_request, idempotency_key=row["idempotency_key"]
                     )
-                    request = None
-                    fact_sets = []
-                else:
-                    request = FactPublicationRequest.model_validate(
-                        staged["publication"]
-                    )
-                    fact_sets = [
-                        PublishedFactSet.model_validate(fact_set)
-                        for fact_set in staged["fact_sets"]
-                    ]
-                    # A lost publication response may leave a committed receipt but
-                    # no staging rows. Check retries before needlessly restaging.
-                    committed = False
-                    if row["attempts"] > 0:
-                        recovered = remote.recover(
-                            CollectorRecoveryRequest(
-                                workspace_id=request.workspace_id,
-                                agent_id=request.agent_id,
-                                project_id=request.project_id,
-                                publication_idempotency_key=row["idempotency_key"],
-                            )
+                    committed = recovered.publication_receipt is not None
+                # The authority validates new references and attests exact
+                # retained ones. Skip locally acknowledged immutable objects;
+                # after an uncommitted uncertain response, upload all. A
+                # recovered receipt needs only an exact idempotent replay.
+                force_upload = row["attempts"] > 0 and not committed
+                for graph in artifact_request.graphs:
+                    for reference in (graph.facts, graph.summary):
+                        if committed or (
+                            not force_upload and reference.sha256 in acknowledged
+                        ):
+                            continue
+                        artifact = self._connection.execute(
+                            "select body from artifact_objects where sha256 = ? and kind = ?",
+                            (reference.sha256, reference.kind),
+                        ).fetchone()
+                        if artifact is None:
+                            raise ValueError("prepared artifact is unavailable")
+                        remote.upload_artifact(
+                            kind=reference.kind,
+                            sha256=reference.sha256,
+                            body=bytes(artifact["body"]),
                         )
-                        committed = recovered.publication_receipt is not None
-                    if not committed:
-                        self._stage_fact_rows(remote, request, fact_sets)
-                    # Always replay the exact request: the server still checks the
-                    # receipt's payload identity, including on the recovery path.
-                    receipt = remote.publish_facts(
-                        request, idempotency_key=row["idempotency_key"]
-                    )
+                receipt = remote.publish_artifacts(
+                    artifact_request, idempotency_key=row["idempotency_key"]
+                )
             except (CollectorRemoteError, OSError, ValueError):
                 self._connection.execute(
                     "update publication_outbox set state = 'pending', last_error = ? where idempotency_key = ?",
@@ -1211,50 +1056,6 @@ class LocalCollector:
             if state == "rejected":
                 break
         return accepted, rejected
-
-    def _stage_fact_rows(
-        self,
-        remote: CollectorRemote,
-        request: FactPublicationRequest,
-        fact_sets: list[PublishedFactSet],
-    ) -> None:
-        """Idempotently stage every missing fact-row batch before commit."""
-
-        by_graph = {fact_set.graph_id: fact_set for fact_set in fact_sets}
-        for publication in request.graphs:
-            fact_set = by_graph.get(publication.graph_id)
-            if fact_set is None or (
-                fact_set.fact_set_digest != publication.fact_set_digest
-            ):
-                raise ValueError("publication fact set mismatch before staging")
-            batches = _fact_row_batches(fact_set)
-            missing = remote.missing_fact_rows(
-                MissingFactRowsRequest(
-                    workspace_id=request.workspace_id,
-                    agent_id=request.agent_id,
-                    graph_id=publication.graph_id,
-                    fact_set_digest=publication.fact_set_digest,
-                    batch_count=len(batches),
-                )
-            )
-            if missing.graph_id != publication.graph_id or (
-                missing.fact_set_digest != publication.fact_set_digest
-            ):
-                raise CollectorRemoteError("fact staging identity mismatch")
-            for index in missing.missing_batches:
-                if index < 0 or index >= len(batches):
-                    raise CollectorRemoteError("fact staging returned an invalid batch")
-                remote.stage_fact_rows(
-                    StageFactRowsRequest(
-                        workspace_id=request.workspace_id,
-                        agent_id=request.agent_id,
-                        graph_id=publication.graph_id,
-                        fact_set_digest=publication.fact_set_digest,
-                        batch_index=index,
-                        batch_count=len(batches),
-                        rows=batches[index],
-                    )
-                )
 
     def pending_count(self) -> int:
         row = self._connection.execute(
@@ -1825,6 +1626,45 @@ class LocalCollector:
                     (row["idempotency_key"],),
                 )
 
+    def _reset_artifact_publications(self) -> None:
+        """Recover interrupted artifact delivery without touching legacy rows."""
+
+        rows = self._connection.execute(
+            "select idempotency_key, request_json from publication_outbox where state = 'in_flight'"
+        ).fetchall()
+        for row in rows:
+            try:
+                staged = json.loads(row["request_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(staged, dict) and "artifact_publication" in staged:
+                self._connection.execute(
+                    "update publication_outbox set state = 'pending' where idempotency_key = ?",
+                    (row["idempotency_key"],),
+                )
+
+    def _reject_pending_legacy_publications(self) -> None:
+        """Stop safely when an old SQL publication still awaits delivery."""
+
+        rows = self._connection.execute(
+            "select idempotency_key, request_json from publication_outbox where state in ('pending', 'in_flight') or (state = 'rejected' and last_error = 'conflict')"
+        ).fetchall()
+        legacy_keys: list[str] = []
+        for row in rows:
+            try:
+                staged = json.loads(row["request_json"])
+            except (TypeError, json.JSONDecodeError):
+                staged = None
+            if not isinstance(staged, dict) or "artifact_publication" not in staged:
+                legacy_keys.append(row["idempotency_key"])
+        if legacy_keys:
+            raise RuntimeError(
+                "legacy SQL publication is still pending in the local "
+                "publication_outbox; no collection or remote delivery was attempted. "
+                "Back up the collector database and resolve or migrate the retained "
+                f"legacy row(s) explicitly (idempotency keys: {', '.join(legacy_keys)})."
+            )
+
 
 def _expand_scoped_graph_candidates(
     candidates: list[DiscoveryCandidate],
@@ -1879,32 +1719,6 @@ def _prepared_graph_summary(fact_set: PublishedFactSet) -> PreparedGraphSummary:
     from coding_trajectory.control_plane.published_facts import FactIndex
 
     return prepared_graph_summary(FactIndex.from_fact_sets([fact_set]))
-
-
-def _fact_row_batches(fact_set: PublishedFactSet) -> list[list[Any]]:
-    """Split one validated fact set (never empty) into staging batches."""
-
-    batches: list[list[Any]] = []
-    batch: list[Any] = []
-    batch_bytes = 2
-    for row in fact_set.rows:
-        row_bytes = len(
-            canonical_json(row.model_dump(mode="json", exclude_none=True)).encode()
-        )
-        candidate_bytes = batch_bytes + row_bytes + (1 if batch else 0)
-        if batch and (
-            len(batch) >= FACT_ROW_BATCH_MAX
-            or candidate_bytes > FACT_STAGE_BATCH_MAX_BYTES
-        ):
-            batches.append(batch)
-            batch = [row]
-            batch_bytes = row_bytes + 2
-        else:
-            batch.append(row)
-            batch_bytes = candidate_bytes
-    if batch:
-        batches.append(batch)
-    return batches
 
 
 def _complete_prefix(source: Path, size: int) -> tuple[int, bytes]:

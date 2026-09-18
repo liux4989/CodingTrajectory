@@ -10,7 +10,11 @@ from pathlib import Path
 from uuid import UUID
 
 from coding_trajectory.control_plane import graph_preparation
-from coding_trajectory.control_plane.collector import CollectorIdentity, LocalCollector
+from coding_trajectory.control_plane.collector import (
+    CollectorIdentity,
+    CollectorRemoteError,
+    LocalCollector,
+)
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorRecoveryResponse,
     ObservationReceipt,
@@ -35,8 +39,12 @@ class CheckpointRemote:
     def __init__(self) -> None:
         self.registrations: list[SourceRegistrationRequest] = []
         self.requests: list[ObservationRequest] = []
+        self.recoveries = 0
+        self.uploads = 0
+        self.publications = 0
 
     def recover(self, _request) -> CollectorRecoveryResponse:
+        self.recoveries += 1
         return CollectorRecoveryResponse(next_publication_sequence=0)
 
     def register_source(
@@ -56,7 +64,20 @@ class CheckpointRemote:
         self.requests.append(ObservationRequest.model_validate(request.model_dump()))
         return ObservationReceipt(
             receipt_id=UUID(int=200 + len(self.requests)),
-            outcome="rejected",
+            outcome="accepted",
+        )
+
+    def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None:
+        assert kind in {"facts", "summary"} and len(sha256) == 64 and body
+        self.uploads += 1
+
+    def publish_artifacts(self, request, *, idempotency_key: str) -> ObservationReceipt:
+        assert request.graphs and idempotency_key
+        self.publications += 1
+        if self.publications == 1:
+            raise CollectorRemoteError("synthetic uncertain artifact response")
+        return ObservationReceipt(
+            receipt_id=UUID(int=300 + self.publications), outcome="accepted"
         )
 
 
@@ -319,10 +340,98 @@ def main():
             assert remote.registrations[-1].source_epoch == 2
             assert remote.requests[-1].source_epoch == 2
             assert remote.requests[-1].source_sequence == 0
+            assert remote.publications >= 2
+            assert collector._connection.execute(
+                "SELECT COUNT(*) FROM publication_outbox WHERE state = 'accepted'"
+            ).fetchone()[0]
+
+        # A retired SQL publication must be an explicit local migration stop,
+        # never silently discarded, rewritten, or sent to any remote endpoint.
+        legacy_path = root / "legacy.sqlite3"
+        with LocalCollector(
+            database_path=legacy_path, identity=checkpoint_identity
+        ) as collector:
+            legacy_row = (
+                "legacy-key",
+                str(checkpoint_identity.project_id),
+                7,
+                "a" * 64,
+                json.dumps({"publication": {"version": 1}, "fact_sets": []}),
+                "pending",
+                2,
+                "legacy retry",
+                stamp,
+            )
+            collector._connection.execute(
+                "INSERT INTO publication_outbox VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                legacy_row,
+            )
+            collector._connection.commit()
+        calls_before = (
+            remote.recoveries,
+            len(remote.registrations),
+            len(remote.requests),
+            remote.uploads,
+            remote.publications,
+        )
+        with LocalCollector(
+            database_path=legacy_path, identity=checkpoint_identity
+        ) as collector:
+            try:
+                collector.collect(
+                    current_dir=root,
+                    agent_vendor="amp",
+                    remote=remote,
+                    heartbeat=False,
+                )
+            except RuntimeError as error:
+                assert "legacy SQL publication" in str(error)
+                assert "legacy-key" in str(error)
+            else:
+                raise AssertionError("pending legacy SQL publication was not rejected")
+            preserved = tuple(
+                collector._connection.execute(
+                    "SELECT * FROM publication_outbox WHERE idempotency_key = ?",
+                    ("legacy-key",),
+                ).fetchone()
+            )
+            assert preserved == legacy_row
+            for state in ("in_flight", "rejected"):
+                collector._connection.execute(
+                    "UPDATE publication_outbox SET state=?, last_error='conflict'",
+                    (state,),
+                )
+                collector._connection.commit()
+                before = tuple(
+                    collector._connection.execute(
+                        "SELECT * FROM publication_outbox"
+                    ).fetchone()
+                )
+                try:
+                    collector.flush(remote)
+                except RuntimeError as error:
+                    assert "legacy SQL publication" in str(error)
+                else:
+                    raise AssertionError("legacy retry was not rejected")
+                assert (
+                    tuple(
+                        collector._connection.execute(
+                            "SELECT * FROM publication_outbox"
+                        ).fetchone()
+                    )
+                    == before
+                )
+        assert calls_before == (
+            remote.recoveries,
+            len(remote.registrations),
+            len(remote.requests),
+            remote.uploads,
+            remote.publications,
+        )
         print(
             json.dumps(
                 {
-                    "passed": 27,
+                    "passed": 30,
                     "batch_resolves_once_then_refreshes": True,
                     "projection_calls_initial_replay_change": [2, 0, 1],
                     "same_name_projects_isolated": True,
@@ -333,6 +442,9 @@ def main():
                     "deterministic_reparse": first == replay,
                     "checkpoint_requests": len(remote.requests),
                     "clean_rollover": True,
+                    "artifact_retry_recovered": True,
+                    "legacy_pending_preserved": True,
+                    "legacy_pending_remote_calls": 0,
                     "network_requests": 0,
                 }
             )

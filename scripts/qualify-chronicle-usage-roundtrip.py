@@ -4,13 +4,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from coding_trajectory.control_plane.fact_protocol import FactReadResponse
-from coding_trajectory.control_plane.fact_repository import (
-    _fact_sets_from_rows,
-    published_fact_set_for_store,
-)
+from coding_trajectory.control_plane.fact_repository import published_fact_set_for_store
 from coding_trajectory.control_plane.published_facts import FactIndex
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
@@ -134,24 +130,10 @@ def main() -> None:
     local_store = FactIndex.from_fact_sets(fact_sets)
     assert_usage(local_store, current_usage, normalized_cumulative)
 
-    response = FactReadResponse(
-        workspace_id=UUID("00000000-0000-0000-0000-000000000001"),
-        snapshot_sequence=1,
-        rows=fact_sets[0].rows,
-        graph_digests={str(graph.root_session_id): fact_sets[0].fact_set_digest},
-        graph_fact_counts={str(graph.root_session_id): len(fact_sets[0].rows)},
-    )
-    remote_response = FactReadResponse.model_validate_json(response.model_dump_json())
-    remote_sets = _fact_sets_from_rows(
-        remote_response.rows,
-        digests=remote_response.graph_digests,
-        counts=remote_response.graph_fact_counts,
-    )
-    remote_store = FactIndex.from_fact_sets(remote_sets)
-    assert_usage(remote_store, current_usage, normalized_cumulative)
-    print(
-        "Chronicle cumulative usage round trip: PASS (local facts and remote response)"
-    )
+    artifact = type(fact_sets[0]).model_validate_json(fact_sets[0].model_dump_json())
+    artifact_store = FactIndex.from_fact_sets([artifact])
+    assert_usage(artifact_store, current_usage, normalized_cumulative)
+    print("Chronicle cumulative usage round trip: PASS (local and artifact facts)")
 
 
 def assert_usage(

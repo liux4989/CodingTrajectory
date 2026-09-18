@@ -35,7 +35,6 @@ from coding_trajectory.control_plane.collector_protocol import (
 from coding_trajectory.control_plane.fact_repository import (
     ArtifactReadCache,
     CloudflareArtifactRepository,
-    CloudflareFactRepository,
 )
 from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
@@ -68,6 +67,65 @@ def check(value: object, label: str) -> None:
     if not value:
         raise AssertionError(label)
     checks += 1
+
+
+def qualify_reader_fail_closed() -> None:
+    class Client:
+        def __init__(self, response=None, error=None):
+            self.response = response
+            self.error = error
+
+        def call(self, method, _request):
+            assert method == "ct_artifact_manifest"
+            if self.error is not None:
+                raise self.error
+            return self.response
+
+        def close(self):
+            return None
+
+    empty = Client(
+        {"workspace_id": str(WORKSPACE), "snapshot_sequence": 7, "manifests": []}
+    )
+    repository = CloudflareArtifactRepository(
+        client=empty,
+        workspace_id=WORKSPACE,
+        snapshot_sequence=7,
+        cache=ArtifactReadCache(),
+    )
+    check(
+        repository.response_for("project.sessions", {}) == {"items": []},
+        "empty artifact manifest produces an empty session list",
+    )
+    try:
+        repository.store_for("graph.stats", {"root_session_id": str(uuid4())})
+    except RemoteControlPlaneError as exc:
+        check("no graphs" in str(exc), "empty artifact detail has no SQL fallback")
+    else:
+        raise AssertionError("empty artifact detail unexpectedly fell back")
+
+    unavailable = RemoteControlPlaneError(
+        "snapshot unavailable", code="artifact_snapshot_unavailable"
+    )
+    repository = CloudflareArtifactRepository(
+        client=Client(error=unavailable),
+        workspace_id=WORKSPACE,
+        snapshot_sequence=7,
+        cache=ArtifactReadCache(),
+    )
+    try:
+        repository.response_for("project.sessions", {})
+    except RemoteControlPlaneError as exc:
+        check(exc is unavailable, "artifact snapshot unavailability propagates")
+    else:
+        raise AssertionError("artifact snapshot unavailability was swallowed")
+
+    try:
+        CloudflareArtifactRepository._summary_for({}, uuid4())
+    except RemoteControlPlaneError as exc:
+        check("missing detail" in str(exc), "missing graph detail is explicit")
+    else:
+        raise AssertionError("missing graph detail was accepted")
 
 
 def encode(value: object) -> bytes:
@@ -462,6 +520,7 @@ def main() -> None:
     parsed = urlparse(URL)
     if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise SystemExit("artifact qualification refuses a non-loopback target")
+    qualify_reader_fail_closed()
     observed = datetime.now(UTC).replace(microsecond=0)
     tag = uuid4().hex
     project_name = "ArtifactQualification-" + tag
@@ -531,16 +590,12 @@ def main() -> None:
     assert initial_snapshot is not None
 
     client = CloudflareRpcClient(url=URL, access_token=QUALIFICATION.TOKENS["reader"])
-    fallback = CloudflareFactRepository(
-        client=client, workspace_id=WORKSPACE, snapshot_sequence=initial_snapshot
-    )
     cache = ArtifactReadCache(max_bytes=2 * 1024 * 1024, max_entries=2)
     repository = CloudflareArtifactRepository(
         client=client,
         workspace_id=WORKSPACE,
         snapshot_sequence=initial_snapshot,
         cache=cache,
-        fallback=fallback,
     )
     listed = repository.response_for("project.sessions", {"project_name": project_name})
     check(

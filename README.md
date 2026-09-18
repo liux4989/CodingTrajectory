@@ -48,8 +48,36 @@ and reads summaries only for that project. Detailed remote reads remain lazy.
 
 The existing zero-item visibility rule is unchanged. Project IDs are attached
 at read time, so this refactor does not require resetting remote data or changing
-existing immutable facts/summaries. Deploying the new client/contract and Worker
-SQL project-ID selector remains a separate rollout; no publication is automatic.
+existing immutable facts/summaries. No publication is automatic.
+
+## Artifact-only remote history and legacy cleanup
+
+Remote historical reads and collector publication use immutable artifacts only.
+The SQL fact read/stage/publish RPCs are retired (HTTP 404); there is no automatic
+SQL fallback when artifact snapshots are unavailable. Upgrade collectors and
+readers together. Pending legacy collector publications stop delivery with an
+actionable error and remain in the local outbox; they are never silently deleted
+or republished. Historical benchmark records describe their original versions.
+
+Retirement does not drop production tables by default. Operators can inspect
+`ct_legacy_fact_cleanup_status` with a reader credential. After confirming the
+target workspace, snapshot, artifact manifest, disabled collection, zero legacy
+publication records, and empty legacy data tables, an explicitly authorized
+deployment may temporarily set `CT_LEGACY_FACT_CLEANUP_WORKSPACE_ID` to that
+workspace UUID. On the target Durable Object's next initialization, its object
+ID is checked and a synchronous transaction drops only `fact_rows`, `fact_schema`,
+`staged_fact_rows`, `staged_fact_items`, `staged_fact_generations`, and
+`validated_fact_graphs`. The only allowed nonempty table is `fact_schema`, with
+the single known marker `(id=1, version=1)`. Unexpected contents abort cleanup.
+
+This is a deployment-controlled schema migration, not a reader deletion API.
+Deploy retirement with the gate absent first; inspect before enabling it. Remove
+the gate immediately after cleanup (or on failure), then confirm the six tables
+remain absent, the snapshot and artifact reads are unchanged, and roles still
+match. Shared SQL metadata, receipts, manifests, and R2 objects are preserved.
+Do not roll back to a pre-retirement Worker: it would recreate the old tables.
+Use `node scripts/qualify-legacy-fact-cleanup.mjs` for disposable workerd/SQLite
+qualification of table guards, target isolation, gate teardown, and retry.
 
 ## Docs
 

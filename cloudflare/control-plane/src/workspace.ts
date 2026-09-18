@@ -2,13 +2,12 @@ import { DurableObject } from "cloudflare:workers";
 import { authorityFailure, digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
 import { artifactManifests, artifactReadLocator, claimArtifactUpload, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
-import { commitPublication, factRead, initializeFacts, missingFactRows, preparePublication, verifyStageRows, writeStagedRows } from "./facts";
+import { dropEmptyLegacyFactTables, legacyFactTables } from "./legacy-cleanup";
 import { livingRead, livingWrite } from "./living";
 import { deleteWorkspaceArtifactPrefix, initializeReplacement, markWorkspaceReplacement, previewWorkspaceReplacement, workspaceReplacement } from "./replacement";
 
 const REPLACEMENT_MUTATIONS = new Set([
   "ct_project_register", "ct_collector_register_source", "ct_collector_publish_observation",
-  "ct_collector_missing_fact_rows", "ct_collector_stage_fact_rows", "ct_collector_publish_facts",
   "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation",
   "ct_internal_artifact_claim",
 ]);
@@ -16,19 +15,20 @@ const REPLACEMENT_MUTATIONS = new Set([
 /** A workspace is the authorization, transaction and revision boundary. */
 export class Workspace extends DurableObject<Env> {
   private state: State;
-  private cursorSecret: string;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.state = new State(ctx.storage.sql);
-    this.cursorSecret = env.CT_CURSOR_KEY;
     this.initialize();
   }
 
   private initialize() {
     this.ctx.storage.transactionSync(() => {
-      initializeFacts(this.state);
       initializeArtifacts(this.state);
       initializeReplacement(this.state);
+      const target = this.env.CT_LEGACY_FACT_CLEANUP_WORKSPACE_ID;
+      if (target && this.ctx.id.toString() === this.env.WORKSPACES.idFromName(target).toString()) {
+        dropEmptyLegacyFactTables(this.state);
+      }
     });
   }
 
@@ -104,40 +104,8 @@ export class Workspace extends DurableObject<Env> {
       // Compute identity before schema defaults normalize the request.
       const identity = await digest(stable(request));
       validate(method, request);
-      if (method === "ct_fact_read") {
-        return { status: 200, body: await factRead(this.state, request, this.cursorSecret) };
-      }
       if (method === "ct_artifact_read") {
         return { status: 200, body: artifactReadLocator(this.state, request) };
-      }
-      if (method === "ct_collector_missing_fact_rows") return { status: 200, body: missingFactRows(this.state, request) };
-      if (method === "ct_collector_stage_fact_rows") {
-        await verifyStageRows(request);
-        return { status: 200, body: this.ctx.storage.transactionSync(() => writeStagedRows(this.state, request)) };
-      }
-      if (method === "ct_collector_publish_facts") {
-        const key = envelope.idempotency_key
-          ? stable([principal.agent_id, method, envelope.idempotency_key])
-          : null;
-        const prior = key ? this.state.get("receipt", key) : undefined;
-        if (prior) {
-          requireThat(prior.identity === identity, "idempotency_conflict", 409);
-          return { status: 200, body: prior.result };
-        }
-        // Hash verification is async (crypto.subtle); fencing and the atomic
-        // commit and receipt write run inside one workspace transaction.
-        const plan = await preparePublication(this.state, request);
-        const body = this.ctx.storage.transactionSync(() => {
-          const concurrent = key ? this.state.get("receipt", key) : undefined;
-          if (concurrent) {
-            requireThat(concurrent.identity === identity, "idempotency_conflict", 409);
-            return concurrent.result;
-          }
-          const result = commitPublication(this.state, request, plan);
-          if (key) this.state.put("receipt", key, { identity, result }, this.state.head());
-          return result;
-        });
-        return { status: 200, body };
       }
       if (method === "ct_collector_publish_artifacts") {
         const key = envelope.idempotency_key
@@ -196,6 +164,10 @@ export class Workspace extends DurableObject<Env> {
       case "ct_collector_heartbeat": case "ct_collector_publish_living_observation": return livingWrite(this.state, method, request);
       case "ct_remote_living": return livingRead(this.state, request);
       case "ct_workspace_snapshot": return { workspace_id: request.workspace_id, snapshot_sequence: this.state.pin(request.snapshot_sequence) };
+      case "ct_legacy_fact_cleanup_status": return {
+        workspace_id: request.workspace_id, snapshot_sequence: this.state.head(),
+        ...legacyFactTables(this.state),
+      };
       case "ct_artifact_manifest": return artifactManifests(this.state, request);
       case "ct_project_inventory_snapshot": {
         const sequence = this.state.pin(request.snapshot_sequence);
@@ -208,18 +180,14 @@ export class Workspace extends DurableObject<Env> {
         if (artifactRows.length !== expectedArtifactProjects.length) {
           throw new Fault(410, "artifact_snapshot_expired");
         }
-        const artifactProjects = new Set(artifactRows.map(row => row.project_id));
-        const legacyGraphs = this.state.all("graph_publication", sequence)
-          .filter(row => !row.deleted && !artifactProjects.has(row.project_id));
         const artifactGraphs = artifactRows.flatMap(row => JSON.parse(row.manifest).graphs.map((graph: Json) => ({
             project_id: row.project_id, vendors: graph.vendors,
           })));
-        const graphs = [...legacyGraphs, ...artifactGraphs];
         const projects = this.state.all("project", sequence)
           .filter(row => !request.modified_since || Date.parse(row.modified_at) >= Date.parse(request.modified_since))
           .map((row): Json => ({
             ...row,
-            vendors: [...new Set(graphs.filter(graph => graph.project_id === row.project_id).flatMap(graph => graph.vendors))].sort(),
+            vendors: [...new Set(artifactGraphs.filter(graph => graph.project_id === row.project_id).flatMap(graph => graph.vendors))].sort(),
           }))
           .filter(row => !request.agent_vendor || row.vendors.includes(request.agent_vendor))
           .sort((a, b) => a.display_name.localeCompare(b.display_name));

@@ -1,5 +1,4 @@
 import { DIGEST, Json, receipt, requireThat, stable, State, text, uuid } from "./shared";
-import { recoveredGraphs } from "./facts";
 
 
 export function registerProject(state: State, request: Json): Json {
@@ -42,8 +41,7 @@ export function registerSource(state: State, request: Json): Json {
 }
 
 export function recovery(state: State, request: Json): Json {
-  const publisher = state.get("artifact_project_publisher", request.project_id)
-    ?? state.get("publisher", `${request.agent_id}:${request.project_id}`);
+  const publisher = state.get("artifact_project_publisher", request.project_id);
   let source = null;
   if (request.vendor && request.native_session_id) {
     const identity = state.get("source_identity", stable([request.agent_id, request.vendor, request.native_session_id]));
@@ -57,13 +55,11 @@ export function recovery(state: State, request: Json): Json {
   }
   const living = request.agent_instance_id ? state.get("living_head", request.agent_instance_id) : undefined;
   if (living) requireThat(living.agent_id === request.agent_id, "agent_instance_conflict", 403);
-  const graphs = recoveredGraphs(state, request);
   return { next_publication_sequence: (publisher?.publication_sequence ?? -1) + 1,
     next_living_sequence: request.agent_instance_id ? (living?.observation_sequence ?? 0) + 1 : null, source,
-    authority_sequence: state.head(), graphs,
+    authority_sequence: state.head(),
     publication_receipt: request.publication_idempotency_key
       ? state.get("receipt", stable([request.agent_id, "ct_collector_publish_artifacts", request.publication_idempotency_key]))?.result
-        ?? state.get("receipt", stable([request.agent_id, "ct_collector_publish_facts", request.publication_idempotency_key]))?.result
         ?? null
       : null };
 }
