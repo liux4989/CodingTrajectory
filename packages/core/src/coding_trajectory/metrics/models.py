@@ -44,15 +44,9 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
     processed_tokens: int = 0
     reported_total_tokens: int | None = None
-    # The uncached prompt subset (input re-processed without a cache hit). Vendors
-    # differ: OpenAI/codex report ``input_tokens`` as the TOTAL (cached + uncached)
-    # and ``cached_input_tokens`` as the cached subset, so uncached = input -
-    # cached; Anthropic/pi report ``input_tokens`` as already-uncached. Codex
-    # ingestion sets this explicitly (input - cached); anthropic leaves it
-    # ``None`` (downstream falls back to ``input_tokens``, correct for them);
-    # pi sets it explicitly to ``input`` so per-turn re-read evidence populates.
-    # Carrying it avoids the ``or input_tokens`` fallback that overstated codex
-    # re-reads by the full prompt instead of the uncached subset.
+    # Ordinary input, excluding cache reads and cache writes. Codex input is
+    # inclusive, so ingestion derives input - cached - cache_creation;
+    # Anthropic/pi input already excludes both cache buckets.
     uncached_input_tokens: int | None = None
     # Vendor-reported USD cost for this usage bucket (e.g. Pi's ``cost.total``
     # from its jsonl logs). Downstream consumers prefer it over the pricing

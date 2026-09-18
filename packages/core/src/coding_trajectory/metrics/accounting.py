@@ -53,11 +53,10 @@ def glossary_usage_dict(
 def usage_accounting_payload(usage: dict[str, int]) -> dict[str, int]:
     """Return usage with glossary names only."""
     prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-    uncached_prompt_tokens = int(
-        usage.get("uncached_prompt_tokens")
-        or usage.get("uncached_input_tokens")
-        or prompt_tokens
-    )
+    uncached = usage.get("uncached_prompt_tokens")
+    if uncached is None:
+        uncached = usage.get("uncached_input_tokens")
+    uncached_prompt_tokens = int(prompt_tokens if uncached is None else uncached)
     cached_prompt_tokens = int(
         usage.get("cached_prompt_tokens") or usage.get("cached_input_tokens") or 0
     )

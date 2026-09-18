@@ -199,9 +199,9 @@ def _token_usage_from_mapping(
     reported_total_tokens = _as_int(
         value.get("total_tokens") or value.get("totalTokens")
     )
-    uncached_raw = value.get("uncached_input_tokens") or value.get(
-        "uncachedInputTokens"
-    )
+    uncached_raw = value.get("uncached_input_tokens")
+    if uncached_raw is None:
+        uncached_raw = value.get("uncachedInputTokens")
     total_tokens, processed_tokens, total_confidence = _normalized_total_tokens(
         provider=provider,
         input_tokens=input_tokens,

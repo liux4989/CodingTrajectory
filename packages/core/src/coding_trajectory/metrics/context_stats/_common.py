@@ -421,9 +421,9 @@ def percent(value: int, denominator: int | None) -> float | None:
 def token_usage_from_mapping(value: dict[str, Any] | None) -> TokenUsage:
     if not isinstance(value, dict):
         return TokenUsage()
-    uncached_raw = value.get("uncached_input_tokens") or value.get(
-        "uncachedInputTokens"
-    )
+    uncached_raw = value.get("uncached_input_tokens")
+    if uncached_raw is None:
+        uncached_raw = value.get("uncachedInputTokens")
     return TokenUsage(
         input_tokens=_as_int(value.get("input_tokens") or value.get("inputTokens")),
         cached_input_tokens=_as_int(

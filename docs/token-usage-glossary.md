@@ -27,6 +27,17 @@ reasoning tokens separately from the provider total.
 Cost should be computed from component buckets or provider-reported cost, not
 from one total multiplied by one rate.
 
+Codex rollout usage flattens the API's `input_tokens_details.cached_tokens`
+and `input_tokens_details.cache_write_tokens` to `cached_input_tokens` and
+`cache_write_input_tokens`. Ingestion maps the latter to the canonical
+`cache_creation_input_tokens`, retained and exposed as `cache_write_tokens`.
+This applies to both per-response and cumulative token-count snapshots.
+Codex input totals include both cache buckets, so ordinary uncached input is
+`input_tokens - cached_input_tokens - cache_creation_input_tokens` (clamped at
+zero). A zero ordinary-input count must remain zero, including when all input
+was read from or written to cache. Missing write counters are not inferred
+from cache misses; historical logs cannot establish unreported writes.
+
 ## Display labels
 
 CLI markdown output renders the glossary fields

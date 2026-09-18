@@ -31,8 +31,9 @@ class UsageSchema(StrEnum):
 
     The schema owns the ``uncached_input_tokens`` derivation rule:
 
-    - ``OPENAI_TOTAL``: ``input_tokens`` is the TOTAL prompt (cached +
-      uncached), so the uncached subset is derived as ``input - cached``.
+    - ``OPENAI_TOTAL``: ``input_tokens`` is the TOTAL prompt
+      (ordinary input + cache reads + cache writes), so ordinary uncached
+      input is derived as ``input - cached - cache_creation``.
       Without the derivation, the ``or input_tokens`` fallback in
       ``usage_accounting_payload`` would label the whole prompt as uncached,
       overstating cache-break re-reads.
@@ -52,12 +53,13 @@ class UsageSchema(StrEnum):
         *,
         input_tokens: int | None,
         cached_input_tokens: int | None,
+        cache_creation_input_tokens: int = 0,
     ) -> int | None:
         """Return the ``uncached_input_tokens`` value for this schema."""
         if self is UsageSchema.OPENAI_TOTAL:
             if input_tokens is None or cached_input_tokens is None:
                 return None
-            return max(input_tokens - cached_input_tokens, 0)
+            return max(input_tokens - cached_input_tokens - cache_creation_input_tokens, 0)
         return input_tokens
 
     def apply(self, usage: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -74,6 +76,9 @@ class UsageSchema(StrEnum):
         uncached = self.derive_uncached_input_tokens(
             input_tokens=_as_int_or_none(usage.get("input_tokens")),
             cached_input_tokens=_as_int_or_none(usage.get("cached_input_tokens")),
+            cache_creation_input_tokens=(
+                _as_int_or_none(usage.get("cache_creation_input_tokens")) or 0
+            ),
         )
         if uncached is None:
             return usage
@@ -94,10 +99,22 @@ def normalize_codex_token_count(
         or _as_str(info_map.get("model_name"))
         or _as_str(model),
         usage_schema=UsageSchema.OPENAI_TOTAL,
-        last_token_usage=info_map.get("last_token_usage"),
-        total_token_usage=info_map.get("total_token_usage"),
+        last_token_usage=_codex_usage(info_map.get("last_token_usage")),
+        total_token_usage=_codex_usage(info_map.get("total_token_usage")),
         model_context_window=info_map.get("model_context_window"),
     )
+
+
+def _codex_usage(value: Any) -> Any:
+    """Map Codex's flattened API cache-write counter to the canonical bucket."""
+    if not isinstance(value, dict):
+        return value
+    writes = _as_int_or_none(value.get("cache_write_input_tokens"))
+    if writes is None:
+        return value
+    usage = dict(value)
+    usage["cache_creation_input_tokens"] = writes
+    return usage
 
 
 def normalize_claude_usage(*, model: Any, usage: Any) -> dict[str, Any]:
