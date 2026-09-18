@@ -1096,6 +1096,39 @@ def main() -> None:
     pinned_sequence = publication_0.committed_sequence
     assert pinned_sequence is not None
 
+    project_page = rpc(
+        "ct_fact_read",
+        {
+            "project_id": str(project.project_id),
+            "snapshot_sequence": pinned_sequence,
+            "limit": 1,
+        },
+        role="reader",
+    )
+    check(
+        set(project_page["graph_digests"])
+        == {str(first_a.graph_id), str(first_b.graph_id)},
+        "SQL fact selection uses registered project ID",
+    )
+    check(
+        not rpc(
+            "ct_fact_read",
+            {"project_id": str(UUID(int=999)), "snapshot_sequence": pinned_sequence},
+            role="reader",
+        )["rows"],
+        "unknown SQL project ID returns no foreign graphs",
+    )
+    rpc(
+        "ct_fact_read",
+        {
+            "project_id": str(UUID(int=999)),
+            "snapshot_sequence": pinned_sequence,
+            "cursor": project_page["next_cursor"],
+        },
+        role="reader",
+        status=409,
+    )
+
     first_page = rpc(
         "ct_fact_read",
         {"graph_id": str(first_a.graph_id), "limit": 1},

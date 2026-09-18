@@ -55,6 +55,11 @@ from coding_trajectory.control_plane.fact_protocol import (
     StageFactRowsRequest,
     StageFactRowsResponse,
 )
+from coding_trajectory.control_plane.graph_preparation import (
+    graph_input_digest,
+    prepare_graph,
+    prepared_graph_summary,
+)
 from coding_trajectory.control_plane.published_facts import PublishedFactSet
 from coding_trajectory.control_plane.remote import cloudflare_endpoint
 from coding_trajectory.discovery import (
@@ -863,21 +868,18 @@ class LocalCollector:
                 for session in graph.sessions
                 for source in session_sources[session.session_id][1]
             ]
-            graph_input_sha256 = _sha256(
-                canonical_json(
-                    graph.model_dump(mode="json", exclude_none=True)
-                ).encode()
-            )
+            graph_input_sha256 = graph_input_digest(graph)
             prepared = self._connection.execute(
                 "select * from prepared_graphs where preparation_version = ? and graph_input_sha256 = ?",
                 (ARTIFACT_PREPARATION_VERSION, graph_input_sha256),
             ).fetchone()
             if prepared is None:
-                fact_set = build_published_fact_set(graph)
+                graph_preparation = prepare_graph(graph)
+                fact_set = graph_preparation.publication()
                 fact_bytes = canonical_json(
                     fact_set.model_dump(mode="json", exclude_none=True)
                 ).encode()
-                summary = _prepared_graph_summary(fact_set)
+                summary = graph_preparation.summary
                 summary_bytes = canonical_json(
                     summary.model_dump(mode="json", exclude_none=True)
                 ).encode()
@@ -1875,33 +1877,8 @@ def _prepared_graph_summary(fact_set: PublishedFactSet) -> PreparedGraphSummary:
     """Prepare list cards and routing aliases once beside immutable facts."""
 
     from coding_trajectory.control_plane.published_facts import FactIndex
-    from coding_trajectory.service.handlers import dispatch
-    from coding_trajectory.service.store import IndexCache
 
-    index = FactIndex.from_fact_sets([fact_set])
-    response = dispatch(
-        "project.sessions",
-        {},
-        store=index,
-        global_scope=True,
-        current_dir=Path.cwd(),
-        discovery_note="prepared artifact",
-        cache=IndexCache(),
-    )
-    aliases = sorted(
-        {
-            row.fact_id
-            for row in fact_set.rows
-            if row.kind in {"graph", "session", "turn", "item"}
-        },
-        key=str,
-    )
-    return PreparedGraphSummary(
-        graph_id=fact_set.graph_id,
-        fact_set_digest=fact_set.fact_set_digest,
-        aliases=aliases,
-        project_sessions=response["items"],
-    )
+    return prepared_graph_summary(FactIndex.from_fact_sets([fact_set]))
 
 
 def _fact_row_batches(fact_set: PublishedFactSet) -> list[list[Any]]:

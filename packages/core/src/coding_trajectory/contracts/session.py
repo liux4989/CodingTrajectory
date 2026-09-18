@@ -21,8 +21,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 
@@ -41,15 +42,25 @@ class GraphScopedRequest(RequestModel):
 
 
 class ProjectListRequest(RequestModel):
+    project_id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
     project_name: str | None = None
     modified_since: datetime | None = None
     agent_vendor: str | None = None
 
+    @field_validator("project_id")
+    @classmethod
+    def canonical_project_id(cls, value: str | None) -> str | None:
+        return str(UUID(value)) if value is not None else None
 
-class ProjectSessionsRequest(RequestModel):
-    project_name: str | None = None
-    modified_since: datetime | None = None
-    agent_vendor: str | None = None
+    @model_validator(mode="after")
+    def one_project_selector(self) -> ProjectListRequest:
+        if self.project_id is not None and self.project_name is not None:
+            raise ValueError("use project_id or project_name, not both")
+        return self
+
+
+class ProjectSessionsRequest(ProjectListRequest):
+    pass
 
 
 class SessionOverviewRequest(RequestModel):
@@ -167,6 +178,8 @@ class SessionItemsRequest(SessionScopedRequest):
 
 
 class ProjectSummary(ContractModel):
+    project_id: str
+    display_name: str
     path: str | None = None
     vendors: list[str] = Field(default_factory=list)
     sessions: list[dict[str, Any]] | None = None
@@ -180,6 +193,7 @@ class SessionGraphSummary(ContractModel):
     graph_id: str | None = None
     root_session_id: str
     lineage_root_session_id: str | None = None
+    project_id: str | None = None
     project: str | None = None
     title: str | None = None
     preview: str | None = None
@@ -576,6 +590,7 @@ class CliSessionItemsResponse(ContractModel):
 class CliSessionGraphSummary(ContractModel):
     graph_id: str | None = None
     id: str
+    project_id: str | None = None
     project: str | None = None
     title: str | None = None
     vendors: list[str] = Field(default_factory=list)

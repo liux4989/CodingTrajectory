@@ -5,6 +5,7 @@ export type LineageRootSessionId = string | null;
 export type Modified = string | null;
 export type Preview = string | null;
 export type Project = string | null;
+export type ProjectId = string | null;
 export type RootSessionId = string;
 export type Runtime = {
   [k: string]: unknown;
@@ -28,6 +29,7 @@ export interface SessionGraphSummary {
   modified?: Modified;
   preview?: Preview;
   project?: Project;
+  project_id?: ProjectId;
   root_session_id: RootSessionId;
   runtime?: Runtime;
   session_ids?: SessionIds;

@@ -201,6 +201,7 @@ class FactReadRequest(FactModelBase):
     kinds: list[FactKind] | None = Field(
         default=None, max_length=len(DERIVED_FACT_KINDS)
     )
+    project_id: UUID | None = None
     project_name: str | None = Field(default=None, max_length=512)
     agent_vendor: str | None = Field(default=None, max_length=512)
     modified_since: datetime | None = None
@@ -212,6 +213,8 @@ class FactReadRequest(FactModelBase):
     def validate_scope(self) -> FactReadRequest:
         if self.graph_id is not None and self.session_id is not None:
             raise ValueError("fact reads select one graph or one session, not both")
+        if self.project_id is not None and self.project_name is not None:
+            raise ValueError("use project_id or project_name, not both")
         return self
 
 

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 from pathlib import Path
 from uuid import UUID
 
+from coding_trajectory.control_plane import graph_preparation
 from coding_trajectory.control_plane.collector import CollectorIdentity, LocalCollector
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorRecoveryResponse,
@@ -16,7 +18,17 @@ from coding_trajectory.control_plane.collector_protocol import (
     SourceRegistrationRequest,
     SourceRegistrationResponse,
 )
+from coding_trajectory.control_plane.fact_projection import build_published_fact_set
+from coding_trajectory.control_plane.fact_repository import LocalPublishedFactRepository
+from coding_trajectory.control_plane.graph_preparation import (
+    graph_input_digest,
+    prepare_graph,
+)
+from coding_trajectory.discovery import discover_store_from_files
 from coding_trajectory.ingestion.common import canonical_json
+from coding_trajectory.project_identity import local_project_id
+from coding_trajectory.runtime import ServiceRuntime
+from coding_trajectory.service.store import IndexCache
 
 
 class CheckpointRemote:
@@ -51,6 +63,7 @@ class CheckpointRemote:
 def main():
     with tempfile.TemporaryDirectory(prefix="ct-preparation-reuse-") as directory:
         root = Path(directory)
+        os.environ["HOME"] = str(root / "home")
         journals = root / "journals"
         journals.mkdir()
         os.environ["CT_AMP_LOG_DIR"] = str(journals)
@@ -114,6 +127,128 @@ def main():
         first = collect()
         replay = collect()
         assert first == replay
+
+        paths = sorted(journals.glob("*.jsonl"))
+        projection_calls = 0
+        original_projection = graph_preparation.build_fact_rows
+
+        def measured_projection(graph):
+            nonlocal projection_calls
+            projection_calls += 1
+            return original_projection(graph)
+
+        graph_preparation.build_fact_rows = measured_projection
+        store = discover_store_from_files(paths).store
+        graphs = list(store.session_graphs.values())
+        prepared = [prepare_graph(graph) for graph in graphs]
+        assert all(
+            value.publication() == build_published_fact_set(graph)
+            for graph, value in zip(graphs, prepared, strict=True)
+        )
+        assert all(len(value.summary.project_sessions) == 1 for value in prepared)
+        cache_path = Path.home() / ".coding-trajectory/prepared-graphs.sqlite"
+        with sqlite3.connect(cache_path) as db:
+            before = db.execute(
+                "SELECT key, body FROM prepared ORDER BY key"
+            ).fetchall()
+        assert len(before) == 2
+        assert [prepare_graph(graph) for graph in graphs] == prepared
+        assert projection_calls == 2
+        with sqlite3.connect(cache_path) as db:
+            assert (
+                db.execute("SELECT key, body FROM prepared ORDER BY key").fetchall()
+                == before
+            )
+        resolve_calls = 0
+
+        def measured_resolve(*args, **kwargs):
+            nonlocal resolve_calls
+            resolve_calls += 1
+            return discover_store_from_files(paths).store, "qualification"
+
+        repo = LocalPublishedFactRepository(
+            global_scope=True,
+            current_dir=root,
+            cache=IndexCache(),
+            resolve=measured_resolve,
+        )
+        project_id = local_project_id(root, fallback="ignored display name")
+        assert project_id == local_project_id(root, fallback="RenamedProject")
+        assert project_id != local_project_id(root / "other", fallback="RenamedProject")
+        listed = repo.response_for("project.sessions", {"project_id": project_id})
+        assert len(listed["items"]) == 2
+        assert {item["project_id"] for item in listed["items"]} == {project_id}
+        assert repo.response_for(
+            "project.sessions", {"project_id": str(UUID(int=999))}
+        ) == {"items": []}
+        changed = json.loads(paths[0].read_text().splitlines()[-1])
+        changed["message"]["id"] = "assistant-1"
+        changed["message"]["content"] = [
+            {"type": "text", "text": "New unpublished local evidence"}
+        ]
+        with paths[0].open("a") as stream:
+            stream.write(json.dumps(changed) + "\n")
+        fresh_graphs = list(
+            discover_store_from_files(paths).store.session_graphs.values()
+        )
+        assert (
+            sum(
+                graph_input_digest(a) != graph_input_digest(b)
+                for a, b in zip(graphs, fresh_graphs, strict=True)
+            )
+            == 1
+        )
+        repo.response_for("project.sessions", {"project_id": project_id})
+        with sqlite3.connect(cache_path) as db:
+            assert db.execute("SELECT COUNT(*) FROM prepared").fetchone()[0] == 3
+        index, _ = repo.store_for("graph.stats", {})
+        assert (
+            sum(
+                row.kind == "item"
+                for graph_id in index.graph_ids
+                for row in index.rows_for_graph(graph_id)
+            )
+            == 3
+        )
+        assert projection_calls == 3
+        graph_preparation.build_fact_rows = original_projection
+        requests = [
+            {
+                "method": "graph.stats",
+                "params": {"root_session_id": str(graph.root_session_id)},
+            }
+            for graph in graphs
+        ]
+        before_batch = resolve_calls
+        with ServiceRuntime(
+            global_scope=True, current_dir=root, historical_repository=repo
+        ) as runtime:
+            assert all(item["ok"] for item in runtime.batch(requests)["items"])
+            assert resolve_calls == before_batch + 1
+            assert runtime.execute(requests[0])["ok"]
+            assert resolve_calls == before_batch + 2
+
+        # Two real journal locations with the same display name must round-trip
+        # independently through the public runtime, not merge under that name.
+        other_path = root / "other" / root.name
+        rows = [json.loads(line) for line in paths[1].read_text().splitlines()]
+        rows[0]["payload"]["workspace_root"] = other_path.as_uri()
+        paths[1].write_text("".join(json.dumps(row) + "\n" for row in rows))
+        with ServiceRuntime(global_scope=True, current_dir=root) as runtime:
+            inventory = runtime.call("project.list", {})["items"]
+            assert len(inventory) == 2
+            assert len({entry["display_name"] for entry in inventory.values()}) == 1
+            for selected_id in inventory:
+                cards = runtime.call("project.sessions", {"project_id": selected_id})[
+                    "items"
+                ]
+                assert len(cards) == 1 and cards[0]["project_id"] == selected_id
+            try:
+                runtime.call("project.sessions", {"project_name": root.name})
+            except ValueError as error:
+                assert "ambiguous" in str(error)
+            else:
+                raise AssertionError("same-name projects were silently merged")
 
         checkpoint_journals = root / "checkpoint-journals"
         checkpoint_journals.mkdir()
@@ -187,7 +322,14 @@ def main():
         print(
             json.dumps(
                 {
-                    "passed": 5,
+                    "passed": 27,
+                    "batch_resolves_once_then_refreshes": True,
+                    "projection_calls_initial_replay_change": [2, 0, 1],
+                    "same_name_projects_isolated": True,
+                    "shared_preparation": True,
+                    "unchanged_cache_entries": 2,
+                    "changed_graph_cache_entries": 3,
+                    "local_id_selection": True,
                     "deterministic_reparse": first == replay,
                     "checkpoint_requests": len(remote.requests),
                     "clean_rollover": True,

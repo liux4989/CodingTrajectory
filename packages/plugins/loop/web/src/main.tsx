@@ -195,7 +195,7 @@ function App() {
                   ([name, details]) => (
                     <SidebarMenuItem key={name}>
                       <SidebarMenuButton
-                        title={details.path ?? name}
+                        title={details.path ?? details.display_name}
                         isActive={!reference && project === name}
                         aria-current={
                           !reference && project === name ? "page" : undefined
@@ -207,7 +207,7 @@ function App() {
                         }}
                       >
                         <Folder aria-hidden="true" />
-                        <span>{name}</span>
+                        <span>{details.display_name}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ),
@@ -286,18 +286,30 @@ function App() {
             savedView={savedView}
           />
         ) : (
-          <Explore key={project} project={project} />
+          <Explore
+            key={project}
+            project={project}
+            projectName={
+              inventory.data?.result.items[project]?.display_name ?? ""
+            }
+          />
         )}
       </SidebarInset>
     </>
   );
 }
 
-function Explore({ project }: { project: string }) {
+function Explore({
+  project,
+  projectName,
+}: {
+  project: string;
+  projectName: string;
+}) {
   const [filter, setFilter] = useState("");
   const sessions = useCore<ProjectSessionsResponse>(
     "project.sessions",
-    project ? { project_name: project } : {},
+    project ? { project_id: project } : {},
   );
   const all = sessions.data?.result.items ?? [];
   const matches = all.filter((session) =>
@@ -329,7 +341,7 @@ function Explore({ project }: { project: string }) {
         </FieldGroup>
       </div>
       <div className="section-heading">
-        <h2>{project || "Local sessions"}</h2>
+        <h2>{projectName || "Local sessions"}</h2>
         <span className="muted small">
           {matches.length} of {all.length} discovered
         </span>

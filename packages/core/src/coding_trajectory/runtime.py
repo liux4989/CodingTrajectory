@@ -312,6 +312,7 @@ class ServiceRuntime:
             method == "project.sessions"
             and not self.global_scope
             and not params.get("project_name")
+            and not params.get("project_id")
         ):
             params = {**params, "project_name": self.current_dir.name}
         params = service_contract(method).validate_request(params)
@@ -436,12 +437,17 @@ class ServiceRuntime:
         return response
 
     def batch(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
-        self.prepare_batch(requests)
-        response = {"items": [self.execute(request) for request in requests]}
-        metadata = self.transport_metadata()
-        if metadata is not None:
-            response["meta"] = metadata
-        return response
+        try:
+            self.prepare_batch(requests)
+            response = {"items": [self.execute(request) for request in requests]}
+            metadata = self.transport_metadata()
+            if metadata is not None:
+                response["meta"] = metadata
+            return response
+        finally:
+            end_batch = getattr(self.historical_repository, "end_batch", None)
+            if end_batch is not None:
+                end_batch()
 
     def transport_metadata(self) -> dict[str, Any] | None:
         return self._last_call_metadata or self._primary_metadata()

@@ -21,7 +21,6 @@ from coding_trajectory.service.serializers import (
     serialize_usage_detail,
 )
 from coding_trajectory.service.store import (
-    TEMPORARY_PROJECT_KEY,
     IndexCache,
     project_list_metadata,
     resolve_collection,
@@ -30,11 +29,10 @@ from coding_trajectory.service.store import (
 )
 
 __all__ = [
-    "IndexCache",
     "SERVICE_HANDLERS",
+    "IndexCache",
     "ServiceContext",
     "ServiceHandler",
-    "TEMPORARY_PROJECT_KEY",
     "dispatch",
     "project_list_metadata",
     "resolve_collection",

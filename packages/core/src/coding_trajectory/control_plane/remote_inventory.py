@@ -13,7 +13,7 @@ from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
     RemoteControlPlaneError,
 )
-from coding_trajectory.ingestion.common import format_datetime
+from coding_trajectory.ingestion.common import normalize_project_key
 
 
 class RemoteProject(BaseModel):
@@ -56,6 +56,7 @@ class CloudflareProjectInventoryRepository:
         self._client = client
         self.workspace_id = workspace_id
         self.snapshot_sequence = snapshot_sequence
+        self._projects: list[RemoteProject] | None = None
 
     def __call__(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Act as the project-inventory authority handler."""
@@ -66,13 +67,10 @@ class CloudflareProjectInventoryRepository:
             )
         return self.project_list(params)
 
-    def project_list(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Return the existing ``project.list`` result shape without host paths."""
-
-        validated = service_contract("project.list").validate_request(params)
-        if "modified_since" in validated:
-            validated["modified_since"] = format_datetime(validated["modified_since"])
-        request = {"workspace_id": str(self.workspace_id), **validated}
+    def projects(self) -> list[RemoteProject]:
+        if self._projects is not None:
+            return self._projects
+        request: dict[str, Any] = {"workspace_id": str(self.workspace_id)}
         if self.snapshot_sequence is not None:
             request["snapshot_sequence"] = self.snapshot_sequence
         raw = self._client.call("ct_project_inventory_snapshot", request)
@@ -85,14 +83,50 @@ class CloudflareProjectInventoryRepository:
         ):
             raise RemoteControlPlaneError("project inventory snapshot mismatch")
         self.snapshot_sequence = snapshot.snapshot_sequence
+        self._projects = snapshot.projects
+        return self._projects
+
+    def resolve_name(self, name: str) -> str | None:
+        key = normalize_project_key(name)
+        matches = {
+            str(project.project_id)
+            for project in self.projects()
+            if any(
+                normalize_project_key(label) == key
+                for label in [project.display_name, *project.aliases]
+            )
+        }
+        if len(matches) > 1:
+            raise ValueError("ambiguous project name; use project_id")
+        return next(iter(matches), None)
+
+    def project_list(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Return ID-keyed project metadata; names are presentation only."""
+        validated = service_contract("project.list").validate_request(params)
+        selected_id = validated.get("project_id")
+        if validated.get("project_name"):
+            selected_id = self.resolve_name(validated["project_name"])
+            if selected_id is None:
+                return {"items": {}}
 
         items: dict[str, dict[str, Any]] = {}
-        for project in snapshot.projects:
-            if project.display_name in items:
-                raise RemoteControlPlaneError(
-                    "project inventory contains duplicate display names"
-                )
-            items[project.display_name] = {
+        for project in self.projects():
+            project_id = str(project.project_id)
+            if selected_id and selected_id != project_id:
+                continue
+            if (
+                validated.get("agent_vendor")
+                and validated["agent_vendor"] not in project.vendors
+            ):
+                continue
+            if (
+                validated.get("modified_since")
+                and project.modified_at < validated["modified_since"]
+            ):
+                continue
+            items[project_id] = {
+                "project_id": project_id,
+                "display_name": project.display_name,
                 "path": None,
                 "vendors": sorted(set(project.vendors)),
             }

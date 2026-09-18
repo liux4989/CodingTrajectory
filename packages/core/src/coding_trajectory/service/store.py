@@ -24,6 +24,7 @@ from coding_trajectory.ingestion.models import (
     SessionGraph,
     Turn,
 )
+from coding_trajectory.project_identity import local_project_id
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
 from coding_trajectory.service.serializers import _normalize_user_id, _parse_user_id
 
@@ -418,9 +419,6 @@ def _resolve_bulk_cached_paths(
     return paths
 
 
-TEMPORARY_PROJECT_KEY = "(temporary)"
-
-
 def project_list_metadata(
     params: dict[str, Any],
     *,
@@ -429,8 +427,6 @@ def project_list_metadata(
 ) -> dict[str, Any]:
     """Return project list data without fully ingesting session transcripts."""
     projects: dict[str, dict[str, Any]] = {}
-    temporary_vendors: set[str] = set()
-    temporary_sessions: list[dict[str, Any]] = []
     for item in discover_project_metadata(
         current_dir=current_dir,
         global_scope=global_scope,
@@ -439,39 +435,25 @@ def project_list_metadata(
         modified_since=params.get("modified_since"),
         agent_vendor=params.get("agent_vendor"),
     ):
-        key = item.project_identifier
-        if key.startswith("unknown-"):
+        name = item.project_identifier
+        key = local_project_id(item.path, fallback=name)
+        if name.startswith("unknown-"):
             continue
-        if item.category == "temporary":
-            temporary_vendors.add(item.vendor.value)
-            temporary_sessions.append(
-                {
-                    "project": key,
-                    "path": str(item.path) if item.path is not None else None,
-                    "vendor": item.vendor.value,
-                }
-            )
-            continue
-        entry = projects.setdefault(key, {"path": None, "vendors": set()})
+        entry = projects.setdefault(
+            key, {"display_name": name, "path": None, "vendors": set()}
+        )
         entry["vendors"].add(item.vendor.value)
         if entry["path"] is None and item.path is not None:
             entry["path"] = str(item.path)
 
     items = {
         key: {
+            "project_id": key,
+            "display_name": value["display_name"],
             "path": value["path"],
             "vendors": sorted(value["vendors"]),
         }
         for key, value in sorted(projects.items())
+        if not params.get("project_id") or key == params["project_id"]
     }
-    if temporary_sessions:
-        items[TEMPORARY_PROJECT_KEY] = {
-            "path": None,
-            "vendors": sorted(temporary_vendors),
-            "sessions": sorted(
-                temporary_sessions,
-                key=lambda session: (session["project"], session["vendor"]),
-            ),
-        }
-
     return {"items": items}

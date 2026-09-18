@@ -32,6 +32,12 @@ from coding_trajectory.control_plane.fact_protocol import (
     FACT_READ_PAGE_MAX,
     FactReadResponse,
 )
+from coding_trajectory.control_plane.graph_preparation import (
+    PreparedGraph,
+    filter_session_cards,
+    graph_input_digest,
+    prepare_graph,
+)
 from coding_trajectory.control_plane.published_facts import (
     FactIndex,
     FactRow,
@@ -42,7 +48,11 @@ from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
     RemoteControlPlaneError,
 )
+from coding_trajectory.control_plane.remote_inventory import (
+    CloudflareProjectInventoryRepository,
+)
 from coding_trajectory.ingestion.common import canonical_json, format_datetime
+from coding_trajectory.project_identity import graph_project_id
 from coding_trajectory.query import DocumentStore
 
 
@@ -99,7 +109,8 @@ class LocalPublishedFactRepository:
         self._resolve = resolve
         self._require_available = require_available
         self._indexes: dict[tuple[Any, ...], tuple[FactIndex, str]] = {}
-        self._batch_key: tuple[Any, ...] | None = None
+        self._prepared_cache = ArtifactReadCache()
+        self._batch_index: tuple[FactIndex, str] | None = None
 
     def pin_snapshot(self) -> int:
         """Local sources are read live and therefore have no snapshot number."""
@@ -107,6 +118,7 @@ class LocalPublishedFactRepository:
         return 0
 
     def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
+        self._batch_index = None
         ids = entrypoint_ids(requests)
         if not ids:
             return
@@ -114,28 +126,78 @@ class LocalPublishedFactRepository:
             "session.tree", {"session_ids": ids}, ("batch",)
         )
         self._check_available(bool(store.session_graphs))
-        key = fact_store_key(
-            {"session_ids": ids},
-            global_scope=self.global_scope,
-            include_descendants=True,
+        self._batch_index = (
+            FactIndex.from_rows(
+                row for prepared in self._prepare_store(store) for row in prepared.rows
+            ),
+            note,
         )
-        self._indexes[key] = (fact_index_for_store(store), note)
-        self._batch_key = key
+
+    def end_batch(self) -> None:
+        self._batch_index = None
+
+    def _prepare_store(self, store: DocumentStore) -> list[PreparedGraph]:
+        values = []
+        for graph in store.session_graphs.values():
+            key = ("local", ARTIFACT_PREPARATION_VERSION, graph_input_digest(graph))
+            prepared = self._prepared_cache.get(key)
+            if prepared is None:
+                prepared = prepare_graph(graph)
+                self._prepared_cache.put(
+                    key, prepared, len(prepared.model_dump_json().encode())
+                )
+            values.append(prepared)
+        return values
+
+    def response_for(
+        self, method: str, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        if method != "project.sessions":
+            return None
+        params = service_contract(method).validate_request(params)
+        store, _ = self._resolve_store(method, params, ())
+        self._check_available(bool(store.session_graphs))
+        graphs = list(store.session_graphs.values())
+        if params.get("project_id"):
+            graphs = [
+                graph
+                for graph in graphs
+                if graph_project_id(graph) == params["project_id"]
+            ]
+        elif (
+            params.get("project_name")
+            and len({graph_project_id(graph) for graph in graphs}) > 1
+        ):
+            raise ValueError("ambiguous project name; use project_id")
+        selected = DocumentStore.from_session_graphs(graphs)
+        project_ids = {
+            graph.root_session_id: graph_project_id(graph) for graph in graphs
+        }
+        return filter_session_cards(
+            [
+                {**item, "project_id": project_ids[prepared.summary.graph_id]}
+                for prepared in self._prepare_store(selected)
+                for item in prepared.summary.project_sessions
+            ],
+            params,
+        )
 
     def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
-        if self._batch_key is not None and entrypoint_ids_from_params(params):
-            indexed = self._indexes[self._batch_key]
-            self._check_available(bool(indexed[0].graph_ids))
-            return indexed
-        key = fact_store_key(
-            params,
-            global_scope=self.global_scope,
-            include_descendants=requires_graph_scope(method),
-        )
+        if self._batch_index is not None and entrypoint_ids_from_params(params):
+            return self._batch_index
+        store, note = self._resolve_store(method, params, ())
+        self._check_available(bool(store.session_graphs))
+        prepared = self._prepare_store(store)
+        key = tuple(sorted(value.summary.fact_set_digest for value in prepared))
         if key not in self._indexes:
-            store, note = self._resolve_store(method, params, key)
-            self._check_available(bool(store.session_graphs))
-            self._indexes[key] = (fact_index_for_store(store), note)
+            self._indexes = {
+                key: (
+                    FactIndex.from_rows(
+                        row for value in prepared for row in value.rows
+                    ),
+                    note,
+                )
+            }
         return self._indexes[key]
 
     def _check_available(self, has_graphs: bool) -> None:
@@ -151,7 +213,7 @@ class LocalPublishedFactRepository:
         resolve = self._resolve or resolve_store
         return resolve(
             discovery_params(params),
-            global_scope=self.global_scope,
+            global_scope=self.global_scope or bool(params.get("project_id")),
             current_dir=self.current_dir,
             cache=self.cache,
             include_descendants=include_descendants,
@@ -254,12 +316,18 @@ class CloudflareArtifactRepository:
         snapshot_sequence: int,
         cache: ArtifactReadCache,
         fallback: CloudflareFactRepository,
+        inventory: CloudflareProjectInventoryRepository | None = None,
     ) -> None:
         self._client = client
         self.workspace_id = workspace_id
         self.snapshot_sequence = snapshot_sequence
         self._cache = cache
         self._fallback = fallback
+        self._inventory = inventory or CloudflareProjectInventoryRepository(
+            client=client,
+            workspace_id=workspace_id,
+            snapshot_sequence=snapshot_sequence,
+        )
         self._manifests_value: list[ArtifactManifest] | None = None
         self._summaries_value: dict[UUID, PreparedGraphSummary] | None = None
         self._artifact_unavailable = False
@@ -313,11 +381,17 @@ class CloudflareArtifactRepository:
             },
         )
 
-    def _summaries(self) -> dict[UUID, PreparedGraphSummary]:
+    def _summaries(
+        self, project_id: str | None = None
+    ) -> dict[UUID, PreparedGraphSummary]:
         if self._summaries_value is None:
-            summaries: dict[UUID, PreparedGraphSummary] = {}
-            for manifest in self._manifests():
-                for graph in manifest.graphs:
+            self._summaries_value = {}
+        summaries = self._summaries_value
+        for manifest in self._manifests():
+            if project_id is not None and str(manifest.project_id) != project_id:
+                continue
+            for graph in manifest.graphs:
+                if graph.graph_id not in summaries:
                     key = (str(self.workspace_id), "summary", graph.summary.sha256)
                     summary = self._cache.get(key)
                     if summary is None:
@@ -339,8 +413,7 @@ class CloudflareArtifactRepository:
                             "prepared summary identity mismatch"
                         )
                     summaries[graph.graph_id] = summary
-            self._summaries_value = summaries
-        return self._summaries_value
+        return summaries
 
     def response_for(
         self, method: str, params: dict[str, Any]
@@ -350,31 +423,20 @@ class CloudflareArtifactRepository:
         if not self._manifests():
             return None
         validated = service_contract(method).validate_request(params)
+        project_id = validated.get("project_id")
+        if validated.get("project_name"):
+            project_id = self._inventory.resolve_name(validated["project_name"])
+            if project_id is None:
+                return {"items": []}
+        summaries = self._summaries(project_id)
         items = [
-            item
-            for summary in self._summaries().values()
-            for item in summary.project_sessions
-            if (
-                not validated.get("project_name")
-                or item.get("project") == validated["project_name"]
-            )
-            and (
-                not validated.get("agent_vendor")
-                or item.get("vendor") == validated["agent_vendor"]
-            )
-            and (
-                not validated.get("modified_since")
-                or item.get("modified") is not None
-                and item["modified"] >= format_datetime(validated["modified_since"])
-            )
+            {**item, "project_id": str(manifest.project_id)}
+            for manifest in self._manifests()
+            if project_id is None or str(manifest.project_id) == project_id
+            for graph in manifest.graphs
+            for item in summaries[graph.graph_id].project_sessions
         ]
-        items.sort(
-            key=lambda item: (
-                item.get("project") or "",
-                item.get("lineage_root_session_id") or "",
-            )
-        )
-        return service_contract(method).validate_response({"items": items})
+        return filter_session_cards(items, {**validated, "project_name": None})
 
     def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
         manifests = self._manifests()
@@ -603,7 +665,7 @@ def fact_read_scope(params: dict[str, Any]) -> dict[str, Any]:
     if isinstance(root_session_id, str) and root_session_id:
         # The graph is identified by its root session id on the wire.
         scope["graph_id"] = root_session_id
-    for key in ("session_id", "project_name", "agent_vendor"):
+    for key in ("session_id", "project_id", "project_name", "agent_vendor"):
         value = params.get(key)
         if isinstance(value, str) and value:
             scope[key] = value
@@ -664,6 +726,7 @@ def fact_store_key(
     selected = {
         key: params.get(key)
         for key in (
+            "project_id",
             "project_name",
             "modified_since",
             "agent_vendor",

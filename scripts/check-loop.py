@@ -113,10 +113,17 @@ def main():
             with socket.create_connection(("127.0.0.1", 18765), timeout=5):
                 assert call("/api/status")["remote"] is False
             projects = core("project.list", {})
-            assert "amp-example" in projects["items"], projects
-            sessions = core("project.sessions", {"project_name": "amp-example"})[
-                "items"
-            ]
+            project_id = next(
+                key
+                for key, value in projects["items"].items()
+                if value["display_name"] == "amp-example"
+            )
+            assert projects["items"][project_id]["project_id"] == project_id
+            sessions = core("project.sessions", {"project_id": project_id})["items"]
+            assert (
+                sessions
+                == core("project.sessions", {"project_name": "AmpExample"})["items"]
+            )
             assert sessions
             session_id = sessions[0]["root_session_id"]
             scope = {"session_id": session_id}

@@ -27,6 +27,10 @@ def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if args.project_name:
         params["project_name"] = args.project_name
+    if args.project_id:
+        if args.project_name:
+            raise ValueError("use --project-id or PROJECT_NAME, not both")
+        params["project_id"] = args.project_id
     # --since-days is a CLI convenience translated to one absolute protocol
     # timestamp; the protocol itself only accepts modified_since.
     if args.all_time is True:
@@ -47,15 +51,15 @@ def _render_project_list_markdown(payload: dict[str, Any]) -> str:
     lines = [
         "# Projects",
         "",
-        "| Project | Vendors | Path |",
-        "| --- | --- | --- |",
+        "| Project | ID | Vendors | Path |",
+        "| --- | --- | --- | --- |",
     ]
     for name, item in items.items():
         if not isinstance(item, dict):
             continue
         vendors = ", ".join(item.get("vendors") or []) or "-"
         path = item.get("path") or "-"
-        lines.append(f"| `{name}` | {vendors} | `{path}` |")
+        lines.append(f"| `{item['display_name']}` | `{name}` | {vendors} | `{path}` |")
     return "\n".join(lines)
 
 
@@ -111,6 +115,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         nargs="?",
         default=None,
         help="Project name to list sessions for. Defaults to the current directory.",
+    )
+    project_sessions.add_argument(
+        "--project-id",
+        help="Stable project ID returned by project list for the selected authority.",
     )
     project_sessions.add_argument(
         "--since-days",

@@ -669,6 +669,8 @@ def compact_payload(method: str, payload: Any) -> Any:
             "items": {
                 name: drop_none(
                     {
+                        "project_id": item.get("project_id"),
+                        "display_name": item.get("display_name"),
                         "path": item.get("path"),
                         "vendors": item.get("vendors"),
                         "sessions": item.get("sessions"),
@@ -685,6 +687,7 @@ def compact_payload(method: str, payload: Any) -> Any:
                 drop_none(
                     {
                         "id": item.get("root_session_id"),
+                        "project_id": item.get("project_id"),
                         "project": item.get("project"),
                         "title": item.get("title"),
                         "vendors": item.get("vendors"),

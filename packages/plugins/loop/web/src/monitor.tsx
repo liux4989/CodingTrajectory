@@ -276,7 +276,13 @@ function WatchForm({
   );
   const [state, setState] = useState<"idle" | "saving">("idle");
   const [error, setError] = useState<string>();
-  const projects = Object.keys(inventory.data?.result.items ?? {});
+  const projects = [
+    ...new Set(
+      Object.values(inventory.data?.result.items ?? {}).map(
+        (project) => project.display_name,
+      ),
+    ),
+  ];
   const thresholdValue = Number(threshold);
   const valid =
     name.trim().length > 0 &&

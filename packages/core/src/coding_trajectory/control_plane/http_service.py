@@ -100,17 +100,18 @@ class RemoteRuntimeFactory:
             cache=self._fact_cache,
             authenticated_cache_identity=sha256(access_token.encode()).hexdigest(),
         )
+        inventory = CloudflareProjectInventoryRepository(
+            client=client,
+            workspace_id=self.workspace_id,
+            snapshot_sequence=sequence,
+        )
         historical: FactRepository = CloudflareArtifactRepository(
             client=client,
             workspace_id=self.workspace_id,
             snapshot_sequence=sequence,
             cache=self._artifact_cache,
             fallback=legacy,
-        )
-        inventory = CloudflareProjectInventoryRepository(
-            client=client,
-            workspace_id=self.workspace_id,
-            snapshot_sequence=sequence,
+            inventory=inventory,
         )
         living = CloudflareLivingAuthority(
             client=client,

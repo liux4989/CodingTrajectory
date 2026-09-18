@@ -41,6 +41,9 @@ from coding_trajectory.control_plane.remote import (
     CloudflareRpcClient,
     RemoteControlPlaneError,
 )
+from coding_trajectory.control_plane.remote_inventory import (
+    CloudflareProjectInventoryRepository,
+)
 from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.service.handlers import dispatch
 from coding_trajectory.service.store import IndexCache
@@ -461,7 +464,7 @@ def main() -> None:
         raise SystemExit("artifact qualification refuses a non-loopback target")
     observed = datetime.now(UTC).replace(microsecond=0)
     tag = uuid4().hex
-    project_name = "Artifact-" + tag
+    project_name = "ArtifactQualification-" + tag
     remote = CloudflareCollectorRemote(url=URL, access_token=TOKEN)
     project = remote.register_project(
         ProjectRegistrationRequest(
@@ -543,6 +546,53 @@ def main() -> None:
     check(
         listed is not None and len(listed["items"]) == 2,
         "prepared list summaries route",
+    )
+    by_id = repository.response_for(
+        "project.sessions", {"project_id": str(project.project_id)}
+    )
+    check(by_id == listed, "project ID and display-name lookup agree")
+    check(
+        repository.response_for(
+            "project.sessions", {"project_name": "artifact-qualification-" + tag}
+        )
+        == listed,
+        "normalized display-name lookup agrees",
+    )
+    check(
+        {item["project_id"] for item in by_id["items"]} == {str(project.project_id)},
+        "session cards carry authoritative manifest project ID",
+    )
+    check(
+        repository.response_for("project.sessions", {"project_id": str(uuid4())})
+        == {"items": []},
+        "unknown project ID never falls back to a name",
+    )
+    check(
+        repository.response_for(
+            "project.sessions",
+            {"project_id": str(project.project_id), "agent_vendor": "amp"},
+        )
+        == by_id,
+        "prepared vendor filter uses vendors array",
+    )
+    check(
+        repository.response_for(
+            "project.sessions",
+            {"project_id": str(project.project_id), "agent_vendor": "codex_cli"},
+        )
+        == {"items": []},
+        "prepared vendor filter excludes other vendors",
+    )
+    inventory = CloudflareProjectInventoryRepository(
+        client=client, workspace_id=WORKSPACE, snapshot_sequence=initial_snapshot
+    )
+    project_list = inventory.project_list({"project_id": str(project.project_id)})[
+        "items"
+    ]
+    check(
+        set(project_list) == {str(project.project_id)}
+        and project_list[str(project.project_id)]["display_name"] == project_name,
+        "project inventory is ID-keyed with a separate display name",
     )
     index, _ = repository.store_for(
         "session.items", {"item_ids": [str(first_summary.aliases[-1])]}
@@ -647,6 +697,38 @@ def main() -> None:
     )
     check(
         len(retained["manifests"]) == 1, "retained rollback snapshot remains readable"
+    )
+
+    collision = remote.register_project(
+        ProjectRegistrationRequest(
+            workspace_id=WORKSPACE,
+            agent_id=AGENT,
+            display_name="artifact-qualification-" + tag,
+        )
+    )
+    collision_inventory = CloudflareProjectInventoryRepository(
+        client=client,
+        workspace_id=WORKSPACE,
+        snapshot_sequence=collision.committed_sequence,
+    )
+    check(
+        project.project_id != collision.project_id,
+        "distinct registered IDs survive normalized-name collision",
+    )
+    try:
+        collision_inventory.resolve_name(project_name)
+    except ValueError as error:
+        check("ambiguous" in str(error), "ambiguous remote name requires project ID")
+    else:
+        raise AssertionError("ambiguous remote project name selected an arbitrary ID")
+    check(
+        set(
+            collision_inventory.project_list({"project_id": str(project.project_id)})[
+                "items"
+            ]
+        )
+        == {str(project.project_id)},
+        "ID lookup remains exact despite normalized-name collision",
     )
 
     tiny = ArtifactReadCache(max_bytes=8, max_entries=1)

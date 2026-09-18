@@ -712,6 +712,7 @@ async function parseFactCursor(
 /** Read one page of fact rows pinned to one workspace publication sequence. */
 export async function factRead(state: State, request: Json, cursorSecret: string): Promise<Json> {
   validate("ct_fact_read", request);
+  requireThat(!(request.project_id && request.project_name), "conflicting_project_selectors");
   await cursorKey(cursorSecret);
   const sequence = state.pin(request.snapshot_sequence);
   const kinds = request.kinds == null ? null : [...new Set(request.kinds as string[])].sort();
@@ -721,6 +722,7 @@ export async function factRead(state: State, request: Json, cursorSecret: string
     sequence,
     graph_id: request.graph_id == null ? null : uuid(request.graph_id),
     session_id: request.session_id == null ? null : uuid(request.session_id),
+    project_id: request.project_id == null ? null : uuid(request.project_id),
     project_name: request.project_name ?? null,
     agent_vendor: request.agent_vendor ?? null,
     modified_since: request.modified_since == null ? null : new Date(timestamp(request.modified_since)).toISOString(),
@@ -805,7 +807,10 @@ function selectGraphs(state: State, request: Json, sequence: number): SelectedGr
   let filters = "";
   if (graphId) { filters += " AND graph.key=?"; bindings.push(graphId); }
   else {
-    if (request.project_name) {
+    if (request.project_id) {
+      filters += " AND json_extract(graph.payload,'$.project_id')=?";
+      bindings.push(uuid(request.project_id));
+    } else if (request.project_name) {
       filters += ` AND EXISTS (
         SELECT 1 FROM records project
         WHERE project.kind='project'

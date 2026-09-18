@@ -106,10 +106,10 @@ class ServiceContract:
 SERVICE_CONTRACTS = {
     contract.method: contract
     for contract in (
-        ServiceContract("project.list", 3, ProjectListRequest, ProjectListResponse),
+        ServiceContract("project.list", 4, ProjectListRequest, ProjectListResponse),
         ServiceContract(
             "project.sessions",
-            3,
+            4,
             ProjectSessionsRequest,
             ProjectSessionsResponse,
             CliProjectSessionsResponse,
