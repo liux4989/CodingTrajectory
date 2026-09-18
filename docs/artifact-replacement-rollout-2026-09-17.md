@@ -1,10 +1,10 @@
-# Artifact replacement rollout, 2026-09-17
+# Artifact replacement rollout, 2026-09-17–18
 
-The reviewed replacement runtime was deployed, but the approved workspace reset
-and import did not run. The one permitted quota preflight returned HTTP 503
-`database_read_quota_exceeded`. Execution stopped without polling, disabled both
-replacement gates, removed the temporary owner grant, and left the frozen export
-private on the Mac.
+The approved workspace replacement completed after quota recovery on 2026-09-18.
+The first attempt below remains the historical quota stop: it made no data
+changes. The resumed execution reset only the approved workspace, imported only
+the frozen replacement, verified its exact manifest and selected graph objects,
+then removed both gates and the temporary owner grant.
 
 ## Frozen source and export
 
@@ -69,5 +69,77 @@ No reset request, SQL deletion, R2 deletion, import, artifact upload, publicatio
 verification read, or retry followed. There is no reset or import receipt. R2
 metadata remained 87 objects / 3.09 MB before and after execution. The namespace,
 class, bucket, cursor secret, existing grants, schedules, and unrelated workspace
-state were not changed. The private export remains frozen locally for a future
-separately authorized attempt after quota recovery.
+state were not changed. At that stop, the private export remained frozen locally
+pending the separately resumed execution below.
+
+## Resumed completion — 2026-09-18
+
+The Mac resumed with local `main` at the prior rollout record and a newer
+`origin/main` containing benchmark and Python projection optimizations. Those
+newer sources were not deployed. Production execution used a new clean detached
+worktree pinned to evidence `19f1a366a817171b05c867f9d840954cc3b79104`
+and runtime `eb290faf86ff06b186c3afec4f5f9f9a3e9eacc6`. The frozen manifest file
+and replacement digest, original seven-day window, 17 graphs, 34 objects, and
+8,499,472 bytes revalidated without regeneration.
+
+The deployed starting version was the prior safe final version
+`5b1900f9-c9c0-4dfc-bb32-54e23f7b00b7`, with both replacement gates absent and
+only the original reader/collector registry. The collector launch job remained
+disabled; no collector, replacement, publication process, matching cron, upload
+claim, or staged row/item was active. One reader snapshot preflight passed before
+temporary authority or gates were installed.
+
+The exact gated preview then returned snapshot 63 and `truncated: false`. Its
+target R2 prefix contained zero objects. SQL scope contained the prior 29,681
+fact rows, 29 staged generations, 245 records, and the expected source,
+checkpoint, publication, publisher, and receipt records. It reported zero
+artifact upload claims and zero staged fact rows/items. The preserved list and
+workspace/export identities matched the approval.
+
+One reset execution returned:
+
+```text
+already_complete=false complete=true sql_reset=true deleted=0
+```
+
+Thus the old target-workspace SQL data was deleted. No R2 object was deleted
+because the exact replacement prefix was empty. Both gates were removed
+immediately. A gate-off execute probe returned HTTP 503
+`workspace_replacement_unavailable`; the target then reported snapshot 0 and
+empty project inventory before import.
+
+The first import attempt used the normal collector credential and was rejected
+at its required snapshot preflight with HTTP 403 `capability_required`; it wrote
+nothing. The temporary owner was then aligned to the frozen collector agent
+identity, retaining only `owner` and the same approved workspace. The frozen
+import completed and verified at snapshot 36:
+
+| Result | Value |
+| --- | ---: |
+| Projects | 1 |
+| Graphs | 17 |
+| Objects | 34 |
+| Object bytes | 8,499,472 |
+| Publication sequence | 0 |
+| Selected graph read | facts and prepared summary verified |
+
+A separate minimum `verify` repeated those exact counts and selected-object
+reads. After restoring the authoritative two-entry registry, the existing reader
+and collector returned exactly `read` and `collect`; the temporary owner returned
+HTTP 401. A final reader verification again returned snapshot 36 and the exact
+replacement counts. The temporary bearer and augmented-registry Keychain items
+were deleted with absence verified; the encrypted original-registry backup was
+retained.
+
+| Resumed stage | Worker version | Result |
+| --- | --- | --- |
+| Temporary owner, gates absent | `1e8c57a8-a038-4bfb-abca-1a5d828a5cd6` | owner/read/collect identity verified |
+| Exact gates | `76be7bce-381e-4a27-9af8-c8f6ea47415c` | nontruncated preview and completed reset |
+| Gates removed | `9af6f696-f481-4f09-ba84-494eb795224c` | reset unavailable; snapshot 0 |
+| Owner aligned for import | `807cab31-7d12-404a-adfd-8dcff4670428` | frozen import and verification completed |
+| Original registry restored | `df25862e-d304-4429-bc3f-3eec46d5f8f7` | final active version, 100% |
+
+The final version has no replacement gate variables. It retains `WORKSPACES`,
+`ARTIFACTS`, Worker-version metadata, `CT_PRINCIPALS`, and `CT_CURSOR_KEY`.
+Collection remains manual and disabled; no schedule, paid upgrade, wider source,
+other workspace, or other R2 prefix was changed.
