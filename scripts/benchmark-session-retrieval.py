@@ -639,7 +639,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         }
     )
     internal_derived_activity = build_flows([derived_static_item])[0]
-    public_derived_activity = build_overview_flows([derived_static_item])[0]
+    public_derived_activity = build_overview_flows([derived_static_item])
     distinguished_command_activities = build_overview_flows(
         [derived_static_item, second_derived_static_item]
     )
@@ -672,15 +672,10 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
     flattened_successful_commands = build_overview_flows(
         [first_successful_command, second_successful_command]
     )
-    semantic_read_activity = build_overview_flows(
-        [
-            derived_static_item.model_copy(
-                update={
-                    "command": "sed -n '1,20p' docs/example.md",
-                }
-            )
-        ],
-    )[0]
+    semantic_read_item = derived_static_item.model_copy(
+        update={"command": "sed -n '1,20p' docs/example.md"}
+    )
+    semantic_read_activity = build_flows([semantic_read_item])[0]
     background_wait_item = CommandExecutionItem(
         session_id=fixture.root_session_id,
         turn_id=fixture.second_turn_id,
@@ -751,7 +746,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         "public_projections_omit_unknown_outcomes": (
             internal_derived_activity.get("activity_fidelity") == "derived_static"
             and internal_derived_activity.get("activity_outcome") == "unknown"
-            and "outcome" not in public_derived_activity
+            and public_derived_activity == []
             and all(
                 entry.get("status") != "unknown" for entry in summary["recent_activity"]
             )
@@ -760,30 +755,23 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                 for entry in summary["verification"]
             )
         ),
-        "command_labels_preserve_distinguishing_context": (
-            [entry.get("cmd") for entry in distinguished_command_activities]
-            == [
-                "uv run ruff check packages/core/src",
-                "uv run ruff check packages/cli/src",
-            ]
+        "detail_free_derived_commands_retain_count_not_placeholder": (
+            len(distinguished_command_activities) == 1
+            and distinguished_command_activities[0].get("count") == 2
+            and "cmd" not in distinguished_command_activities[0]
+            and "outcome" not in distinguished_command_activities[0]
         ),
-        "successful_commands_remain_flat": (
-            [entry.get("cmd") for entry in flattened_successful_commands]
-            == [
-                "uv run ruff check packages/core/src",
-                "uv run ruff check packages/cli/src",
-            ]
-            and all(
-                entry.get("tool") == "RunCommand"
-                and "commands" not in entry
-                and "count" not in entry
-                for entry in flattened_successful_commands
-            )
+        "detail_free_successful_commands_retain_count_and_outcome": (
+            len(flattened_successful_commands) == 1
+            and flattened_successful_commands[0].get("count") == 2
+            and flattened_successful_commands[0].get("outcome") == "succeeded"
+            and "cmd" not in flattened_successful_commands[0]
         ),
         "shell_behavior_survives_command_transport": (
-            semantic_read_activity.get("tool") == "ReadFile"
-            and semantic_read_activity.get("path") == "read"
+            semantic_read_activity.get("name") == "ReadFile"
+            and semantic_read_activity.get("description") == "read"
             and "cmd" not in semantic_read_activity
+            and build_overview_flows([semantic_read_item]) == []
         ),
         "control_only_waits_stay_detail_only": (
             len(internal_wait_activity) == 1
@@ -1158,6 +1146,19 @@ def evaluate_command_activity() -> dict[str, Any]:
         for index, item in enumerate(pi_items)
     ]
     failed_activity = build_overview_flows(failed_items)
+    failed_cells = build_flows(failed_items)
+    observed_cells = build_flows(codex_items)
+    placeholder_items = [
+        failed_items[0].model_copy(update={"command": "custom-check"}),
+        pi_items[0].model_copy(update={"command": "custom-check"}),
+        pi_items[1].model_copy(update={"command": "cat report.txt"}),
+    ]
+    repeated_failure = build_overview_flows(
+        [
+            placeholder_items[0],
+            placeholder_items[0].model_copy(update={"item_id": _uuid(740)}),
+        ]
+    )
 
     direct_store = DocumentStore.from_session_graphs([pi_graph])
     roundtrip_facts = FactIndex.from_fact_sets(
@@ -1193,10 +1194,25 @@ def evaluate_command_activity() -> dict[str, Any]:
         and pi_activity[0].get("count") == 2
         and pi_activity[0].get("concept_counts") == expected_counts,
         "claude_no_fidelity_groups": claude_shape == pi_shape,
-        "codex_observed_fidelity_stays_exact": len(codex_activity) == 2
-        and all("count" not in item for item in codex_activity),
-        "failures_stay_exact": len(failed_activity) == 2
-        and all(item.get("outcome") == "failed" for item in failed_activity),
+        "codex_observed_cells_retained_but_placeholders_hidden": not codex_activity
+        and len(observed_cells) == 2
+        and all("count" not in item for item in observed_cells),
+        "failed_cells_retained_but_placeholders_hidden": not failed_activity
+        and len(failed_cells) == 2
+        and all(item.get("activity_outcome") == "failed" for item in failed_cells),
+        "singleton_command_read_placeholders_hidden": all(
+            not build_overview_flows([item]) for item in placeholder_items
+        ),
+        "repeated_failure_keeps_count_outcome_and_refs": repeated_failure
+        == [
+            {
+                "tool": "RunCommand",
+                "status": "failed",
+                "count": 2,
+                "item_ids": [str(placeholder_items[0].item_id), str(_uuid(740))],
+                "outcome": "failed",
+            }
+        ],
         "projections_omit_command_details": "qualification-marker"
         not in _canonical_json([pi_activity, codex_activity, failed_activity]),
         "overview_fact_roundtrip_parity": direct_overview == roundtrip_overview,

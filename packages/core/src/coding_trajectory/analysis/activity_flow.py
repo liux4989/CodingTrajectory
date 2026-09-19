@@ -77,6 +77,11 @@ def is_low_value_activity_cell(item: dict[str, Any]) -> bool:
         return False
     if item.get("activity_kind") == "background_terminal_interaction":
         return False
+    # Command projection deliberately replaces targets with generic verbs.
+    # Those placeholders are not meaningful detail, even for a failed call.
+    # Keep the canonical cell in build_flows; overview admits grouped counts.
+    if item.get("activity_kind") == "command":
+        return True
     return not item.get("description")
 
 
@@ -388,7 +393,9 @@ def _project_tool_activity_cell(cell: _ToolActivityCell) -> list[dict[str, Any]]
 
 def _project_exact_tool_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
     first = items[0]
-    description = first.get("description")
+    description = (
+        None if first.get("activity_kind") == "command" else first.get("description")
+    )
     item_ids = [
         item["item_id"]
         for item in items
