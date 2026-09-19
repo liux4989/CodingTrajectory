@@ -10,6 +10,7 @@ const require = createRequire(`${root}cloudflare/control-plane/package.json`);
 const { build } = require('esbuild');
 const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
 const fixture = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const lastOrdinal = fixture.benchmark?.shape === 'representative' ? 2 : 96;
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value !== null && typeof value === 'object'
   ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}` : JSON.stringify(value);
@@ -78,13 +79,13 @@ try {
   const first = await api('session.overview', params);
   assert.equal(first.data.project.project_id, project.project_id);
   assert.equal(first.data.sessions[0].cwd, fixture.cwd);
-  assert.equal(first.data.turns.at(-1).global_ordinal, 96);
+  assert.equal(first.data.turns.at(-1).global_ordinal, lastOrdinal);
   const hash = first.meta.identity.view_manifest_sha256;
   const selected = first.data.turns.at(-1);
   const detail = await api('session.items', { session_id: fixture.root, turn_id: selected.turn_id,
     item_ids: [selected.activities[3].item_id, 'not-present'], view_manifest_sha256: hash, limit: 2 });
   assert.equal(detail.data.items.length, 1); assert.equal(detail.data.items[0].detail.exit_code, 7);
-  assert.ok(detail.data.items[0].detail.target.includes('--ordinal 96')); assert.deepEqual(detail.data.unresolved_ids, ['not-present']);
+  assert.ok(detail.data.items[0].detail.target.includes(`--ordinal ${lastOrdinal}`)); assert.deepEqual(detail.data.unresolved_ids, ['not-present']);
   const outsideTurn = first.data.turns[0].activities[0].item_id;
   const outside = await api('session.items', { session_id: fixture.root, turn_id: selected.turn_id,
     item_ids: [outsideTurn, 'not-present'], view_manifest_sha256: hash });
@@ -94,7 +95,7 @@ try {
   assert.equal(events.data.events[0].item_id, detail.data.items[0].item_id);
   assert.equal(events.data.events[0].type, 'tool.call.failed');
   let page = first.data, seen = page.turns.map(row => row.global_ordinal);
-  assert.ok(page.page.next_cursor);
+  assert.equal(Boolean(page.page.next_cursor), fixture.benchmark?.shape !== 'representative');
   const cursor = page.page.next_cursor;
   while (page.page.next_cursor) {
     page = (await api('session.overview', { ...params, cursor: page.page.next_cursor })).data;
@@ -102,14 +103,16 @@ try {
     assert.deepEqual(page.turns.map(row => row.global_ordinal), page.turns.map(row => row.global_ordinal).sort((a,b) => a-b));
     seen.push(...page.turns.map(row => row.global_ordinal));
   }
-  assert.deepEqual(seen.sort((a,b) => a-b), Array.from({ length: 97 }, (_,i) => i));
-  await api('session.overview', { ...params, cursor: cursor + 'x' }, 'owner', 400);
-  await api('session.overview', { ...params, cursor, limit: 1 }, 'owner', 400);
-  const expired = JSON.parse(Buffer.from(cursor.split('.')[0], 'base64url'));
-  expired.expires = 1;
-  const expiredBody = Buffer.from(JSON.stringify(expired)).toString('base64url');
-  const expiredCursor = expiredBody + '.' + createHmac('sha256', 'direct-api-local-cursor-key-00000000001').update(expiredBody).digest('base64url');
-  await api('session.overview', { ...params, cursor: expiredCursor }, 'owner', 409);
+  assert.deepEqual(seen.sort((a,b) => a-b), Array.from({ length: lastOrdinal + 1 }, (_,i) => i));
+  if (cursor) {
+    await api('session.overview', { ...params, cursor: cursor + 'x' }, 'owner', 400);
+    await api('session.overview', { ...params, cursor, limit: 1 }, 'owner', 400);
+    const expired = JSON.parse(Buffer.from(cursor.split('.')[0], 'base64url'));
+    expired.expires = 1;
+    const expiredBody = Buffer.from(JSON.stringify(expired)).toString('base64url');
+    const expiredCursor = expiredBody + '.' + createHmac('sha256', 'direct-api-local-cursor-key-00000000001').update(expiredBody).digest('base64url');
+    await api('session.overview', { ...params, cursor: expiredCursor }, 'owner', 409);
+  }
   await api('session.overview', { ...params, view_manifest_sha256: 'f'.repeat(64) }, 'owner', 409);
   await api('session.overview', params, 'collect', 403);
   await api('session.overview', params, 'missing', 401);
@@ -134,7 +137,8 @@ try {
   await api('living.sessions', { through: living.through }, 'other', 400, 3);
   // The exact tool ledger for 776 long-command items exceeds the unpaged
   // result bound. Its independently scoped one-turn ledger remains available.
-  await api('session.tool_usage', { session_id: fixture.root, view_manifest_sha256: hash }, 'owner', 413);
+  await api('session.tool_usage', { session_id: fixture.root, view_manifest_sha256: hash },
+    'owner', fixture.benchmark?.shape === 'representative' ? 200 : 413);
   await api('session.tool_usage', { session_id: fixture.root, turn_id: selected.turn_id, view_manifest_sha256: hash });
   for (const method of ['session.summary', 'session.tree', 'session.stats', 'session.usage', 'session.model_usage', 'session.request_usage', 'graph.stats', 'graph.usage', 'graph.overview']) {
     const scoped = method.startsWith('graph.') ? { root_session_id: fixture.root } : { session_id: fixture.root };
@@ -144,7 +148,7 @@ try {
 import sys, threading, httpx
 from uuid import UUID
 from coding_trajectory.control_plane.http_service import RemoteRuntimeFactory, build_http_server
-url, workspace, token, session = sys.argv[1:]
+url, workspace, token, session, last_ordinal = sys.argv[1:]
 factory = RemoteRuntimeFactory(url=url, workspace_id=UUID(workspace))
 with factory.build(token) as runtime:
     overview = runtime.call('session.overview', {'session_id': session, 'limit': 1})
@@ -159,7 +163,7 @@ thread.start()
 try:
     response = httpx.post(f'http://127.0.0.1:{server.server_port}/v1/api', headers={'Authorization': f'Bearer {token}'}, json={'protocol': 'ct.api.v1', 'id': 'proxy', 'method': 'session.overview', 'method_version': 4, 'params': {'session_id': session, 'limit': 1}})
     assert response.status_code == 200, response.text
-    assert response.json()['data']['turns'][0]['global_ordinal'] == 96
+    assert response.json()['data']['turns'][0]['global_ordinal'] == int(last_ordinal)
     assert response.headers['cache-control'] == 'no-store'
 finally:
     server.shutdown()
@@ -169,7 +173,7 @@ print('PASS owned Python remote runtime and authenticated direct API proxy')
 `;
   const address = await mf.ready;
   await new Promise((resolve, reject) => {
-    const child = spawn(`${root}.venv/bin/python`, ['-c', probe, address.origin, workspace, tokens.owner, fixture.root], { stdio: 'inherit' });
+    const child = spawn(`${root}.venv/bin/python`, ['-c', probe, address.origin, workspace, tokens.owner, fixture.root, String(lastOrdinal)], { stdio: 'inherit' });
     child.on('error', reject);
     child.on('exit', code => code === 0 ? resolve() : reject(new Error(`Python client probe exited ${code}`)));
   });

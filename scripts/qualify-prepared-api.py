@@ -39,10 +39,14 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--benchmark-output", type=Path)
+    parser.add_argument("--fixture-output", type=Path)
     parser.add_argument(
         "--shape", choices=("representative", "near-budget"), default="near-budget"
     )
     args = parser.parse_args()
+    benchmark_shape = (
+        args.benchmark_output is not None or args.fixture_output is not None
+    )
     with tempfile.TemporaryDirectory(prefix="ct-direct-api-") as directory:
         os.environ["HOME"] = directory
         source = Path(directory) / "new-session.jsonl"
@@ -99,7 +103,7 @@ def main():
         )[0]
         session = graph.sessions[0]
         session.cwd = "/full/" + "工程/" * 250
-        if args.benchmark_output:
+        if benchmark_shape:
             session.cwd = (
                 "/project/fresh"
                 if args.shape == "representative"
@@ -113,7 +117,7 @@ def main():
         session.runtime_observations = []
         session.measurements = None
         for ordinal in range(
-            3 if args.benchmark_output and args.shape == "representative" else 97
+            3 if benchmark_shape and args.shape == "representative" else 97
         ):
             turn = source_turn.model_copy(deep=True)
             turn.turn_id = UUID(int=1000 + ordinal)
@@ -191,7 +195,7 @@ def main():
             len(reads) <= 4
             and sum(len(api.objects[key].encode()) for key in reads) <= 768 * 1024
         )
-        if args.benchmark_output:
+        if benchmark_shape:
             fixture["benchmark"] = {
                 "shape": args.shape,
                 "expected_reads": len(reads),
@@ -200,6 +204,11 @@ def main():
                 ),
                 "expected_data": page,
             }
+            if args.fixture_output is not None:
+                args.fixture_output.parent.mkdir(parents=True, exist_ok=True)
+                args.fixture_output.write_bytes(encoded(fixture))
+            if args.benchmark_output is None:
+                return
             path = Path(directory) / "fixture.json"
             path.write_bytes(encoded(fixture))
             subprocess.run(
