@@ -639,9 +639,9 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         }
     )
     internal_derived_activity = build_flows([derived_static_item])[0]
-    public_derived_activity = build_overview_flows([derived_static_item])
+    public_derived_activity = build_overview_flows([derived_static_item])[0]
     distinguished_command_activities = build_overview_flows(
-        [derived_static_item, second_derived_static_item]
+        [derived_static_item, second_derived_static_item], flatten_commands=True
     )
     first_successful_command = derived_static_item.model_copy(
         update={
@@ -670,7 +670,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         }
     )
     flattened_successful_commands = build_overview_flows(
-        [first_successful_command, second_successful_command]
+        [first_successful_command, second_successful_command], flatten_commands=True
     )
     semantic_read_item = derived_static_item.model_copy(
         update={"command": "sed -n '1,20p' docs/example.md"}
@@ -746,7 +746,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
         "public_projections_omit_unknown_outcomes": (
             internal_derived_activity.get("activity_fidelity") == "derived_static"
             and internal_derived_activity.get("activity_outcome") == "unknown"
-            and public_derived_activity == []
+            and "outcome" not in public_derived_activity
             and all(
                 entry.get("status") != "unknown" for entry in summary["recent_activity"]
             )
@@ -755,23 +755,33 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
                 for entry in summary["verification"]
             )
         ),
-        "detail_free_derived_commands_retain_count_not_placeholder": (
-            len(distinguished_command_activities) == 1
-            and distinguished_command_activities[0].get("count") == 2
-            and "cmd" not in distinguished_command_activities[0]
-            and "outcome" not in distinguished_command_activities[0]
+        "command_labels_preserve_distinguishing_context": (
+            [entry.get("cmd") for entry in distinguished_command_activities]
+            == [
+                "uv run ruff check packages/core/src",
+                "uv run ruff check packages/cli/src",
+            ]
+            and all(
+                "outcome" not in entry for entry in distinguished_command_activities
+            )
         ),
-        "detail_free_successful_commands_retain_count_and_outcome": (
-            len(flattened_successful_commands) == 1
-            and flattened_successful_commands[0].get("count") == 2
-            and flattened_successful_commands[0].get("outcome") == "succeeded"
-            and "cmd" not in flattened_successful_commands[0]
+        "successful_commands_remain_flat": (
+            [entry.get("cmd") for entry in flattened_successful_commands]
+            == [
+                "uv run ruff check packages/core/src",
+                "uv run ruff check packages/cli/src",
+            ]
+            and all(
+                entry.get("outcome") == "succeeded" and "count" not in entry
+                for entry in flattened_successful_commands
+            )
         ),
         "shell_behavior_survives_command_transport": (
             semantic_read_activity.get("name") == "ReadFile"
-            and semantic_read_activity.get("description") == "read"
+            and semantic_read_activity.get("description") == "docs/example.md"
             and "cmd" not in semantic_read_activity
-            and build_overview_flows([semantic_read_item]) == []
+            and build_overview_flows([semantic_read_item])[0].get("path")
+            == "docs/example.md"
         ),
         "control_only_waits_stay_detail_only": (
             len(internal_wait_activity) == 1
@@ -1125,7 +1135,7 @@ def evaluate_command_activity() -> dict[str, Any]:
     codex_items = codex_graph.sessions[0].turns[0].items
     claude_items = claude_graph.sessions[0].turns[0].items
     pi_activity = build_overview_flows(pi_items)
-    codex_activity = build_overview_flows(codex_items)
+    codex_activity = build_overview_flows(codex_items, flatten_commands=True)
     claude_activity = build_overview_flows(claude_items)
 
     failed_items = [
@@ -1147,16 +1157,34 @@ def evaluate_command_activity() -> dict[str, Any]:
     ]
     failed_activity = build_overview_flows(failed_items)
     failed_cells = build_flows(failed_items)
-    observed_cells = build_flows(codex_items)
-    placeholder_items = [
+    observed_cells = build_flows(codex_items, flatten_commands=True)
+    command_items = [
         failed_items[0].model_copy(update={"command": "custom-check"}),
         pi_items[0].model_copy(update={"command": "custom-check"}),
-        pi_items[1].model_copy(update={"command": "cat report.txt"}),
     ]
+    read_items = [
+        pi_items[0].model_copy(update={"command": "cat docs/alpha.md"}),
+        pi_items[1].model_copy(update={"command": "sed -n '1,20p' docs/beta.md"}),
+    ]
+    read_activity = build_overview_flows(read_items)
+    failed_read = read_items[0].model_copy(update={"status": ToolStatus.FAILED.value})
+    repeated_read_failure = build_overview_flows(
+        [failed_read, failed_read.model_copy(update={"item_id": _uuid(741)})]
+    )
+    read_graph = pi_graph.model_copy(deep=True)
+    read_graph.sessions[0].turns[0].items = read_items
+    read_roundtrip = session_graph_from_fact_index(
+        FactIndex.from_fact_sets(
+            published_fact_set_for_store(
+                DocumentStore.from_session_graphs([read_graph])
+            )
+        ),
+        read_graph.root_session_id,
+    )
     repeated_failure = build_overview_flows(
         [
-            placeholder_items[0],
-            placeholder_items[0].model_copy(update={"item_id": _uuid(740)}),
+            command_items[0],
+            command_items[0].model_copy(update={"item_id": _uuid(740)}),
         ]
     )
 
@@ -1182,7 +1210,7 @@ def evaluate_command_activity() -> dict[str, Any]:
     direct_recent = direct_summary["recent_activity"]
     roundtrip_recent = roundtrip_summary["recent_activity"]
 
-    expected_counts = {"ListFiles": 1, "SearchText": 1}
+    expected_descriptions = ["'qualification-marker' within .", "find . -type f"]
     pi_shape = [
         {k: v for k, v in item.items() if k != "item_ids"} for item in pi_activity
     ]
@@ -1192,35 +1220,52 @@ def evaluate_command_activity() -> dict[str, Any]:
     checks = {
         "pi_no_fidelity_groups": len(pi_activity) == 1
         and pi_activity[0].get("count") == 2
-        and pi_activity[0].get("concept_counts") == expected_counts,
+        and pi_activity[0].get("commands") == expected_descriptions,
         "claude_no_fidelity_groups": claude_shape == pi_shape,
-        "codex_observed_cells_retained_but_placeholders_hidden": not codex_activity
+        "codex_observed_details_retained": len(codex_activity) == 2
         and len(observed_cells) == 2
-        and all("count" not in item for item in observed_cells),
-        "failed_cells_retained_but_placeholders_hidden": not failed_activity
+        and all("count" not in item for item in observed_cells)
+        and codex_activity[0].get("query") == expected_descriptions[0]
+        and codex_activity[1].get("path") == expected_descriptions[1],
+        "failed_cells_retain_details_and_outcomes": len(failed_activity) == 2
         and len(failed_cells) == 2
-        and all(item.get("activity_outcome") == "failed" for item in failed_cells),
-        "singleton_command_read_placeholders_hidden": all(
-            not build_overview_flows([item]) for item in placeholder_items
+        and all(item.get("outcome") == "failed" for item in failed_activity),
+        "command_details_not_replaced_by_placeholders": all(
+            build_overview_flows([item])[0].get("cmd") == "custom-check"
+            for item in command_items
         ),
+        "shell_reads_keep_distinct_targets": [
+            build_overview_flows([item])[0].get("path") for item in read_items
+        ]
+        == ["docs/alpha.md", "docs/beta.md"],
+        "grouped_reads_keep_targets": len(read_activity) == 1
+        and read_activity[0].get("count") == 2
+        and read_activity[0].get("commands") == ["docs/alpha.md", "docs/beta.md"],
+        "failed_reads_keep_target_and_outcome": len(repeated_read_failure) == 1
+        and repeated_read_failure[0].get("path") == "docs/alpha.md"
+        and repeated_read_failure[0].get("count") == 2
+        and repeated_read_failure[0].get("outcome") == "failed",
+        "read_targets_survive_fact_roundtrip": build_session_graph_overview(read_graph)
+        == build_session_graph_overview(read_roundtrip),
         "repeated_failure_keeps_count_outcome_and_refs": repeated_failure
         == [
             {
                 "tool": "RunCommand",
                 "status": "failed",
                 "count": 2,
-                "item_ids": [str(placeholder_items[0].item_id), str(_uuid(740))],
+                "cmd": "custom-check",
+                "item_ids": [str(command_items[0].item_id), str(_uuid(740))],
                 "outcome": "failed",
             }
         ],
-        "projections_omit_command_details": "qualification-marker"
-        not in _canonical_json([pi_activity, codex_activity, failed_activity]),
+        "projections_preserve_classified_details": "qualification-marker"
+        in _canonical_json([pi_activity, codex_activity, failed_activity]),
         "overview_fact_roundtrip_parity": direct_overview == roundtrip_overview,
         "observed_fact_roundtrip_parity": build_session_graph_overview(codex_graph)
         == build_session_graph_overview(codex_roundtrip_graph),
         "summary_fact_roundtrip_parity": direct_recent == roundtrip_recent,
-        "summary_renderer_uses_concept_counts": len(direct_recent) == 1
-        and direct_recent[0].get("label") == "Ran 2 commands (1 list, 1 search)",
+        "summary_renderer_preserves_grouping": len(direct_recent) == 1
+        and direct_recent[0].get("label") == "Ran 2 commands",
     }
     return {
         "checks": checks,
