@@ -2,7 +2,6 @@ import { Fault, Json, receipt, requireThat, stable, State, validate } from "./sh
 
 
 const MANIFEST_SCHEMA = "ct.artifact-manifest.v1";
-const PREPARATION_VERSION = "ct.graph-preparation.v1";
 const RETAINED_MANIFESTS = 3;
 const CLEANUP_PAGES_PER_PUBLICATION = 4;
 const UPLOAD_CLAIM_SECONDS = 7 * 24 * 60 * 60;
@@ -109,7 +108,7 @@ export function commitArtifactPublication(
   const sequence = state.next();
   const manifest = {
     schema_version: MANIFEST_SCHEMA,
-    preparation_version: PREPARATION_VERSION,
+    preparation_version: request.preparation_version,
     workspace_id: request.workspace_id,
     project_id: request.project_id,
     publisher_agent_id: request.agent_id,

@@ -4,7 +4,9 @@ Local and remote historical APIs consume the same typed fact rows. Publication
 alone wraps them in a bounded ``PublishedFactSet``. Facts never contain raw tool
 input/output, command
 stdout/stderr, patch or file bodies, full prompts/transcripts/reasoning, raw
-event payloads, vendor_data blobs, media, secrets, or host-absolute paths.
+event payloads, vendor_data blobs, or media. Bounded semantic descriptions may
+include command arguments and tool target paths. Explicit credential redaction
+is best-effort; these internal-workspace facts are not public-sharing exports.
 
 Row hashes and the fact-set digest use canonical JSON spelling that the
 Cloudflare authority recomputes with its sorted-key ``stable()`` encoder. Fact

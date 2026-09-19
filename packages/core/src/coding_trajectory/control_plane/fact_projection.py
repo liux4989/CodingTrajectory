@@ -1,9 +1,9 @@
-"""Privacy-sensitive projection from canonical session graphs to published facts.
+"""Bounded internal-workspace projection from session graphs to published facts.
 
 Raw events and tool bodies never enter the publication contract. Bounded
-user/assistant previews and sanitized tool details retain the narrative and
-operational context needed by Chronicle views without publishing complete
-commands, outputs, or transcripts.
+user/assistant previews and credential-redacted semantic tool descriptions
+retain operational context, including command arguments and tool target paths.
+This is not a general-purpose secret scanner or a public-sharing export.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-import shlex
 from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -128,51 +127,6 @@ _HOST_PATH = re.compile(
     r"^(?:~/|/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|"
     r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
 )
-_HOST_PATH_TOKEN = re.compile(
-    r"(?<![A-Za-z0-9])(?:~/|/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|"
-    r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
-    r"[^\s'\"]+"
-)
-_PUBLISHED_COMMANDS = frozenset(
-    {
-        "bash",
-        "bun",
-        "cargo",
-        "cat",
-        "cmake",
-        "cp",
-        "curl",
-        "deno",
-        "docker",
-        "find",
-        "gh",
-        "git",
-        "go",
-        "grep",
-        "kubectl",
-        "ls",
-        "make",
-        "mkdir",
-        "mv",
-        "node",
-        "npm",
-        "npx",
-        "pnpm",
-        "python",
-        "python3",
-        "rg",
-        "rm",
-        "ruff",
-        "sed",
-        "sh",
-        "terraform",
-        "uv",
-        "wget",
-        "wrangler",
-        "yarn",
-        "zsh",
-    }
-)
 
 
 class ChronicleModel(BaseModel):
@@ -259,16 +213,6 @@ class ChronicleToolDetail(ChronicleModel):
     target: _Preview
     scope: _Preview | None = None
     safety: Literal["sanitized"] = "sanitized"
-
-    @model_validator(mode="after")
-    def validate_command_signature(self) -> ChronicleToolDetail:
-        if self.kind == "command" and self.target not in _PUBLISHED_COMMANDS | {
-            "command"
-        }:
-            raise ValueError(
-                "command detail must be an allowlisted executable signature"
-            )
-        return self
 
 
 class ChronicleItemMeasurements(ChronicleModel):
@@ -1625,54 +1569,36 @@ def _tool_detail(
         kind = "coordination"
     else:
         kind = _DETAIL_KIND_BY_CONCEPT.get(concept, "tool")
-    target = (
-        _safe_command_target(description)
-        if kind == "command"
-        else _safe_detail_target(description, cwd=cwd)
-    )
+    target = _safe_detail_target(description, cwd=cwd)
     if not target:
         return None
     return ChronicleToolDetail(kind=kind, target=target)
 
 
-def _safe_command_target(value: str) -> str:
-    """Return only an allowlisted executable name, never command arguments."""
-
-    try:
-        tokens = shlex.split(value)
-    except ValueError:
-        tokens = value.split()
-    for token in tokens:
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
-            continue
-        executable = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        return executable if executable in _PUBLISHED_COMMANDS else "command"
-    return "command"
-
-
 def _safe_detail_target(value: str, *, cwd: str | None) -> str | None:
+    """Keep bounded semantic detail; redact common explicit credentials.
+
+    ``cwd`` remains accepted for projection callers, but paths are no longer
+    shortened relative to it. Existing URL userinfo/query stripping is retained.
+    """
     normalized = " ".join(value.split()).strip()
     if not normalized:
         return None
-    if cwd:
-        cwd_normalized = cwd.rstrip("/").replace("\\", "/")
-        normalized = normalized.replace(cwd_normalized + "/", "")
-        normalized = normalized.replace(cwd_normalized, ".")
     normalized = re.sub(
         r"https?://[^\s'\"]+",
         lambda match: _safe_url(match.group(0)),
         normalized,
     )
-    normalized = _HOST_PATH_TOKEN.sub(
-        lambda match: _portable_path(match.group(0), cwd=cwd) or "[path]",
+    normalized = re.sub(
+        r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*",
+        r"\1 [redacted]",
         normalized,
     )
-    if _HOST_PATH.match(normalized):
-        normalized = _portable_path(normalized, cwd=cwd) or ""
     normalized = re.sub(
-        r"(?i)(password|passwd|token|secret|api[-_]?key|authorization|cookie)"
-        r"(\s*[:=]\s*)([^\s,;]+)",
-        r"\1\2[redacted]",
+        r"(?i)((?:password|passwd|token|secret|api[-_]?key|authorization|cookie)"
+        r"\s*[:=]\s*|--(?:password|passwd|token|secret|api[-_]?key|authorization|cookie)\s+)"
+        r"(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+        r"\1[redacted]",
         normalized,
     )
     return _bounded_preview(normalized)
@@ -1788,8 +1714,6 @@ def _reject_embedded_content(value: Any, *, field: str = "") -> None:
             return
         if value.lstrip().lower().startswith("data:"):
             raise ValueError(f"chronicle graph retained data URI in {field}")
-        if _HOST_PATH_TOKEN.search(value):
-            raise ValueError(f"chronicle graph retained a host path in {field}")
         if len(value) >= 128 and _BASE64_BODY.fullmatch(value):
             raise ValueError(f"chronicle graph retained a base64-like body in {field}")
 

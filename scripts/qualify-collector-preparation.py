@@ -9,7 +9,11 @@ import tempfile
 from pathlib import Path
 from uuid import UUID
 
+from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.control_plane import graph_preparation
+from coding_trajectory.control_plane.artifact_protocol import (
+    ARTIFACT_PREPARATION_VERSION,
+)
 from coding_trajectory.control_plane.collector import (
     CollectorIdentity,
     CollectorRemoteError,
@@ -28,11 +32,86 @@ from coding_trajectory.control_plane.graph_preparation import (
     graph_input_digest,
     prepare_graph,
 )
+from coding_trajectory.control_plane.published_facts import (
+    FactIndex,
+    session_graph_from_fact_index,
+)
 from coding_trajectory.discovery import discover_store_from_files
 from coding_trajectory.ingestion.common import canonical_json
+from coding_trajectory.ingestion.models import CommandExecutionItem
 from coding_trajectory.project_identity import local_project_id
 from coding_trajectory.runtime import ServiceRuntime
 from coding_trajectory.service.store import IndexCache
+
+
+def qualify_semantic_details(graph, root: Path) -> None:
+    """Exercise richer descriptions through local preparation and fact replay."""
+    graph = graph.model_copy(deep=True)
+    session = graph.sessions[0]
+    turn = session.turns[0]
+    descriptions = [
+        "python3 validate_config.py",
+        "custom-check /home/synthetic/work/config.toml",
+        "python3 inspect.py --token synthetic-credential",
+        "python3 inspect.py token budget",
+        "curl -H 'Authorization: Bearer synthetic-bearer' https://user:pass@example.com/a?token=hidden",
+    ]
+    turn.items = [
+        CommandExecutionItem(
+            item_id=UUID(int=900 + index),
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            sequence=index,
+            started_at=turn.started_at,
+            status="failed" if index == 0 else "completed",
+            command=description,
+        )
+        for index, description in enumerate(descriptions)
+    ]
+    cache_path = root / "semantic-preparation.sqlite"
+    prepared = prepare_graph(graph, cache_path=cache_path)
+    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v2"
+    assert prepared.summary.preparation_version == ARTIFACT_PREPARATION_VERSION
+    facts = prepared.publication()
+    reconstructed = session_graph_from_fact_index(
+        FactIndex.from_fact_sets([facts]), graph.root_session_id
+    )
+    summaries = [
+        item.measurements.tool_summary
+        for item in reconstructed.sessions[0].turns[0].items
+    ]
+    assert [summary["description"] for summary in summaries[:4]] == [
+        descriptions[0],
+        descriptions[1],
+        "python3 inspect.py --token [redacted]",
+        descriptions[3],
+    ]
+    encoded = facts.model_dump_json()
+    assert "synthetic-credential" not in encoded and "synthetic-bearer" not in encoded
+    assert "user:pass" not in encoded and "token=hidden" not in encoded
+    assert (
+        build_overview_flows([reconstructed.sessions[0].turns[0].items[0]])[0]["cmd"]
+        == descriptions[0]
+    )
+    # A valid old cache entry with a deliberately empty row set must not win
+    # over the current producer version for the same canonical graph digest.
+    with sqlite3.connect(cache_path) as db:
+        db.execute("DELETE FROM prepared")
+        old = prepared.model_dump(mode="json")
+        old["rows"] = []
+        old["summary"]["preparation_version"] = "ct.graph-preparation.v1"
+        db.execute(
+            "INSERT INTO prepared VALUES (?, ?)",
+            (
+                "ct.graph-preparation.v1:" + graph_input_digest(graph),
+                json.dumps(old),
+            ),
+        )
+    assert prepare_graph(graph, cache_path=cache_path) == prepared
+    assert prepare_graph(graph, cache_path=cache_path) == prepared
+    print(
+        "PASS semantic detail publication/replay, credential redaction, and v1 cache invalidation"
+    )
 
 
 class CheckpointRemote:
@@ -428,6 +507,7 @@ def main():
             remote.uploads,
             remote.publications,
         )
+        qualify_semantic_details(graphs[0], root)
         print(
             json.dumps(
                 {

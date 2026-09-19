@@ -303,11 +303,6 @@ class CloudflareArtifactRepository:
                 ArtifactManifest.model_validate(value)
                 for value in raw.get("manifests", [])
             ]
-            if any(
-                manifest.preparation_version != ARTIFACT_PREPARATION_VERSION
-                for manifest in self._manifests_value
-            ):
-                raise RemoteControlPlaneError("artifact preparation version mismatch")
         return self._manifests_value
 
     def _read_object(self, *, kind: str, sha256: str) -> dict[str, Any]:
@@ -348,6 +343,7 @@ class CloudflareArtifactRepository:
                     if (
                         summary.graph_id != graph.graph_id
                         or summary.fact_set_digest != graph.fact_set_digest
+                        or summary.preparation_version != manifest.preparation_version
                     ):
                         raise RemoteControlPlaneError(
                             "prepared summary identity mismatch"

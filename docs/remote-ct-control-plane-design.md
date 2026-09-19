@@ -37,9 +37,29 @@ selector/kinds scope. Cloudflare
 does not calculate summaries or metrics; Python reconstructs `PublishedFactSet`
 values and runs the same historical handlers used locally.
 
-Published command evidence contains only an allowlisted executable signature,
-never arguments. Standard APIs contain no raw transcript, prompt, reasoning,
-tool input/output, arbitrary event body, secret, or host-absolute path.
+Internal-workspace facts retain bounded semantic tool descriptions, including
+command arguments and tool target paths, for both local reads and publication.
+They no longer reduce commands to allowlisted executable names or `command`.
+Descriptions remain limited to 280 characters. Common explicitly named
+credentials and authorization tokens are redacted; URL userinfo and query
+strings are stripped. This is best-effort redaction, not a guarantee that an
+arbitrary command is secret-free or safe to share publicly. Upstream summaries
+can discard quoting, so multiword credential values may be only partially
+redacted. Structural project and file identities retain their existing portable
+representation.
+
+Raw tool input/output objects, stdout/stderr, file/patch bodies, complete
+transcripts and arbitrary event bodies remain outside the fact contract.
+Authentication, workspace isolation, integrity checks and resource bounds are
+unchanged. No source data is uploaded merely by changing the local reader.
+
+New preparation uses `ct.graph-preparation.v2`, invalidating the old local and
+collector preparation caches by version. Updated readers accept both v1 and v2
+artifacts and require the summary version to match its manifest. Old artifacts
+remain immutable and cannot recover stripped details; those details require
+repreparation from source. Update the Worker and readers before allowing v2
+collector publication: old Workers/readers do not support it. Deployment and
+republication of existing private data require separate approval.
 
 The exact limits are 512 KiB per row, 16 MiB per graph, 96 MiB per publication,
 and 1 MiB/2,048 rows per read page. Normalized SQL staging keeps Worker
