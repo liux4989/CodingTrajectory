@@ -1,5 +1,5 @@
 import { artifactKey } from "./artifacts";
-import { bounded, decode, digest, encode, Fault, Json, requireThat, stable, State, validate } from "./shared";
+import { decode, digest, encode, Fault, Json, requireThat, stable, State, validate } from "./shared";
 
 export const API_VERSIONS: Record<string, number> = {
   "project.list": 5, "project.sessions": 5, "session.overview": 4, "session.summary": 3,
@@ -137,7 +137,9 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
     const object = await env.ARTIFACTS.get(artifactKey(identity.workspace_id, "api", ref.sha256));
     requireThat(object, "prepared_object_missing", 503);
     requireThat(object.size === ref.bytes, "prepared_object_corrupt", 503);
-    const body = await bounded(object.body, ref.bytes); fetched += body.length;
+    // R2's object size is checked before allocation; consume its native buffer
+    // rather than copying stream chunks into a second JavaScript buffer.
+    const body = new Uint8Array(await object.arrayBuffer()); fetched += body.length;
     requireThat(body.length === ref.bytes && await digest(body) === ref.sha256, "prepared_object_corrupt", 503);
     let value;
     try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)); }
@@ -196,7 +198,9 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
   const candidates = positions.filter(p => older ? p < position : p >= position); if (older) candidates.reverse();
   const chosen: number[] = [], packs = new Set<number>();
   let size = 2;
-  const budget = Math.min(440 * 1024 - bytes(base).length, older ? 320 * 1024 : Infinity);
+  // Key order affects signatures, not JSON byte length. Keep canonical
+  // serialization for cursor bindings, but use native JSON for size checks.
+  const budget = Math.min(440 * 1024 - new TextEncoder().encode(JSON.stringify(base)).length, older ? 320 * 1024 : Infinity);
   for (const p of candidates) {
     if (chosen.length === params.limit || size + index.sizes[p] + 1 > budget || (!packs.has(packFor[p]) && packs.size === 2)) break;
     chosen.push(p); packs.add(packFor[p]); size += index.sizes[p] + 1;
@@ -221,7 +225,7 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
     end_ordinal_exclusive: chosen.length ? chosen[chosen.length - 1] + 1 : 0, returned: chosen.length, total, has_more: more, next_cursor: next };
   else Object.assign(result, { total: positions.length, returned: chosen.length, next_cursor: next, unresolved_ids: [...missing].sort() });
   if (result.coverage) result.coverage.trimmed ||= more || chosen.length < positions.length;
-  requireThat(bytes(result).length <= 440 * 1024, "remote_result_too_large", 413);
+  requireThat(new TextEncoder().encode(JSON.stringify(result)).length <= 440 * 1024, "remote_result_too_large", 413);
   return result;
 }
 

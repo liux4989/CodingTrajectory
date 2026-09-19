@@ -99,8 +99,9 @@ export default {
         const envelope = { protocol, id: requestId, method, method_version: methodVersion, ok: true, data: result,
           availability: { state: "complete", missing: [] }, error: null,
           meta: { source: "remote", freshness: "authoritative", content_scope: "facts", identity } };
-        requireThat(new TextEncoder().encode(JSON.stringify(envelope)).length <= 448 * 1024, "remote_result_too_large", 413);
-        return Response.json(envelope, { headers: responseHeaders(env) });
+        const body = new TextEncoder().encode(JSON.stringify(envelope));
+        requireThat(body.length <= 448 * 1024, "remote_result_too_large", 413);
+        return new Response(body, { headers: { ...responseHeaders(env), "Content-Type": "application/json" } });
       }
       requireThat(request.method === "POST" && url.search === "" && url.pathname === "/v1/core", "not_found", 404);
       let message;

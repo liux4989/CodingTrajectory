@@ -697,3 +697,44 @@ include publication. First read is after publication/preflight, not guaranteed
 cold storage or a cold isolate. No deployed CPU/memory gate can be inferred from
 these measurements. Historical Stage 3 results remain unchanged. No production
 code, deployment, remote workload, or shared resource was changed.
+
+### Local serving optimization after the benchmark
+
+The first optimization retains full paths, selected turns, all byte/read bounds,
+authorization and full-object SHA verification. After checking R2 object metadata,
+the reader consumes the native `arrayBuffer` rather than accumulating/copying
+stream chunks in JavaScript. Size-only checks use native `JSON.stringify` instead
+of recursive sorted-key serialization; signed cursor inputs remain canonical.
+The HTTP endpoint returns the same encoded bytes it checked, avoiding a second
+envelope serialization. No prepared format, page size or publication change is
+needed. Missing, same-size corrupt, oversized and short objects are rejected.
+
+Two fresh runs per shape used the same benchmark workload and request counts.
+All 2,004 response projections matched the offline reader. Both shapes returned
+the same bytes/counts as before; near-budget still returns 66 turns in a
+446,151-byte envelope with four expected reads / 598,559 fetched bytes.
+
+| Unprofiled measurement | Baseline | Optimized |
+|---|---:|---:|
+| Near-budget sequential average process CPU ms/request | 14.3–15.0 | 9.5–10.7 |
+| Near-budget concurrency-8 average process CPU ms/request | 12.35–12.65 | 8.05–8.50 |
+| Near-budget sequential wall p95 ms | 36.47–41.18 | 31.67–35.66 |
+| Near-budget concurrency-8 wall p95 ms | 145.79–148.81 | 109.05–117.28 |
+| Near-budget highest sampled process RSS MiB | 390.3–393.1 | 371.1–376.2 |
+| Representative sequential average process CPU ms/request | 4.4–5.0 | 3.8–4.4 |
+| Representative concurrency-8 average process CPU ms/request | 3.15–3.35 | 2.75–2.90 |
+
+Averaging equal-sized batches gives about 30% lower near-budget sequential
+process CPU and 34% lower concurrency-8 CPU. First-read wall measurements remain
+noisy (16.0–50.1 ms optimized); no cold-start improvement is claimed. Optimized
+near-budget heap snapshots span 13–63 MiB, so the lower sampled RSS does not
+establish lower peak/retained heap. Forced GC still timed out. Object loading and
+hashing remain prominent after the eliminated copying/serialization work.
+
+Optimized Worker bundle SHA-256:
+`66d073aa7e94aa9367b56e7338398c5603d3a92cd4570b7eb7c1bb75faa4e12a`.
+Worker TypeScript, the existing producer/Worker qualification (including Unicode,
+headers, cursors, isolation and corruption), full metric baselines and quality
+gate passed. This is a local correctness pass and measured performance improvement,
+not a local numerical CPU-budget pass or a replacement for remote qualification.
+No push, deployment or remote workload occurred.

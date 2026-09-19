@@ -30,7 +30,11 @@ async function post(path, message, role = 'owner', expected = 200) {
   const response = await mf.dispatchFetch(`http://local${path}`, { method: 'POST', headers: { authorization: `Bearer ${tokens[role] ?? 'invalid'}` }, body: JSON.stringify(message) });
   const raw = await response.text();
   assert.equal(response.status, expected, raw.slice(0, 1000));
-  if (path === '/v1/api') assert.ok(Buffer.byteLength(raw) <= 448 * 1024);
+  if (path === '/v1/api') {
+    assert.ok(Buffer.byteLength(raw) <= 448 * 1024);
+    assert.equal(response.headers.get('content-type'), 'application/json');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  }
   return JSON.parse(raw);
 }
 async function rpc(method, params) {
@@ -175,6 +179,10 @@ print('PASS owned Python remote runtime and authenticated direct API proxy')
   await bucket.delete(key);
   assert.equal((await api('session.overview', params, 'owner', 503)).error.code, 'prepared_object_missing');
   await bucket.put(key, fixture.api.objects[descriptor.index.sha256].replace('session.overview', 'session.overvieX'));
+  assert.equal((await api('session.overview', params, 'owner', 503)).error.code, 'prepared_object_corrupt');
+  await bucket.put(key, fixture.api.objects[descriptor.index.sha256] + ' ');
+  assert.equal((await api('session.overview', params, 'owner', 503)).error.code, 'prepared_object_corrupt');
+  await bucket.put(key, fixture.api.objects[descriptor.index.sha256].slice(0, -1));
   assert.equal((await api('session.overview', params, 'owner', 503)).error.code, 'prepared_object_corrupt');
   console.log('PASS Worker publication readiness, overview -> older pages -> pinned detail, semantic arguments/outcomes, exact methods, inventory, UTF-8 response bounds, auth/isolation, versions, cursor conflicts and corrupt objects');
   }
