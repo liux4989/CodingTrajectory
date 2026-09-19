@@ -1,0 +1,944 @@
+{
+  "experiments": {
+    "session_intent": {
+      "records": [
+        {
+          "input": "@packages/core/ for core session datas, we should remove the 'price' since it in",
+          "expected": "removal",
+          "predicted": "removal",
+          "confidence": 0.99,
+          "correct": true,
+          "probabilities": {
+            "removal": 0.99,
+            "ops": 0.0,
+            "ui_change": 0.0,
+            "refactor": 0.01,
+            "feature": 0.0,
+            "investigation": 0.0,
+            "docs": 0.0,
+            "bugfix": 0.0
+          },
+          "latency_ms": 1204,
+          "usage": {
+            "input_tokens": 520,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "@packages/plugins/dashboard/dashboard_tui.py relet us remove the tui and it's de",
+          "expected": "removal",
+          "predicted": "removal",
+          "confidence": 1.0,
+          "correct": true,
+          "probabilities": {
+            "ops": 0.0,
+            "refactor": 0.0,
+            "ui_change": 0.0,
+            "bugfix": 0.0,
+            "feature": 0.0,
+            "removal": 1.0,
+            "investigation": 0.0,
+            "docs": 0.0
+          },
+          "latency_ms": 962,
+          "usage": {
+            "input_tokens": 509,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "why there are so many 'no token usage metrics found for session', for 'coding-tr",
+          "expected": "investigation",
+          "predicted": "investigation",
+          "confidence": 1.0,
+          "correct": true,
+          "probabilities": {
+            "removal": 0.0,
+            "docs": 0.0,
+            "feature": 0.0,
+            "ops": 0.0,
+            "investigation": 1.0,
+            "refactor": 0.0,
+            "ui_change": 0.0,
+            "bugfix": 0.0
+          },
+          "latency_ms": 346,
+          "usage": {
+            "input_tokens": 538,
+            "output_tokens": 83
+          }
+        },
+        {
+          "input": "@packages/plugins/dashboard/ we want to change the current 'navigation/routing' ",
+          "expected": "ui_change",
+          "predicted": "feature",
+          "confidence": 0.7,
+          "correct": false,
+          "probabilities": {
+            "feature": 0.75,
+            "bugfix": 0.04,
+            "investigation": 0.0,
+            "removal": 0.0,
+            "ops": 0.0,
+            "docs": 0.0,
+            "ui_change": 0.17,
+            "refactor": 0.04
+          },
+          "latency_ms": 323,
+          "usage": {
+            "input_tokens": 522,
+            "output_tokens": 80
+          }
+        },
+        {
+          "input": "@packages/plugins/dashboard/web/src/routes/context-window.tsx let us refactor th",
+          "expected": "ui_change",
+          "predicted": "ui_change",
+          "confidence": 0.93,
+          "correct": true,
+          "probabilities": {
+            "feature": 0.0,
+            "bugfix": 0.0,
+            "investigation": 0.0,
+            "removal": 0.0,
+            "docs": 0.0,
+            "ops": 0.0,
+            "ui_change": 0.94,
+            "refactor": 0.06
+          },
+          "latency_ms": 1166,
+          "usage": {
+            "input_tokens": 531,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "fix bug : ct session items 9893af50-fa7c-5f15-a2bb-eb8fd5f15dd1 [] Note: Session",
+          "expected": "bugfix",
+          "predicted": "bugfix",
+          "confidence": 1.0,
+          "correct": true,
+          "probabilities": {
+            "removal": 0.0,
+            "docs": 0.0,
+            "refactor": 0.0,
+            "ui_change": 0.0,
+            "ops": 0.0,
+            "investigation": 0.0,
+            "bugfix": 1.0,
+            "feature": 0.0
+          },
+          "latency_ms": 1515,
+          "usage": {
+            "input_tokens": 560,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "remove the ci actions from this project",
+          "expected": "removal",
+          "predicted": "removal",
+          "confidence": 0.59,
+          "correct": true,
+          "probabilities": {
+            "investigation": 0.0,
+            "refactor": 0.0,
+            "feature": 0.0,
+            "removal": 0.64,
+            "ops": 0.36,
+            "ui_change": 0.0,
+            "docs": 0.0,
+            "bugfix": 0.0
+          },
+          "latency_ms": 352,
+          "usage": {
+            "input_tokens": 495,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "@packages/plugins/dashboard/web/src/routes/context-window.tsx 1. let us combine ",
+          "expected": "ui_change",
+          "predicted": "ui_change",
+          "confidence": 0.68,
+          "correct": true,
+          "probabilities": {
+            "removal": 0.0,
+            "feature": 0.2,
+            "docs": 0.0,
+            "investigation": 0.0,
+            "ops": 0.0,
+            "bugfix": 0.0,
+            "refactor": 0.08,
+            "ui_change": 0.72
+          },
+          "latency_ms": 364,
+          "usage": {
+            "input_tokens": 532,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "commit",
+          "expected": "ops",
+          "predicted": "ops",
+          "confidence": 1.0,
+          "correct": true,
+          "probabilities": {
+            "bugfix": 0.0,
+            "ops": 1.0,
+            "removal": 0.0,
+            "docs": 0.0,
+            "refactor": 0.0,
+            "feature": 0.0,
+            "ui_change": 0.0,
+            "investigation": 0.0
+          },
+          "latency_ms": 351,
+          "usage": {
+            "input_tokens": 489,
+            "output_tokens": 80
+          }
+        },
+        {
+          "input": "let us import motion for our @packages/plugins/dashboard/ web ui. And enrich the",
+          "expected": "feature",
+          "predicted": "ui_change",
+          "confidence": 0.87,
+          "correct": false,
+          "probabilities": {
+            "bugfix": 0.0,
+            "ui_change": 0.89,
+            "docs": 0.0,
+            "feature": 0.11,
+            "ops": 0.0,
+            "removal": 0.0,
+            "investigation": 0.0,
+            "refactor": 0.0
+          },
+          "latency_ms": 336,
+          "usage": {
+            "input_tokens": 511,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "@packages/plugins/dashboard/ currently 'largely a custom design system' - we wan",
+          "expected": "feature",
+          "predicted": "ui_change",
+          "confidence": 0.54,
+          "correct": false,
+          "probabilities": {
+            "removal": 0.0,
+            "docs": 0.0,
+            "bugfix": 0.0,
+            "refactor": 0.31,
+            "investigation": 0.0,
+            "feature": 0.09,
+            "ui_change": 0.6,
+            "ops": 0.0
+          },
+          "latency_ms": 610,
+          "usage": {
+            "input_tokens": 535,
+            "output_tokens": 81
+          }
+        },
+        {
+          "input": "why 'dist/assets/index-DO4QQnUX.js 588.76 kB' is so big in 'bun run build'",
+          "expected": "investigation",
+          "predicted": "investigation",
+          "confidence": 1.0,
+          "correct": true,
+          "probabilities": {
+            "feature": 0.0,
+            "ops": 0.0,
+            "ui_change": 0.0,
+            "removal": 0.0,
+            "docs": 0.0,
+            "refactor": 0.0,
+            "bugfix": 0.0,
+            "investigation": 1.0
+          },
+          "latency_ms": 304,
+          "usage": {
+            "input_tokens": 519,
+            "output_tokens": 83
+          }
+        },
+        {
+          "input": "why @.gitignore don't include node_module",
+          "expected": "investigation",
+          "predicted": "investigation",
+          "confidence": 0.95,
+          "correct": true,
+          "probabilities": {
+            "feature": 0.0,
+            "removal": 0.0,
+            "ops": 0.04,
+            "investigation": 0.95,
+            "bugfix": 0.01,
+            "docs": 0.0,
+            "ui_change": 0.0,
+            "refactor": 0.0
+          },
+          "latency_ms": 407,
+          "usage": {
+            "input_tokens": 499,
+            "output_tokens": 83
+          }
+        },
+        {
+          "input": "merge this barnch to main. and do a cleanup",
+          "expected": "ops",
+          "predicted": "ops",
+          "confidence": 1.0,
+          "correct": true,
+          "probabilities": {
+            "ui_change": 0.0,
+            "ops": 1.0,
+            "investigation": 0.0,
+            "docs": 0.0,
+            "refactor": 0.0,
+            "bugfix": 0.0,
+            "feature": 0.0,
+            "removal": 0.0
+          },
+          "latency_ms": 1060,
+          "usage": {
+            "input_tokens": 499,
+            "output_tokens": 80
+          }
+        },
+        {
+          "input": "why ct session stats 019f8358-347a-70f2-b69b-96bcbe1ddd91 reports prompt 2.2m bu",
+          "expected": "investigation",
+          "predicted": "investigation",
+          "confidence": 1.0,
+          "correct": true,
+          "probabilities": {
+            "ui_change": 0.0,
+            "refactor": 0.0,
+            "docs": 0.0,
+            "bugfix": 0.0,
+            "investigation": 1.0,
+            "feature": 0.0,
+            "removal": 0.0,
+            "ops": 0.0
+          },
+          "latency_ms": 321,
+          "usage": {
+            "input_tokens": 549,
+            "output_tokens": 83
+          }
+        },
+        {
+          "input": "help me fix error : claude update Current version: 2.1.201 Checking for updates ",
+          "expected": "bugfix",
+          "predicted": "bugfix",
+          "confidence": 0.83,
+          "correct": true,
+          "probabilities": {
+            "docs": 0.0,
+            "feature": 0.0,
+            "bugfix": 0.85,
+            "ops": 0.13,
+            "refactor": 0.0,
+            "removal": 0.0,
+            "ui_change": 0.0,
+            "investigation": 0.02
+          },
+          "latency_ms": 407,
+          "usage": {
+            "input_tokens": 515,
+            "output_tokens": 81
+          }
+        }
+      ]
+    },
+    "finding_triage": {
+      "records": [
+        {
+          "case": "normal_progress",
+          "expected_band": 0,
+          "severity": 0.25,
+          "severity_confidence": 0.75,
+          "interrupt_p": 0.08,
+          "latency_ms": 355,
+          "usage": {
+            "input_tokens": 502,
+            "output_tokens": 33
+          }
+        },
+        {
+          "case": "idle_after_completion",
+          "expected_band": 0,
+          "severity": 0.42,
+          "severity_confidence": 0.58,
+          "interrupt_p": 0.18,
+          "latency_ms": 336,
+          "usage": {
+            "input_tokens": 482,
+            "output_tokens": 33
+          }
+        },
+        {
+          "case": "budget_92pct_midtask",
+          "expected_band": 1,
+          "severity": 2.02,
+          "severity_confidence": 0.76,
+          "interrupt_p": 0.5,
+          "latency_ms": 632,
+          "usage": {
+            "input_tokens": 501,
+            "output_tokens": 33
+          }
+        },
+        {
+          "case": "cost_spike_single_request",
+          "expected_band": 1,
+          "severity": 1.99,
+          "severity_confidence": 0.88,
+          "interrupt_p": 0.56,
+          "latency_ms": 311,
+          "usage": {
+            "input_tokens": 510,
+            "output_tokens": 33
+          }
+        },
+        {
+          "case": "repeated_failing_test_loop",
+          "expected_band": 2,
+          "severity": 2.43,
+          "severity_confidence": 0.57,
+          "interrupt_p": 0.67,
+          "latency_ms": 543,
+          "usage": {
+            "input_tokens": 496,
+            "output_tokens": 33
+          }
+        },
+        {
+          "case": "budget_exceeded_no_progress",
+          "expected_band": 2,
+          "severity": 2.44,
+          "severity_confidence": 0.55,
+          "interrupt_p": 0.63,
+          "latency_ms": 339,
+          "usage": {
+            "input_tokens": 489,
+            "output_tokens": 33
+          }
+        },
+        {
+          "case": "secret_file_leaked",
+          "expected_band": 3,
+          "severity": 3.0,
+          "severity_confidence": 1.0,
+          "interrupt_p": 0.93,
+          "latency_ms": 1552,
+          "usage": {
+            "input_tokens": 491,
+            "output_tokens": 33
+          }
+        }
+      ]
+    },
+    "read_routing": {
+      "records": [
+        {
+          "query": "Give me a short brief of what happened in this session",
+          "expected": "session.summary",
+          "predicted": "session.summary",
+          "confidence": 1.0,
+          "correct": true,
+          "runner_up": [
+            "session.overview",
+            0.0
+          ],
+          "latency_ms": 465,
+          "usage": {
+            "input_tokens": 572,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "I want a compact outline of the parts of this session",
+          "expected": "session.overview",
+          "predicted": "session.overview",
+          "confidence": 0.99,
+          "correct": true,
+          "runner_up": [
+            "session.summary",
+            0.01
+          ],
+          "latency_ms": 340,
+          "usage": {
+            "input_tokens": 572,
+            "output_tokens": 130
+          }
+        },
+        {
+          "query": "Did this conversation fork into branches? How many agent runs are on each?",
+          "expected": "session.tree",
+          "predicted": "session.tree",
+          "confidence": 0.97,
+          "correct": true,
+          "runner_up": [
+            "session.overview",
+            0.02
+          ],
+          "latency_ms": 999,
+          "usage": {
+            "input_tokens": 576,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "Find every mention of prepared-graphs.sqlite in this session",
+          "expected": "session.search",
+          "predicted": "session.search",
+          "confidence": 0.96,
+          "correct": true,
+          "runner_up": [
+            "session.events",
+            0.03
+          ],
+          "latency_ms": 492,
+          "usage": {
+            "input_tokens": 572,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "How is the context window split between system prompt, tools, and messages?",
+          "expected": "session.stats",
+          "predicted": "session.stats",
+          "confidence": 0.94,
+          "correct": true,
+          "runner_up": [
+            "session.usage",
+            0.03
+          ],
+          "latency_ms": 571,
+          "usage": {
+            "input_tokens": 576,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "What was the token usage of each turn and the summed cost?",
+          "expected": "session.usage",
+          "predicted": "session.usage",
+          "confidence": 1.0,
+          "correct": true,
+          "runner_up": [
+            "session.summary",
+            0.0
+          ],
+          "latency_ms": 317,
+          "usage": {
+            "input_tokens": 574,
+            "output_tokens": 129
+          }
+        },
+        {
+          "query": "Show me the exact per-request usage reported by the provider, including cache writes",
+          "expected": "session.request_usage",
+          "predicted": "session.request_usage",
+          "confidence": 0.95,
+          "correct": true,
+          "runner_up": [
+            "session.usage",
+            0.03
+          ],
+          "latency_ms": 357,
+          "usage": {
+            "input_tokens": 576,
+            "output_tokens": 129
+          }
+        },
+        {
+          "query": "Load the raw events for turn 12 of this session",
+          "expected": "session.events",
+          "predicted": "session.events",
+          "confidence": 1.0,
+          "correct": true,
+          "runner_up": [
+            "session.search",
+            0.0
+          ],
+          "latency_ms": 315,
+          "usage": {
+            "input_tokens": 573,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "Get all items in this session so I can filter them myself",
+          "expected": "session.items",
+          "predicted": "session.items",
+          "confidence": 1.0,
+          "correct": true,
+          "runner_up": [
+            "session.graph",
+            0.0
+          ],
+          "latency_ms": 317,
+          "usage": {
+            "input_tokens": 573,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "Which subagents did this orchestration run spawn and how are they connected?",
+          "expected": "session.graph",
+          "predicted": "session.graph",
+          "confidence": 0.99,
+          "correct": true,
+          "runner_up": [
+            "project.sessions",
+            0.0
+          ],
+          "latency_ms": 998,
+          "usage": {
+            "input_tokens": 577,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "What projects exist on this machine?",
+          "expected": "project.list",
+          "predicted": "project.list",
+          "confidence": 0.99,
+          "correct": true,
+          "runner_up": [
+            "session.overview",
+            0.0
+          ],
+          "latency_ms": 680,
+          "usage": {
+            "input_tokens": 568,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "List the sessions I have in the langfuse project",
+          "expected": "project.sessions",
+          "predicted": "project.sessions",
+          "confidence": 1.0,
+          "correct": true,
+          "runner_up": [
+            "project.list",
+            0.0
+          ],
+          "latency_ms": 987,
+          "usage": {
+            "input_tokens": 572,
+            "output_tokens": 128
+          }
+        },
+        {
+          "query": "What's the weather in Lisbon?",
+          "expected": "none_of_these",
+          "predicted": "none_of_these",
+          "confidence": 0.94,
+          "correct": true,
+          "runner_up": [
+            "session.search",
+            0.02
+          ],
+          "latency_ms": 470,
+          "usage": {
+            "input_tokens": 568,
+            "output_tokens": 130
+          }
+        },
+        {
+          "query": "Rewrite this function to be async",
+          "expected": "none_of_these",
+          "predicted": "none_of_these",
+          "confidence": 0.49,
+          "correct": true,
+          "runner_up": [
+            "session.items",
+            0.29
+          ],
+          "latency_ms": 468,
+          "usage": {
+            "input_tokens": 569,
+            "output_tokens": 130
+          }
+        }
+      ]
+    },
+    "session_rerank": {
+      "records": [
+        {
+          "query": "redesigning the dashboard web UI",
+          "ground_truth_relevant": [
+            "c01",
+            "c04",
+            "c06",
+            "c08",
+            "c10"
+          ],
+          "baseline_order": [
+            "c01",
+            "c02",
+            "c03",
+            "c04",
+            "c05",
+            "c06",
+            "c07",
+            "c08",
+            "c09",
+            "c10",
+            "c11",
+            "c12"
+          ],
+          "choice_ranking": [
+            [
+              "c08",
+              0.61
+            ],
+            [
+              "c04",
+              0.22
+            ],
+            [
+              "c10",
+              0.16
+            ],
+            [
+              "c06",
+              0.01
+            ],
+            [
+              "c11",
+              0.0
+            ],
+            [
+              "c01",
+              0.0
+            ],
+            [
+              "c03",
+              0.0
+            ],
+            [
+              "c12",
+              0.0
+            ],
+            [
+              "c07",
+              0.0
+            ],
+            [
+              "c05",
+              0.0
+            ],
+            [
+              "c02",
+              0.0
+            ],
+            [
+              "c09",
+              0.0
+            ]
+          ],
+          "choice_confidence": 0.56,
+          "choice_latency_ms": 1111,
+          "choice_usage": {
+            "input_tokens": 929,
+            "output_tokens": 127
+          },
+          "noul_ranking": [
+            [
+              "c08",
+              0.96
+            ],
+            [
+              "c10",
+              0.95
+            ],
+            [
+              "c04",
+              0.94
+            ],
+            [
+              "c06",
+              0.86
+            ],
+            [
+              "c01",
+              0.76
+            ],
+            [
+              "c03",
+              0.41
+            ],
+            [
+              "c11",
+              0.28
+            ],
+            [
+              "c02",
+              0.2
+            ],
+            [
+              "c07",
+              0.18
+            ],
+            [
+              "c12",
+              0.1
+            ],
+            [
+              "c05",
+              0.06
+            ],
+            [
+              "c09",
+              0.04
+            ]
+          ],
+          "noul_calls": 12,
+          "noul_total_tokens": 4539,
+          "noul_total_latency_ms": 4827
+        },
+        {
+          "query": "diagnosing token usage measurement problems",
+          "ground_truth_relevant": [
+            "c01",
+            "c03",
+            "c05"
+          ],
+          "baseline_order": [
+            "c01",
+            "c02",
+            "c03",
+            "c04",
+            "c05",
+            "c06",
+            "c07",
+            "c08",
+            "c09",
+            "c10",
+            "c11",
+            "c12"
+          ],
+          "choice_ranking": [
+            [
+              "c05",
+              0.71
+            ],
+            [
+              "c01",
+              0.23
+            ],
+            [
+              "c03",
+              0.05
+            ],
+            [
+              "c07",
+              0.01
+            ],
+            [
+              "c08",
+              0.0
+            ],
+            [
+              "c06",
+              0.0
+            ],
+            [
+              "c02",
+              0.0
+            ],
+            [
+              "c12",
+              0.0
+            ],
+            [
+              "c11",
+              0.0
+            ],
+            [
+              "c10",
+              0.0
+            ],
+            [
+              "c09",
+              0.0
+            ],
+            [
+              "c04",
+              0.0
+            ]
+          ],
+          "choice_confidence": 0.67,
+          "choice_latency_ms": 323,
+          "choice_usage": {
+            "input_tokens": 901,
+            "output_tokens": 127
+          },
+          "noul_ranking": [
+            [
+              "c05",
+              0.94
+            ],
+            [
+              "c01",
+              0.93
+            ],
+            [
+              "c03",
+              0.93
+            ],
+            [
+              "c07",
+              0.9
+            ],
+            [
+              "c02",
+              0.28
+            ],
+            [
+              "c10",
+              0.15
+            ],
+            [
+              "c09",
+              0.13
+            ],
+            [
+              "c06",
+              0.1
+            ],
+            [
+              "c12",
+              0.07
+            ],
+            [
+              "c08",
+              0.06
+            ],
+            [
+              "c11",
+              0.06
+            ],
+            [
+              "c04",
+              0.04
+            ]
+          ],
+          "noul_calls": 12,
+          "noul_total_tokens": 4511,
+          "noul_total_latency_ms": 6699
+        }
+      ]
+    }
+  }
+}
