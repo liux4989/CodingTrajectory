@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -36,6 +37,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--benchmark-output", type=Path)
+    parser.add_argument(
+        "--shape", choices=("representative", "near-budget"), default="near-budget"
+    )
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="ct-direct-api-") as directory:
         os.environ["HOME"] = directory
         source = Path(directory) / "new-session.jsonl"
@@ -92,6 +99,12 @@ def main():
         )[0]
         session = graph.sessions[0]
         session.cwd = "/full/" + "工程/" * 250
+        if args.benchmark_output:
+            session.cwd = (
+                "/project/fresh"
+                if args.shape == "representative"
+                else "/full/" + "p" * 120000
+            )
         source_turn = session.turns[0]
         session.turns = []
         session.events = []
@@ -99,7 +112,9 @@ def main():
         session.context_sources = []
         session.runtime_observations = []
         session.measurements = None
-        for ordinal in range(97):
+        for ordinal in range(
+            3 if args.benchmark_output and args.shape == "representative" else 97
+        ):
             turn = source_turn.model_copy(deep=True)
             turn.turn_id = UUID(int=1000 + ordinal)
             turn.sequence = ordinal
@@ -145,6 +160,17 @@ def main():
         assert prepare_graph(graph) == prepared
         api = prepared.api
         identity = save_local_view(api, prepared.summary.fact_set_digest)
+        fixture = {
+            "root": str(session.session_id),
+            "cwd": session.cwd,
+            "source": prepared.summary.fact_set_digest,
+            "api": api.model_dump(mode="json"),
+            "summary": prepared.summary.model_dump(mode="json"),
+            "facts": prepared.publication().model_dump(mode="json"),
+            "versions": {
+                m.method: service_contract(m.method).version for m in api.methods
+            },
+        }
         descriptor = next(m for m in api.methods if m.method == "session.overview")
         reads = []
 
@@ -165,11 +191,33 @@ def main():
             len(reads) <= 4
             and sum(len(api.objects[key].encode()) for key in reads) <= 768 * 1024
         )
+        if args.benchmark_output:
+            fixture["benchmark"] = {
+                "shape": args.shape,
+                "expected_reads": len(reads),
+                "expected_fetched_bytes": sum(
+                    len(api.objects[key].encode()) for key in reads
+                ),
+                "expected_data": page,
+            }
+            path = Path(directory) / "fixture.json"
+            path.write_bytes(encoded(fixture))
+            subprocess.run(
+                [
+                    "node",
+                    str(ROOT / "scripts/qualify-prepared-api.mjs"),
+                    str(path),
+                    "--benchmark",
+                    str(args.benchmark_output.resolve()),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+            return
         assert page["sessions"][0]["cwd"] == session.cwd
         assert page["turns"][-1]["global_ordinal"] == 96 and page["page"]["has_more"]
         assert all(
-            "--ordinal 96" in activity["target"]
-            and activity["concept"] == "RunCommand"
+            "--ordinal 96" in activity["target"] and activity["concept"] == "RunCommand"
             for activity in page["turns"][-1]["activities"]
         )
         assert page["turns"][-1]["activities"][3]["exit_code"] == 7
@@ -225,17 +273,6 @@ def main():
             assert error.code == "prepared_object_corrupt"
         else:
             raise AssertionError("corrupt object accepted")
-        fixture = {
-            "root": str(session.session_id),
-            "cwd": session.cwd,
-            "source": prepared.summary.fact_set_digest,
-            "api": api.model_dump(mode="json"),
-            "summary": prepared.summary.model_dump(mode="json"),
-            "facts": prepared.publication().model_dump(mode="json"),
-            "versions": {
-                m.method: service_contract(m.method).version for m in api.methods
-            },
-        }
         path = Path(directory) / "fixture.json"
         path.write_bytes(encoded(fixture))
         subprocess.run(

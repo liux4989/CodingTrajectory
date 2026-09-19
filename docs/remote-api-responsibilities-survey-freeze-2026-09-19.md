@@ -638,3 +638,62 @@ inspected; the narrow DOM had no horizontal overflow and retained command
 arguments. An expired pin displayed `view_expired`; restarting removed the old
 pin and loaded the current chronology. No existing user logs, Cloudflare calls,
 deployment, or shared-resource changes were involved.
+
+### Current Worker local CPU and memory benchmark
+
+The benchmark runs the actual producer and Worker in disposable Miniflare,
+without Wrangler configuration or remote bindings. Reproduce each shape with:
+
+```sh
+uv run python scripts/qualify-prepared-api.py --shape representative --benchmark-output /tmp/representative.json
+uv run python scripts/qualify-prepared-api.py --shape near-budget --benchmark-output /tmp/near-budget.json
+```
+
+Each invocation creates a new synthetic Pi journal and a fresh workerd process.
+The representative shape has three turns/24 commands and a normal full path;
+the near-budget shape has 97 turns/776 commands and a 120,006-character full
+path. These are not the old Stage 3 fixtures. Two complete final-harness runs
+per shape each measured one first read after publication, 100 sequential reads,
+25 concurrency-8 batches, another 100 sequential reads, and a separate
+100-request CPU profile. All 2,004 responses matched offline-reader turns,
+session topology and page boundaries. Cursor presence was checked, not cursor
+byte equality across local/remote identities. Earlier harness exploration
+included an inspector URL-scheme failure and an initial complete run per shape;
+the table below uses both final-harness runs without removing any samples.
+
+| Measurement | Representative | Near-budget |
+|---|---:|---:|
+| Response envelope bytes | 16,611 | 446,151 |
+| Expected reads / fetched bytes (offline reader) | 3 / 16,987 | 4 / 598,559 |
+| Turns returned | 3 | 66 |
+| First read after publication wall ms | 8.34–8.59 | 22.62–23.21 |
+| Sequential process CPU ms/request, both sequential phases | 4.4–5.0 | 14.3–15.0 |
+| Sequential wall p95 ms, both sequential phases | 7.06–8.77 | 36.47–41.18 |
+| Concurrency-8 process CPU ms/request | 3.15–3.35 | 12.35–12.65 |
+| Concurrency-8 wall p95 ms | 36.39–37.88 | 145.79–148.81 |
+| Highest unprofiled sampled process RSS MiB | 173.5–174.8 | 390.3–393.1 |
+
+Worker bundle SHA-256 was
+`37985d93d31247a900d78b7854ac7ec69a5c23e87f176c6f6702c52e89bb2eab`.
+Reports retain fixture/harness hashes, runtime versions, all latency samples,
+process CPU totals, RSS samples and inspector heap snapshots; sibling
+`.cpuprofile` files retain the raw profiles. The application-isolate near-budget
+used-heap snapshots were 27–53 MiB before/after profiling, not peak values.
+`HeapProfiler.collectGarbage` timed out in this runtime, so post-GC retained
+heap and exact peak memory remain unqualified. Rising RSS alone is not proof
+of a leak: it includes local storage/authority services and allocator retention.
+
+The near-budget profiles consistently highlight `load`, `bounded` input-stream
+assembly/copying, `stable` canonical serialization, and `digest`. Source inspection
+confirms full-object hashing/parsing and repeated result serialization/encoding.
+These are follow-up optimization candidates, not changes made by the benchmark.
+Profiler sample weights include scheduling/wait effects and are not billed CPU.
+
+Linux process CPU uses 10 ms ticks aggregated over batches and includes all
+services in workerd, not per-request isolate CPU. Wall time includes loopback,
+harness parsing and scheduling; concurrent response validation also loads the
+driver. RSS is sampled every 10 ms and can miss peaks; lifetime high-water marks
+include publication. First read is after publication/preflight, not guaranteed
+cold storage or a cold isolate. No deployed CPU/memory gate can be inferred from
+these measurements. Historical Stage 3 results remain unchanged. No production
+code, deployment, remote workload, or shared resource was changed.

@@ -21,7 +21,8 @@ const principals = Object.fromEntries(Object.entries(tokens).map(([role, token])
 }]));
 const bundle = await build({ entryPoints: [`${root}cloudflare/control-plane/src/index.ts`], bundle: true, write: false,
   format: 'esm', platform: 'browser', external: ['cloudflare:workers'] });
-const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: 'direct-api', modules: true, script: bundle.outputFiles[0].text,
+const benchmarking = process.argv[3] === '--benchmark';
+const mf = new Miniflare(convertV4MiniflareOptions({ ...(benchmarking ? { inspectorPort: 0 } : {}), workers: [{ name: 'direct-api', modules: true, script: bundle.outputFiles[0].text,
   compatibilityDate: '2026-09-10', durableObjects: { WORKSPACES: { className: 'Workspace', useSQLite: true } },
   r2Buckets: ['ARTIFACTS'], bindings: { CT_CURSOR_KEY: 'direct-api-local-cursor-key-00000000001', CT_PRINCIPALS: JSON.stringify(principals) },
 }] }));
@@ -65,6 +66,11 @@ try {
   const params = { session_id: fixture.root, limit: 200 };
   assert.equal((await api('session.overview', params, 'owner', 409)).error.code, 'prepared_view_unavailable');
   await rpc('ct_collector_publish_artifacts', publication);
+  if (benchmarking) {
+    const { benchmark } = await import('./benchmark-prepared-api.mjs');
+    await benchmark({ mf, fixture, bundle: bundle.outputFiles[0].text,
+      output: process.argv[4], request: () => api('session.overview', params) });
+  } else {
   const first = await api('session.overview', params);
   assert.equal(first.data.project.project_id, project.project_id);
   assert.equal(first.data.sessions[0].cwd, fixture.cwd);
@@ -171,4 +177,5 @@ print('PASS owned Python remote runtime and authenticated direct API proxy')
   await bucket.put(key, fixture.api.objects[descriptor.index.sha256].replace('session.overview', 'session.overvieX'));
   assert.equal((await api('session.overview', params, 'owner', 503)).error.code, 'prepared_object_corrupt');
   console.log('PASS Worker publication readiness, overview -> older pages -> pinned detail, semantic arguments/outcomes, exact methods, inventory, UTF-8 response bounds, auth/isolation, versions, cursor conflicts and corrupt objects');
+  }
 } finally { await mf.dispose(); }
