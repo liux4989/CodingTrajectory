@@ -14,6 +14,7 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
+from coding_trajectory.contracts.prepared_api import PreparedMethod, PreparedObject
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorModel,
     SourceVectorEntry,
@@ -23,9 +24,9 @@ from coding_trajectory.control_plane.published_facts import (
     MAX_FACT_ROWS_PER_GRAPH,
 )
 
-ARTIFACT_PREPARATION_VERSION = "ct.graph-preparation.v2"
-ARTIFACT_SUMMARY_SCHEMA_VERSION = "ct.prepared-summary.v1"
-ARTIFACT_MANIFEST_SCHEMA_VERSION = "ct.artifact-manifest.v1"
+ARTIFACT_PREPARATION_VERSION = "ct.graph-preparation.v3"
+ARTIFACT_SUMMARY_SCHEMA_VERSION = "ct.prepared-summary.v2"
+ARTIFACT_MANIFEST_SCHEMA_VERSION = "ct.artifact-manifest.v2"
 ARTIFACT_RETENTION = 3
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_SUMMARY_BYTES = 4 * 1024 * 1024
@@ -36,10 +37,10 @@ MAX_ARTIFACT_ALIASES = 262_144
 class PreparedGraphSummary(CollectorModel):
     """Small, validated read projection stored separately from graph facts."""
 
-    schema_version: Literal["ct.prepared-summary.v1"] = ARTIFACT_SUMMARY_SCHEMA_VERSION
-    preparation_version: Literal[
-        "ct.graph-preparation.v1", "ct.graph-preparation.v2"
-    ] = ARTIFACT_PREPARATION_VERSION
+    schema_version: Literal["ct.prepared-summary.v2"] = ARTIFACT_SUMMARY_SCHEMA_VERSION
+    preparation_version: Literal["ct.graph-preparation.v3"] = (
+        ARTIFACT_PREPARATION_VERSION
+    )
     graph_id: UUID
     fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     aliases: list[UUID] = Field(max_length=MAX_ARTIFACT_ALIASES)
@@ -69,7 +70,7 @@ class ArtifactObjectReference(CollectorModel):
 class ArtifactGraphPublication(CollectorModel):
     graph_id: UUID
     graph_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    fact_schema_version: Literal["ct.published_facts.v1"] = FACT_SET_SCHEMA_VERSION
+    fact_schema_version: Literal["ct.published_facts.v2"] = FACT_SET_SCHEMA_VERSION
     fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     fact_count: int = Field(ge=1, le=MAX_FACT_ROWS_PER_GRAPH)
     source_ids: list[UUID] = Field(min_length=1)
@@ -77,6 +78,8 @@ class ArtifactGraphPublication(CollectorModel):
     observed_at: datetime
     facts: ArtifactObjectReference
     summary: ArtifactObjectReference
+    api_methods: list[PreparedMethod] = Field(max_length=131_072)
+    api_objects: list[PreparedObject] = Field(max_length=131_072)
 
     @model_validator(mode="after")
     def validate_objects(self) -> ArtifactGraphPublication:
@@ -84,6 +87,16 @@ class ArtifactGraphPublication(CollectorModel):
             raise ValueError("graph artifact references use the wrong object kind")
         if len(set(self.source_ids)) != len(self.source_ids):
             raise ValueError("graph artifact source_ids must be unique")
+        objects = {ref.sha256 for ref in self.api_objects}
+        if len(objects) != len(self.api_objects):
+            raise ValueError("duplicate prepared API object")
+        for method in self.api_methods:
+            if (method.index is None) == (method.error is None):
+                raise ValueError(
+                    "prepared method requires exactly one index or size error"
+                )
+            if method.index and method.index.sha256 not in objects:
+                raise ValueError("prepared method index is not uploaded")
         return self
 
 
@@ -91,12 +104,12 @@ class ArtifactPublicationRequest(CollectorModel):
     """A complete source inventory published only after immutable uploads."""
 
     version: Literal[1] = 1
-    schema_version: Literal["ct.artifact-manifest.v1"] = (
+    schema_version: Literal["ct.artifact-manifest.v2"] = (
         ARTIFACT_MANIFEST_SCHEMA_VERSION
     )
-    preparation_version: Literal[
-        "ct.graph-preparation.v1", "ct.graph-preparation.v2"
-    ] = ARTIFACT_PREPARATION_VERSION
+    preparation_version: Literal["ct.graph-preparation.v3"] = (
+        ARTIFACT_PREPARATION_VERSION
+    )
     workspace_id: UUID
     agent_id: UUID
     project_id: UUID
@@ -132,11 +145,13 @@ class ArtifactManifestGraph(CollectorModel):
     vendors: list[str] = Field(min_length=1, max_length=16)
     facts: ArtifactObjectReference
     summary: ArtifactObjectReference
+    api_methods: list[PreparedMethod]
+    api_objects: list[PreparedObject]
 
 
 class ArtifactManifest(CollectorModel):
-    schema_version: Literal["ct.artifact-manifest.v1"]
-    preparation_version: Literal["ct.graph-preparation.v1", "ct.graph-preparation.v2"]
+    schema_version: Literal["ct.artifact-manifest.v2"]
+    preparation_version: Literal["ct.graph-preparation.v3"]
     workspace_id: UUID
     project_id: UUID
     publisher_agent_id: UUID

@@ -38,6 +38,29 @@ def main():
     ):
         models[f"{name}_request"] = service_contract(method).request_model
         models[f"{name}_response"] = service_contract(method).response_model
+    from coding_trajectory.contracts.prepared_api import ApiRequest
+
+    models["api_request"] = ApiRequest
+    for method in (
+        "project.list",
+        "project.sessions",
+        "session.overview",
+        "session.summary",
+        "session.tree",
+        "session.stats",
+        "session.usage",
+        "session.model_usage",
+        "session.request_usage",
+        "session.tool_usage",
+        "graph.stats",
+        "graph.usage",
+        "graph.overview",
+        "session.items",
+        "session.events",
+    ):
+        models["api_" + method.replace(".", "_")] = service_contract(
+            method
+        ).request_model
     schemas = {name: model.model_json_schema() for name, model in models.items()}
     destination = ROOT / "cloudflare/control-plane/src/contracts.json"
     destination.parent.mkdir(parents=True, exist_ok=True)

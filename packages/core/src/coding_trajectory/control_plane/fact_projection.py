@@ -212,6 +212,7 @@ class ChronicleToolDetail(ChronicleModel):
     kind: Literal["file", "search", "command", "web", "coordination", "tool"]
     target: _Preview
     scope: _Preview | None = None
+    truncated: bool = False
     safety: Literal["sanitized"] = "sanitized"
 
 
@@ -323,6 +324,7 @@ class ChronicleUserRequest(ChronicleModel):
     type: Literal["message", "command"] = "message"
     source: _BoundedString = "human_user"
     content: _Preview
+    truncated: bool = False
     chars: int | None = Field(default=None, ge=0)
     tokens: int | None = Field(default=None, ge=0)
 
@@ -429,6 +431,8 @@ class ChronicleSession(ChronicleModel):
     title: _Preview | None = None
     preview: _Preview | None = None
     agent_name: _BoundedString | None = None
+    cwd: str | None = None
+    agent_path: str | None = None
     topology: ChronicleSessionTopology = Field(default_factory=ChronicleSessionTopology)
     runtime: list[ChronicleRuntimeObservation] = Field(default_factory=list)
     measurements: ChronicleSessionMeasurements = Field(
@@ -586,6 +590,12 @@ def _build_chronicle_session(
         title=_safe_detail_target(_vendor_title(session) or "", cwd=session.cwd),
         preview=_safe_detail_target(_vendor_preview(session) or "", cwd=session.cwd),
         agent_name=session.agent_name,
+        cwd=session.cwd,
+        agent_path=(
+            session.extensions.codex.agent_path
+            if session.extensions and session.extensions.codex
+            else None
+        ),
         topology=_build_topology(session, origins),
         events=_build_event_envelopes(session),
         runtime=[
@@ -723,6 +733,8 @@ def _build_user_request(
         type=request_type if request_type in {"message", "command"} else "message",
         source=request.get("source") or "human_user",
         content=content,
+        truncated=len(request["content"].strip()) > 280
+        or bool(source_event and source_event.payload.get("preview_truncated")),
         chars=text_size.chars if text_size is not None else None,
         tokens=text_size.tokens if text_size is not None else None,
     )
@@ -857,6 +869,8 @@ def _bounded_tool_summary(
         return None
     description = raw.get("description")
     detail = _tool_detail(name, description, cwd=cwd)
+    if detail is not None and raw.get("description_truncated"):
+        detail.truncated = True
     return ChronicleToolSummary(
         name=name,
         detail=detail,
@@ -1207,7 +1221,11 @@ def _to_session(value: ChronicleSession) -> Session:
                 if user_request.chars is not None and user_request.tokens is not None
                 else {}
             )
-            payload = {payload_key: request_text, **request_measurement}
+            payload = {
+                payload_key: request_text,
+                "preview_truncated": user_request.truncated,
+                **request_measurement,
+            }
         events.append(
             Event(
                 event_id=envelope.event_id,
@@ -1255,7 +1273,10 @@ def _to_session(value: ChronicleSession) -> Session:
                         timestamp=turn.started_at,
                         type=EventType.USER_PROMPT_SUBMITTED,
                         vendor_source=value.vendor,
-                        payload={payload_key: request_text},
+                        payload={
+                            payload_key: request_text,
+                            "preview_truncated": user_request.truncated,
+                        },
                     )
                 )
         for request in turn.requests:
@@ -1314,6 +1335,7 @@ def _to_session(value: ChronicleSession) -> Session:
         model=value.model,
         reasoning_effort=value.reasoning_effort,
         agent_name=value.agent_name,
+        cwd=value.cwd,
         started_at=value.started_at,
         ended_at=value.ended_at,
         parent_session_id=value.parent_session_id,
@@ -1345,8 +1367,14 @@ def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
             mode="python", exclude_none=True, exclude={"detail"}
         )
         if tool_summary.detail is not None:
+            restored_tool_summary["detail"] = tool_summary.detail.model_dump(
+                mode="json"
+            )
             restored_tool_summary["description"] = _detail_description(
                 tool_summary.detail
+            )
+            restored_tool_summary["description_truncated"] = (
+                tool_summary.detail.truncated
             )
     measurements = ItemMeasurements(
         **value.measurements.model_dump(mode="python", exclude={"tool_summary"}),
@@ -1464,6 +1492,7 @@ def _to_extensions(value: ChronicleSession) -> VendorExtensions | None:
         codex = CodexExtensions(
             title=value.title,
             preview=value.preview,
+            agent_path=value.agent_path,
             forked_from_id="chronicle" if topology.forked else None,
             spawn_parent_thread_id="chronicle" if topology.spawned else None,
             spawn_depth=topology.spawn_depth,
@@ -1572,7 +1601,9 @@ def _tool_detail(
     target = _safe_detail_target(description, cwd=cwd)
     if not target:
         return None
-    return ChronicleToolDetail(kind=kind, target=target)
+    return ChronicleToolDetail(
+        kind=kind, target=target, truncated=len(" ".join(description.split())) > 280
+    )
 
 
 def _safe_detail_target(value: str, *, cwd: str | None) -> str | None:
@@ -1704,6 +1735,10 @@ def _reject_embedded_content(value: Any, *, field: str = "") -> None:
         for child in value:
             _reject_embedded_content(child, field=field)
     elif isinstance(value, str):
+        # Exact session paths are private workspace context, bounded by the
+        # enclosing fact row/set rather than the semantic-preview string cap.
+        if field in {"cwd", "agent_path"}:
+            return
         if len(value) > 512:
             raise ValueError(f"chronicle graph retained unbounded string in {field}")
         if field in {"content", "text_preview", "preview"}:

@@ -67,3 +67,12 @@ The parent turn has `108.767` active seconds (`parent.jsonl:2,6`) and no tool in
 ## Cross-check
 
 The expected artifacts assert the child's 2-turn / 4-item reconstruction (the regression guard: 0 before the fix), its derived `spawned_subagent` relationship, graph/session membership, three graph turns, independently summed usage buckets and model-active time, and pinned cost. Root-session elapsed runtime remains distinct from summed agent-seconds. Presentation-only text and generated item identifiers are intentionally omitted.
+
+## Prepared overview v4
+
+Parent line 1 proves relationship `root` (formerly presentation role `main`);
+lines 2–6 prove its single completed turn at source ordinal 0. The duplicate
+status assertion becomes that ordinal. Root identity and turns move to
+`root_session_id` and `turns`; orchestration moves to the top level. The three
+source turns already reconstructed above are `totals.source_turns`. Numeric
+usage, cost, runtime and graph membership expectations are unchanged.

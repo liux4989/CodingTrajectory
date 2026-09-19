@@ -57,10 +57,6 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
         source=getattr(args, "source", None),
         profile_name=getattr(args, "credential_profile", None),
     )
-    if getattr(args, "snapshot_sequence", None) is not None:
-        if source == "local":
-            raise ValueError("snapshot sequence requires a shared query source")
-        source = "shared"
     if source == "shared":
         return _remote_runtime(args)
     return ServiceRuntime(
@@ -86,7 +82,6 @@ def _remote_runtime(args: argparse.Namespace) -> ServiceRuntime:
     )
     return factory.build(
         credentials.access_token,
-        snapshot_sequence=getattr(args, "snapshot_sequence", None),
         current_dir=Path.cwd(),
     )
 
@@ -134,20 +129,8 @@ def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
         type=UUID,
         help="Select the fallback Chronicles workspace (defaults to environment or credential profile).",
     )
-    parser.add_argument(
-        "--snapshot-sequence",
-        type=_nonnegative_int,
-        help="Read directly from this pinned remote workspace sequence.",
-    )
     parser.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
     parser.add_argument("--access-token", help="Defaults to CT_ACCESS_TOKEN.")
-
-
-def _nonnegative_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("must be a nonnegative integer")
-    return parsed
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -229,7 +212,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     serve = api_sub.add_parser(
         "serve",
         prog="ct api serve",
-        help="Serve authenticated remote CT call, batch, and schema endpoints.",
+        help="Proxy the authenticated new-version /v1/api endpoint.",
         formatter_class=GhFormatter,
     )
     serve.add_argument("--remote-workspace-id", type=UUID, required=True)

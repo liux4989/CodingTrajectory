@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 import httpx
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
+from coding_trajectory.contracts.prepared_api import PreparedObject
 from coding_trajectory.control_plane.artifact_protocol import (
     ARTIFACT_PREPARATION_VERSION,
     ArtifactGraphPublication,
@@ -683,7 +684,7 @@ class LocalCollector:
         protected = {
             reference.sha256
             for graph in publication.graphs
-            for reference in (graph.facts, graph.summary)
+            for reference in (graph.facts, graph.summary, *graph.api_objects)
         }
         for row in self._connection.execute(
             "select request_json from publication_outbox where state in ('pending', 'in_flight')"
@@ -694,6 +695,9 @@ class LocalCollector:
                 for graph in artifact["graphs"]:
                     protected.update(
                         (graph["facts"]["sha256"], graph["summary"]["sha256"])
+                    )
+                    protected.update(
+                        ref["sha256"] for ref in graph.get("api_objects", [])
                     )
         if protected:
             placeholders = ",".join("?" for _ in protected)
@@ -733,7 +737,11 @@ class LocalCollector:
         return {
             reference["sha256"]
             for graph in artifact["graphs"]
-            for reference in (graph["facts"], graph["summary"])
+            for reference in (
+                graph["facts"],
+                graph["summary"],
+                *graph.get("api_objects", []),
+            )
         }
 
     def _source_delivery_accepted(self, source: _CollectedSource) -> bool:
@@ -802,12 +810,12 @@ class LocalCollector:
                 for source in session_sources[session.session_id][1]
             ]
             graph_input_sha256 = graph_input_digest(graph)
+            graph_preparation = prepare_graph(graph)
             prepared = self._connection.execute(
                 "select * from prepared_graphs where preparation_version = ? and graph_input_sha256 = ?",
                 (ARTIFACT_PREPARATION_VERSION, graph_input_sha256),
             ).fetchone()
             if prepared is None:
-                graph_preparation = prepare_graph(graph)
                 fact_set = graph_preparation.publication()
                 fact_bytes = canonical_json(
                     fact_set.model_dump(mode="json", exclude_none=True)
@@ -860,6 +868,14 @@ class LocalCollector:
                 "select encoded_bytes from artifact_objects where sha256 = ?",
                 (summary_sha256,),
             ).fetchone()
+            api_objects = []
+            for digest, text in sorted(graph_preparation.api.objects.items()):
+                body = text.encode()
+                self._connection.execute(
+                    "insert into artifact_objects (sha256, kind, body, encoded_bytes) values (?, 'api', ?, ?) on conflict(sha256) do nothing",
+                    (digest, body, len(body)),
+                )
+                api_objects.append(PreparedObject(sha256=digest, bytes=len(body)))
             artifact_publications.append(
                 ArtifactGraphPublication(
                     graph_id=graph.root_session_id,
@@ -888,6 +904,8 @@ class LocalCollector:
                         sha256=summary_sha256,
                         bytes=summary_row["encoded_bytes"],
                     ),
+                    api_methods=graph_preparation.api.methods,
+                    api_objects=api_objects,
                 )
             )
 
@@ -978,7 +996,7 @@ class LocalCollector:
                 # recovered receipt needs only an exact idempotent replay.
                 force_upload = row["attempts"] > 0 and not committed
                 for graph in artifact_request.graphs:
-                    for reference in (graph.facts, graph.summary):
+                    for reference in (graph.facts, graph.summary, *graph.api_objects):
                         if committed or (
                             not force_upload and reference.sha256 in acknowledged
                         ):
@@ -1644,7 +1662,7 @@ class LocalCollector:
                 )
 
     def _reject_pending_legacy_publications(self) -> None:
-        """Stop safely when an old SQL publication still awaits delivery."""
+        """Reject obsolete prepared work; canonical source must be recollected."""
 
         rows = self._connection.execute(
             "select idempotency_key, request_json from publication_outbox where state in ('pending', 'in_flight') or (state = 'rejected' and last_error = 'conflict')"
@@ -1655,14 +1673,18 @@ class LocalCollector:
                 staged = json.loads(row["request_json"])
             except (TypeError, json.JSONDecodeError):
                 staged = None
-            if not isinstance(staged, dict) or "artifact_publication" not in staged:
+            if (
+                not isinstance(staged, dict)
+                or staged.get("artifact_publication", {}).get("preparation_version")
+                != ARTIFACT_PREPARATION_VERSION
+            ):
                 legacy_keys.append(row["idempotency_key"])
         if legacy_keys:
             raise RuntimeError(
-                "legacy SQL publication is still pending in the local "
-                "publication_outbox; no collection or remote delivery was attempted. "
-                "Back up the collector database and resolve or migrate the retained "
-                f"legacy row(s) explicitly (idempotency keys: {', '.join(legacy_keys)})."
+                "unsupported_prepared_version: obsolete work remains in publication_outbox; "
+                "no delivery was attempted. Start with fresh disposable collector state "
+                "and recollect canonical logs using the current producer. "
+                "Keep the old database and canonical source; no migration is supported."
             )
 
 

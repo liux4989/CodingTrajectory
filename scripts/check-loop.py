@@ -114,11 +114,11 @@ def main():
                 assert call("/api/status")["remote"] is False
             projects = core("project.list", {})
             project_id = next(
-                key
-                for key, value in projects["items"].items()
+                value["project_id"]
+                for value in projects["items"]
                 if value["display_name"] == "amp-example"
             )
-            assert projects["items"][project_id]["project_id"] == project_id
+            assert any(value["project_id"] == project_id for value in projects["items"])
             sessions = core("project.sessions", {"project_id": project_id})["items"]
             assert (
                 sessions

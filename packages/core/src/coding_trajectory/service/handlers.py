@@ -64,6 +64,34 @@ def dispatch(
 ) -> Any:
     contract = service_contract(method)
     params = contract.validate_request(params)
+    if (
+        method.startswith(("session.", "graph.", "project."))
+        and method != "session.search"
+    ):
+        from coding_trajectory.control_plane.fact_repository import (
+            LocalPublishedFactRepository,
+        )
+        from coding_trajectory.control_plane.published_facts import (
+            session_graph_from_fact_index,
+        )
+
+        local_store = (
+            DocumentStore.from_session_graphs(
+                [
+                    session_graph_from_fact_index(store, graph_id)
+                    for graph_id in store.graph_ids
+                ]
+            )
+            if isinstance(store, FactIndex)
+            else store
+        )
+        repository = LocalPublishedFactRepository(
+            global_scope=global_scope,
+            current_dir=current_dir,
+            cache=cache,
+            resolve=lambda *_args, **_kwargs: (local_store, discovery_note),
+        )
+        return contract.validate_response(repository.response_for(method, params))
     context = ServiceContext(
         store=store,
         global_scope=global_scope,
@@ -205,9 +233,6 @@ def _handle_project_sessions(
 ) -> dict[str, Any]:
     """Collapsed inventory cards: runtime and usage are always computed."""
     from coding_trajectory.analysis.orchestration_runs import orchestration_runs
-    from coding_trajectory.analysis.session_graph_views import (
-        session_graph_has_visible_overview_content,
-    )
     from coding_trajectory.metrics import build_session_graph_usage
 
     if isinstance(context.store, FactIndex):
@@ -230,8 +255,6 @@ def _handle_project_sessions(
     items: list[dict[str, Any]] = []
     for lineage_graph in session_graphs:
         for graph in orchestration_runs(lineage_graph):
-            if not session_graph_has_visible_overview_content(graph):
-                continue
             usage = build_session_graph_usage(graph)
             item = {
                 **serialize_session_graph_detail(graph),
@@ -890,9 +913,14 @@ def _item_detail(item: Any, *, concept: Any, index: Any) -> dict[str, Any] | Non
 
     semantics = item.vendor_data.get("chronicle_semantics") or {}
     tool_name = _item_tool_name(item)
-    detail: dict[str, Any] = {"tool_name": tool_name, "concept": str(concept)}
     measurements = getattr(item, "measurements", None)
     summary = getattr(measurements, "tool_summary", None) if measurements else None
+    detail: dict[str, Any] = {
+        "tool_name": tool_name,
+        "concept": summary.get("name")
+        if isinstance(summary, dict)
+        else getattr(concept, "value", concept),
+    }
     summary_detail = summary.get("detail") if isinstance(summary, dict) else None
     if isinstance(summary_detail, dict):
         detail["target_kind"] = summary_detail.get("kind")

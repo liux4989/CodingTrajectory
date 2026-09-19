@@ -128,14 +128,13 @@ def add_turn_window_flags(parser: argparse.ArgumentParser, *, view_name: str) ->
         type=positive_int,
         default=None,
         metavar="N",
-        help=f"Limit each session {view_name} to its last N visible turns.",
+        help=f"Limit the {view_name} page to its last N visible turns.",
     )
     parser.add_argument(
-        "--before-turn",
-        dest="before_turn_id",
+        "--cursor",
         default=None,
-        metavar="TURN_ID",
-        help="Page to the visible turns immediately before this turn.",
+        metavar="CURSOR",
+        help="Read an older page using the opaque next_cursor from the previous page.",
     )
 
 
@@ -663,90 +662,15 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def compact_payload(method: str, payload: Any) -> Any:
-    if method == "project.list" and isinstance(payload, dict):
-        items = payload.get("items") or {}
-        return {
-            "items": {
-                name: drop_none(
-                    {
-                        "project_id": item.get("project_id"),
-                        "display_name": item.get("display_name"),
-                        "path": item.get("path"),
-                        "vendors": item.get("vendors"),
-                        "sessions": item.get("sessions"),
-                    }
-                )
-                for name, item in items.items()
-                if isinstance(item, dict)
-            }
-        }
-
-    if method == "project.sessions" and isinstance(payload, dict):
-        return {
-            "items": [
-                drop_none(
-                    {
-                        "id": item.get("root_session_id"),
-                        "project_id": item.get("project_id"),
-                        "project": item.get("project"),
-                        "title": item.get("title"),
-                        "vendors": item.get("vendors"),
-                        "sessions": item.get("session_ids"),
-                        "runtime": item.get("runtime"),
-                        "usage": item.get("usage"),
-                        "warnings": item.get("warnings") or None,
-                    }
-                )
-                for item in payload.get("items") or []
-                if isinstance(item, dict)
-            ]
-        }
-
-    if method == "session.overview" and isinstance(payload, dict):
-        return {
-            "id": payload.get("root_session_id"),
-            "sessions": [
-                drop_none(
-                    {
-                        "id": session.get("session_id"),
-                        "relationship": compact_relationship(
-                            session.get("relationship")
-                        ),
-                        "vendor": session.get("vendor"),
-                        "status": session.get("status"),
-                        "agent": session.get("agent_name"),
-                        "cwd": session.get("cwd"),
-                        "compactions": session.get("compactions"),
-                        "turns": [
-                            drop_none(
-                                {
-                                    "id": turn.get("turn_id"),
-                                    "status": turn.get("status"),
-                                    "request": compact_request(
-                                        turn.get("user_request")
-                                    ),
-                                    "activity": [
-                                        compact_activity(activity)
-                                        for activity in turn.get("activity") or []
-                                    ]
-                                    or None,
-                                    "teammate_summary": turn.get("teammate_summary"),
-                                    "items": (
-                                        (turn.get("refs") or {}).get("item_ids")
-                                        if isinstance(turn.get("refs"), dict)
-                                        else None
-                                    ),
-                                }
-                            )
-                            for turn in session.get("turns") or []
-                            if isinstance(turn, dict)
-                        ],
-                    }
-                )
-                for session in payload.get("sessions") or []
-                if isinstance(session, dict)
-            ],
-        }
+    if method in {
+        "project.list",
+        "project.sessions",
+        "session.overview",
+        "graph.overview",
+        "session.items",
+        "session.events",
+    }:
+        return payload
 
     if method == "session.usage" and isinstance(payload, dict):
         runtime = payload.get("runtime") or {}
@@ -867,71 +791,6 @@ def compact_payload(method: str, payload: Any) -> Any:
             if isinstance(session, dict)
         ] or None
         return drop_none(compact)
-
-    if method == "session.events" and isinstance(payload, dict):
-        return drop_none(
-            {
-                "id": payload.get("root_session_id"),
-                "type": payload.get("type"),
-                "matches": [
-                    drop_none(
-                        {
-                            "id": item.get("event_id"),
-                            "session": item.get("session_id"),
-                            "turn": item.get("turn_id"),
-                            "item": item.get("item_id"),
-                            "timestamp": item.get("timestamp"),
-                            "type": item.get("type"),
-                            "status": item.get("status"),
-                            "source_sequence": item.get("source_sequence"),
-                            "source_order_key": item.get("source_order_key"),
-                            "provenance": item.get("provenance"),
-                            "coverage": item.get("coverage"),
-                            "tool_call": item.get("tool_call"),
-                            "llm": item.get("llm"),
-                            "usage": item.get("usage"),
-                            "text": item.get("text"),
-                            "payload": item.get("payload"),
-                        }
-                    )
-                    for item in payload.get("events") or []
-                    if isinstance(item, dict)
-                ],
-                "next_cursor": payload.get("next_cursor"),
-            }
-        )
-
-    if method == "session.items" and isinstance(payload, dict):
-        return drop_none(
-            {
-                "id": payload.get("root_session_id"),
-                "items": [
-                    drop_none(
-                        {
-                            "id": item.get("item_id"),
-                            "session": item.get("session_id"),
-                            "turn": item.get("turn_id"),
-                            "kind": item.get("kind"),
-                            "operation": item.get("operation"),
-                            "status": item.get("status"),
-                            "source_sequence": item.get("source_sequence"),
-                            "source_order_key": item.get("source_order_key"),
-                            "started_at": item.get("started_at"),
-                            "completed_at": item.get("completed_at"),
-                            "provenance": item.get("provenance"),
-                            "coverage": item.get("coverage"),
-                            "type": item.get("type"),
-                            "operations": item.get("operations"),
-                            "shape": item.get("shape"),
-                            "events": item.get("event_ids"),
-                        }
-                    )
-                    for item in payload.get("items") or []
-                    if isinstance(item, dict)
-                ],
-                "next_cursor": payload.get("next_cursor"),
-            }
-        )
 
     return payload
 

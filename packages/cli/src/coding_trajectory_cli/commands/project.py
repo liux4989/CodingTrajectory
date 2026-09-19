@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from coding_trajectory_cli._shared import (
@@ -16,7 +15,11 @@ from coding_trajectory_cli._shared import (
 
 
 def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
-    params: dict[str, Any] = {}
+    params = {
+        key: getattr(args, key)
+        for key in ("cursor", "limit", "modified_since")
+        if getattr(args, key, None) is not None
+    }
     agent_vendor = getattr(args, "agent_vendor", None)
     if agent_vendor is not None:
         params["agent_vendor"] = agent_vendor
@@ -24,42 +27,39 @@ def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _project_sessions_params(args: argparse.Namespace) -> dict[str, Any]:
-    params: dict[str, Any] = {}
+    params = _project_list_params(args)
     if args.project_name:
         params["project_name"] = args.project_name
     if args.project_id:
         if args.project_name:
             raise ValueError("use --project-id or PROJECT_NAME, not both")
         params["project_id"] = args.project_id
-    # --since-days is a CLI convenience translated to one absolute protocol
-    # timestamp; the protocol itself only accepts modified_since.
-    if args.all_time is True:
-        params["modified_since"] = None
-    else:
-        since_days = args.since_days if args.since_days is not None else 30
-        params["modified_since"] = (
-            datetime.now(UTC) - timedelta(days=since_days)
-        ).isoformat()
-    agent_vendor = getattr(args, "agent_vendor", None)
-    if agent_vendor is not None:
-        params["agent_vendor"] = agent_vendor
     return params
 
 
 def _render_project_list_markdown(payload: dict[str, Any]) -> str:
-    items = payload.get("items") or {}
+    items = payload.get("items") or []
     lines = [
         "# Projects",
         "",
         "| Project | ID | Vendors | Path |",
         "| --- | --- | --- | --- |",
     ]
-    for name, item in items.items():
+    for item in items:
         if not isinstance(item, dict):
             continue
         vendors = ", ".join(item.get("vendors") or []) or "-"
         path = item.get("path") or "-"
-        lines.append(f"| `{item['display_name']}` | `{name}` | {vendors} | `{path}` |")
+        lines.append(
+            f"| `{item['display_name']}` | `{item['project_id']}` | {vendors} | `{path}` |"
+        )
+    if payload.get("next_cursor"):
+        lines.extend(
+            [
+                "",
+                f"Next page: repeat the same filters and limit with `--cursor {payload['next_cursor']}`.",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -75,6 +75,13 @@ def _render_project_sessions_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- `{session_id}` {title} [{vendors}]")
     if len(lines) == 2:
         lines.append("No sessions found.")
+    if payload.get("next_cursor"):
+        lines.extend(
+            [
+                "",
+                f"Next page: repeat the same filters and limit with `--cursor {payload['next_cursor']}`.",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -114,25 +121,24 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         metavar="PROJECT_NAME",
         nargs="?",
         default=None,
-        help="Project name to list sessions for. Defaults to the current directory.",
+        help="Project name to list sessions for. Omit to list the selected inventory.",
     )
     project_sessions.add_argument(
         "--project-id",
         help="Stable project ID returned by project list for the selected authority.",
     )
-    project_sessions.add_argument(
-        "--since-days",
-        type=positive_int,
-        default=None,
-        metavar="N",
-        help="Only scan sessions modified in the last N days. Defaults to 30. Translated to an absolute modified-since timestamp.",
-    )
-    project_sessions.add_argument(
-        "--all-time",
-        action="store_true",
-        default=None,
-        help="Scan all matching sessions, ignoring the default 30-day window.",
-    )
+    for parser in (project_list, project_sessions):
+        parser.add_argument(
+            "--cursor",
+            help="Opaque next_cursor from the previous page; keep filters unchanged.",
+        )
+        parser.add_argument(
+            "--limit", type=positive_int, help="Requested page count, up to 200."
+        )
+        parser.add_argument(
+            "--modified-since",
+            help="Absolute ISO timestamp; reuse it unchanged across pages.",
+        )
     add_agent_vendor_flag(project_sessions)
     add_output_flags(project_sessions)
     add_global_scope_flag(project_sessions)

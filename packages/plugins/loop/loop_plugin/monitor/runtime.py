@@ -92,6 +92,11 @@ class CoreFacade:
             raise MonitorCoreError(method, str(message))
         return reply["result"]
 
+    def view_hash(self) -> str | None:
+        return ((self._runtime.transport_metadata() or {}).get("identity") or {}).get(
+            "view_manifest_sha256"
+        )
+
 
 class MonitorCoreError(RuntimeError):
     def __init__(self, method: str, message: str):
@@ -129,7 +134,11 @@ def _evaluate_session_turns(
     written: list[Evaluation] = []
     findings: list[Finding] = []
     usage = core.call("session.usage", {"session_id": session_id})
-    ledger = core.call("session.request_usage", {"session_id": session_id})
+    view_hash = core.view_hash()
+    ledger = core.call(
+        "session.request_usage",
+        {"session_id": session_id, "view_manifest_sha256": view_hash},
+    )
     counts = _request_counts(ledger)
     measurement_coverage = usage.get("measurement_coverage")
     warnings = usage.get("warnings") or []
@@ -172,7 +181,9 @@ def _evaluate_session_turns(
             strategy_version=watch.strategy_version,
             config_revision=watch.config_revision,
             trigger=trigger,  # type: ignore[arg-type]
-            reference=CanonicalReference(session_id=turn_session, turn_id=turn_id),
+            reference=CanonicalReference(
+                session_id=turn_session, turn_id=turn_id, view_manifest_sha256=view_hash
+            ),
             state=state,  # type: ignore[arg-type]
             result=result,  # type: ignore[arg-type]
             condition=condition,
@@ -258,15 +269,20 @@ def _finding_for(*, watch: Watch, evaluation: Evaluation) -> Finding:
 def resolve_scope_sessions(core: CoreFacade, watch: Watch) -> tuple[list[str], int]:
     """Resolve a watch scope to graph entrypoint IDs via Core inventory.
 
-    Returns (entrypoint_ids, total_in_inventory). The inventory is unpaginated
-    (frozen Core contract); the caller bounds how many are evaluated.
+    Returns (entrypoint_ids, total_in_inventory) over the pinned inventory pages.
     """
     if watch.scope.session_id:
         return [watch.scope.session_id], 1
-    result = core.call(
-        "project.sessions", {"project_name": watch.scope.project_name or ""}
+    params = (
+        {"project_name": watch.scope.project_name} if watch.scope.project_name else {}
     )
-    items = result.get("items") or []
+    items = []
+    while True:
+        result = core.call("project.sessions", params)
+        items.extend(result.get("items") or [])
+        if not result.get("next_cursor"):
+            break
+        params["cursor"] = result["next_cursor"]
     entrypoints = [
         item["root_session_id"]
         for item in items
@@ -288,8 +304,7 @@ def dry_run(store: MonitorStore, watch: Watch, *, max_sessions: int) -> DryRunRe
         if truncated:
             notes.append(
                 f"Scope inventory has {total} session(s); dry-run evaluated the "
-                f"first {len(selected)}. Core project inventory is unpaginated "
-                f"(frozen contract), so deep-history dry-runs need a narrower scope."
+                f"first {len(selected)}. Narrow the scope or increase the dry-run limit."
             )
         for entrypoint in selected:
             written, previews = _evaluate_session_turns(

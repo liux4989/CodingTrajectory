@@ -1,5 +1,6 @@
 import { authorityFailure, bounded, DIGEST, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
 import { artifactKey } from "./artifacts";
+import { readCursor, servePrepared, validateApi } from "./prepared-api";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
@@ -18,6 +19,8 @@ export default {
   async fetch(request, env): Promise<Response> {
     let requestId: unknown = null;
     let method: unknown = null;
+    let protocol = new URL(request.url).pathname === "/v1/api" ? "ct.api.v1" : PROTOCOL;
+    let methodVersion: unknown = null;
     try {
       const token = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/)?.[1];
       requireThat(token, "authentication_required", 401);
@@ -29,7 +32,8 @@ export default {
       const principal: Principal = { workspace_id: uuid(raw.workspace_id), agent_id: uuid(raw.agent_id), roles: raw.roles };
       requireThat(Array.isArray(principal.roles) && principal.roles.every(role => ["read", "collect", "owner"].includes(role)), "invalid_principal", 503);
       const url = new URL(request.url);
-      const artifactUpload = url.pathname.match(/^\/v1\/artifacts\/(facts|summary)\/([0-9a-f]{64})$/);
+      if (url.pathname === "/v1/api") protocol = "ct.api.v1";
+      const artifactUpload = url.pathname.match(/^\/v1\/artifacts\/(facts|summary|api)\/([0-9a-f]{64})$/);
       if (request.method === "PUT" && artifactUpload && url.search === "") {
         requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
         const [, kind, sha256] = artifactUpload;
@@ -39,8 +43,9 @@ export default {
         try { value = object(JSON.parse(new TextDecoder().decode(body))); }
         catch (error) { if (error instanceof Fault) throw error; throw new Fault(400, "invalid_artifact_json"); }
         requireThat(kind === "facts"
-          ? value.schema_version === "ct.published_facts.v1"
-          : value.schema_version === "ct.prepared-summary.v1", "artifact_schema_mismatch");
+          ? value.schema_version === "ct.published_facts.v2"
+          : kind === "summary" ? value.schema_version === "ct.prepared-summary.v2"
+          : value.schema_version === "ct.prepared-api.v1" && body.length <= 448 * 1024, "artifact_schema_mismatch");
         const key = artifactKey(principal.workspace_id, kind, sha256);
         const workspace = env.WORKSPACES.getByName(principal.workspace_id);
         const claim = object(JSON.parse(await workspace.invoke(
@@ -63,6 +68,39 @@ export default {
         // Production Durable Objects never emit this field.
         if (claim.body?.__benchmark) result.__benchmark = claim.body.__benchmark;
         return Response.json(result, { headers: responseHeaders(env) });
+      }
+      if (request.method === "POST" && url.pathname === "/v1/api" && url.search === "") {
+        requireThat(principal.roles.includes("read") || principal.roles.includes("owner"), "capability_required", 403);
+        let message;
+        try { message = object(JSON.parse(new TextDecoder().decode(await bounded(request.body, 64 * 1024)))); }
+        catch (error) { if (error instanceof Fault) throw error; throw new Fault(400, "invalid_json"); }
+        requestId = message.id ?? null; method = message.method; methodVersion = message.method_version;
+        validateApi(message);
+        const workspace = env.WORKSPACES.getByName(principal.workspace_id);
+        let result, identity = null;
+        if (method === "living.sessions") {
+          const reply = object(JSON.parse(await workspace.invoke("ct_remote_living", JSON.stringify({ request: {
+            workspace_id: principal.workspace_id, calls: [{ method, params: message.params }],
+          } }), JSON.stringify(principal))));
+          requireThat(reply.status === 200, reply.body?.error?.code ?? "method_failed", reply.status);
+          result = reply.body.results[0].result;
+        } else {
+          const cursor = message.params.cursor ? await readCursor(message.params.cursor, env.CT_CURSOR_KEY) : null;
+          requireThat(!cursor || cursor.workspace_id === principal.workspace_id, "invalid_cursor");
+          requireThat(!cursor || !message.params.view_manifest_sha256 || cursor.view_manifest_sha256 === message.params.view_manifest_sha256, "invalid_cursor");
+          const reply = object(JSON.parse(await workspace.invoke("ct_internal_api_locator", JSON.stringify({ request: {
+            workspace_id: principal.workspace_id, method, params: message.params,
+            view_manifest_sha256: cursor?.view_manifest_sha256 ?? message.params.view_manifest_sha256,
+          } }), JSON.stringify(principal))));
+          requireThat(reply.status === 200, reply.body?.error?.code ?? "method_failed", reply.status);
+          identity = reply.body.identity;
+          result = await servePrepared(env, reply.body, message.method, message.params);
+        }
+        const envelope = { protocol, id: requestId, method, method_version: methodVersion, ok: true, data: result,
+          availability: { state: "complete", missing: [] }, error: null,
+          meta: { source: "remote", freshness: "authoritative", content_scope: "facts", identity } };
+        requireThat(new TextEncoder().encode(JSON.stringify(envelope)).length <= 448 * 1024, "remote_result_too_large", 413);
+        return Response.json(envelope, { headers: responseHeaders(env) });
       }
       requireThat(request.method === "POST" && url.search === "" && url.pathname === "/v1/core", "not_found", 404);
       let message;
@@ -136,8 +174,8 @@ export default {
     } catch (error) {
       const failure = authorityFailure(error, "worker");
       const code = failure.code;
-      return Response.json({ protocol: PROTOCOL, id: requestId, method, ok: false, data: null,
-        availability: { state: "unavailable", missing: [{ field: "$", reason: code }] }, error: { code } },
+      return Response.json({ protocol, id: requestId, method, method_version: methodVersion, ok: false, data: null,
+        availability: { state: code === "unsupported_version" ? "unsupported" : "unavailable", missing: [{ field: "$", reason: code }] }, error: { code, message: code }, meta: null },
         { status: failure.status, headers: responseHeaders(env) });
     }
   },

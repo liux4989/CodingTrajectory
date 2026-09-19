@@ -25,3 +25,12 @@ The turn spans `11:55:35.457Z` to `11:57:06.918Z` (`session.jsonl:4,13`) = `91.4
 ## Cross-check
 
 Assertions cover token sums, reported cost and confidence, successful tool counts, one-turn status, runtime, and single-model attribution.
+
+## Prepared overview v4
+
+Source lines 5–12 independently prove four `bash` call/result pairs. The new
+overview carries four per-item activities, not the historical grouped cell:
+`activities[0].concept` is `RunCommand` and `content_coverage.activities.total`
+is 4. Identity, turn status and session count move to `root_session_id`,
+`turns[0].status` and `orchestration.session_count`. No usage, cost or runtime
+expected value is derived anew from command output.

@@ -15,6 +15,7 @@ class CanonicalReference(BaseModel):
     turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     item_id: str | None = Field(default=None, min_length=1, max_length=256)
     event_id: str | None = Field(default=None, min_length=1, max_length=256)
+    view_manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class Investigation(BaseModel):

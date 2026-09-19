@@ -20,6 +20,7 @@ export type SessionId = string;
 export type TurnId = string | null;
 export type ItemId = string | null;
 export type EventId = string | null;
+export type ViewManifestSha256 = string | null;
 export type CreatedAt = string;
 export type UpdatedAt = string;
 export type Status1 = "open" | "acknowledged" | "resolved" | "dismissed";
@@ -65,6 +66,7 @@ export interface CanonicalReference {
   turn_id?: TurnId;
   item_id?: ItemId;
   event_id?: EventId;
+  view_manifest_sha256?: ViewManifestSha256;
 }
 export interface FindingStatusEvent {
   status: Status1;

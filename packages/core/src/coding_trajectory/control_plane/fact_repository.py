@@ -1,10 +1,9 @@
-"""One internal ``FactRepository`` contract for historical fact authorities.
+"""Local prepared API views and the historical artifact benchmark reader.
 
-Local execution derives typed fact rows from canonical session graphs without
-publication size budgets; remote execution fetches the same rows from the Cloudflare
-authority. Both expose one indexed read view to the shared Python historical
-handlers, so summary, overview, search, metrics, and display semantics remain
-owned exactly once.
+Supported remote clients use ``remote_api.RemoteApiRepository`` exclusively.
+The older artifact reader below remains for the pinned historical benchmark
+scripts, not as a runtime fallback or a second supported high-level API.
+Canonical computation stays in Python; remote serving selects prepared results.
 """
 
 from __future__ import annotations
@@ -105,6 +104,8 @@ class LocalPublishedFactRepository:
         self._indexes: dict[tuple[Any, ...], tuple[FactIndex, str]] = {}
         self._prepared_cache = ArtifactReadCache()
         self._batch_index: tuple[FactIndex, str] | None = None
+        self._batch_prepared: list[PreparedGraph] | None = None
+        self._identity: dict[str, Any] | None = None
 
     def pin_snapshot(self) -> int:
         """Local sources are read live and therefore have no snapshot number."""
@@ -120,15 +121,17 @@ class LocalPublishedFactRepository:
             "session.tree", {"session_ids": ids}, ("batch",)
         )
         self._check_available(bool(store.session_graphs))
+        self._batch_prepared = self._prepare_store(store)
         self._batch_index = (
             FactIndex.from_rows(
-                row for prepared in self._prepare_store(store) for row in prepared.rows
+                row for prepared in self._batch_prepared for row in prepared.rows
             ),
             note,
         )
 
     def end_batch(self) -> None:
         self._batch_index = None
+        self._batch_prepared = None
 
     def _prepare_store(self, store: DocumentStore) -> list[PreparedGraph]:
         values = []
@@ -146,34 +149,109 @@ class LocalPublishedFactRepository:
     def response_for(
         self, method: str, params: dict[str, Any]
     ) -> dict[str, Any] | None:
-        if method != "project.sessions":
+        from coding_trajectory.control_plane.prepared_api import (
+            PreparedApiError,
+            prepare_inventory_api,
+        )
+        from coding_trajectory.control_plane.prepared_api_reader import (
+            decode_cursor,
+            load_local_view,
+            local_signing_key,
+            read_prepared,
+            save_local_view,
+        )
+        from coding_trajectory.service.store import project_list_metadata
+
+        self._identity = None
+        if method == "session.search":
             return None
         params = service_contract(method).validate_request(params)
-        store, _ = self._resolve_store(method, params, ())
-        self._check_available(bool(store.session_graphs))
-        graphs = list(store.session_graphs.values())
-        if params.get("project_id"):
-            graphs = [
-                graph
-                for graph in graphs
-                if graph_project_id(graph) == params["project_id"]
-            ]
-        elif (
-            params.get("project_name")
-            and len({graph_project_id(graph) for graph in graphs}) > 1
-        ):
-            raise ValueError("ambiguous project name; use project_id")
-        selected = DocumentStore.from_session_graphs(graphs)
-        project_ids = {
-            graph.root_session_id: graph_project_id(graph) for graph in graphs
-        }
-        return filter_session_cards(
-            [
-                {**item, "project_id": project_ids[prepared.summary.graph_id]}
-                for prepared in self._prepare_store(selected)
-                for item in prepared.summary.project_sessions
-            ],
+        signing_key = local_signing_key()
+        view_hash = params.get("view_manifest_sha256")
+        if params.get("cursor"):
+            cursor = decode_cursor(params["cursor"], signing_key)
+            if view_hash and view_hash != cursor.get("view_manifest_sha256"):
+                raise PreparedApiError("invalid_cursor")
+            view_hash = cursor.get("view_manifest_sha256")
+        scope = params.get("session_id") or params.get("root_session_id") or "workspace"
+        if view_hash:
+            api, identity = load_local_view(view_hash)
+        else:
+            selector = {
+                key: params[key]
+                for key in ("session_id", "root_session_id")
+                if key in params
+            }
+            if self._batch_prepared is not None and not method.startswith("project."):
+                prepared = self._batch_prepared
+            else:
+                store, _ = self._resolve_store(
+                    method if method.startswith("project.") else "session.tree",
+                    selector,
+                    (),
+                )
+                self._check_available(bool(store.session_graphs))
+                prepared = self._prepare_store(store)
+            if method in {"project.list", "project.sessions"}:
+                projects = {
+                    graph.root_session_id: graph_project_id(graph)
+                    for graph in store.session_graphs.values()
+                }
+                cards = []
+                for value in prepared:
+                    view = save_local_view(value.api, value.summary.fact_set_digest)
+                    cards.extend(
+                        {
+                            **item,
+                            "project_id": projects[value.summary.graph_id],
+                            "view_manifest_sha256": view.view_manifest_sha256,
+                        }
+                        for item in value.summary.project_sessions
+                    )
+                metadata = project_list_metadata(
+                    {}, global_scope=True, current_dir=self.current_dir
+                )
+                api, source = prepare_inventory_api(
+                    list(metadata["items"].values()), cards
+                )
+                identity = save_local_view(api, source)
+            else:
+                value = next(
+                    (
+                        value
+                        for value in prepared
+                        if any(entry.scope == scope for entry in value.api.methods)
+                    ),
+                    None,
+                )
+                if value is None:
+                    raise PreparedApiError("scope_not_found", 404)
+                api = value.api
+                identity = save_local_view(api, value.summary.fact_set_digest)
+        turn_id = (
+            params.get("turn_id")
+            if method not in {"session.items", "session.events"}
+            else None
+        )
+        descriptor = next(
+            (
+                entry
+                for entry in api.methods
+                if entry.method == method
+                and entry.scope == scope
+                and entry.turn_id == turn_id
+            ),
+            None,
+        )
+        if descriptor is None:
+            raise PreparedApiError("scope_not_found", 404)
+        self._identity = identity.model_dump(mode="json")
+        return read_prepared(
+            descriptor,
             params,
+            identity=identity,
+            fetch=lambda digest: api.objects[digest].encode(),
+            signing_key=signing_key,
         )
 
     def store_for(self, method: str, params: dict[str, Any]) -> tuple[FactIndex, str]:
@@ -203,18 +281,27 @@ class LocalPublishedFactRepository:
     ) -> tuple[DocumentStore, str]:
         from coding_trajectory.service import resolve_store
 
-        include_descendants = requires_graph_scope(method)
+        include_descendants = requires_graph_scope(method) or method.startswith(
+            "project."
+        )
         resolve = self._resolve or resolve_store
         return resolve(
             discovery_params(params),
-            global_scope=self.global_scope or bool(params.get("project_id")),
+            global_scope=self.global_scope
+            or method.startswith("project.")
+            or bool(params.get("project_id")),
             current_dir=self.current_dir,
             cache=self.cache,
             include_descendants=include_descendants,
         )
 
     def metadata(self) -> dict[str, Any]:
-        return {"source": "local", "freshness": "live", "content_scope": "facts"}
+        return {
+            "source": "local",
+            "freshness": "authoritative",
+            "content_scope": "facts",
+            "identity": self._identity,
+        }
 
     def close(self) -> None:
         save = getattr(self.cache, "save", None)

@@ -1,311 +1,194 @@
-"""Authenticated HTTP transport for the shared CT application runtime."""
+"""Authenticated direct-API proxy for the shared CT application runtime."""
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.contracts import command_schema
-from coding_trajectory.contracts.envelope import CORE_PROTOCOL
+from coding_trajectory.contracts import service_contract
+from coding_trajectory.contracts.prepared_api import (
+    API_PROTOCOL,
+    MAX_API_REQUEST_BYTES,
+    MAX_API_RESPONSE_BYTES,
+    ApiRequest,
+)
 from coding_trajectory.control_plane.authority import MethodAuthority
-from coding_trajectory.control_plane.fact_repository import (
-    ArtifactReadCache,
-    CloudflareArtifactRepository,
-    FactRepository,
-)
-from coding_trajectory.control_plane.remote import CloudflareRpcClient
-from coding_trajectory.control_plane.remote_inventory import (
-    CloudflareProjectInventoryRepository,
-)
-from coding_trajectory.control_plane.remote_living import CloudflareLivingAuthority
+from coding_trajectory.control_plane.remote import RemoteControlPlaneError
+from coding_trajectory.control_plane.remote_api import RemoteApiRepository
 from coding_trajectory.runtime import ServiceRuntime
 
 
 class RemoteRuntimeFactory:
-    """Build a request-scoped runtime pinned to one remote workspace sequence."""
+    """Build request-scoped direct API clients without reconstructing facts."""
 
     def __init__(self, *, url: str, workspace_id: UUID) -> None:
         self._url = url
         self.workspace_id = workspace_id
-        self._artifact_cache = ArtifactReadCache()
+
+    def repository(self, access_token: str) -> RemoteApiRepository:
+        if not access_token:
+            raise ValueError("access token must not be empty")
+        return RemoteApiRepository(
+            url=self._url, access_token=access_token, workspace_id=self.workspace_id
+        )
 
     def build(
-        self,
-        access_token: str,
-        *,
-        snapshot_sequence: int | None = None,
-        current_dir: Path | None = None,
+        self, access_token: str, *, current_dir: Path | None = None
     ) -> ServiceRuntime:
         return ServiceRuntime(
-            **self.runtime_options(
-                access_token,
-                snapshot_sequence=snapshot_sequence,
-                current_dir=current_dir,
-            )
+            **self.runtime_options(access_token, current_dir=current_dir)
         )
 
     def runtime_options(
-        self,
-        access_token: str,
-        *,
-        snapshot_sequence: int | None = None,
-        current_dir: Path | None = None,
+        self, access_token: str, *, current_dir: Path | None = None
     ) -> dict[str, Any]:
-        """Resolve the same fact authorities for every client surface."""
-        if not access_token:
-            raise ValueError("access token must not be empty")
-        if snapshot_sequence is not None and (
-            isinstance(snapshot_sequence, bool)
-            or not isinstance(snapshot_sequence, int)
-            or snapshot_sequence < 0
-        ):
-            raise ValueError("snapshot_sequence must be a non-negative integer")
-        client = CloudflareRpcClient(url=self._url, access_token=access_token)
-        # Authenticate and pin the artifact authority before constructing a runtime.
-        snapshot_request: dict[str, Any] = {"workspace_id": str(self.workspace_id)}
-        if snapshot_sequence is not None:
-            snapshot_request["snapshot_sequence"] = snapshot_sequence
-        try:
-            pinned = client.call("ct_workspace_snapshot", snapshot_request)
-            sequence = pinned.get("snapshot_sequence")
-            if (
-                isinstance(sequence, bool)
-                or not isinstance(sequence, int)
-                or sequence < 0
-            ):
-                raise ValueError(
-                    "remote workspace returned an invalid snapshot sequence"
-                )
-            if snapshot_sequence is not None and sequence != snapshot_sequence:
-                raise ValueError(
-                    "remote workspace returned a different snapshot sequence"
-                )
-        except Exception:
-            client.close()
-            raise
-        inventory = CloudflareProjectInventoryRepository(
-            client=client,
-            workspace_id=self.workspace_id,
-            snapshot_sequence=sequence,
-        )
-        historical: FactRepository = CloudflareArtifactRepository(
-            client=client,
-            workspace_id=self.workspace_id,
-            snapshot_sequence=sequence,
-            cache=self._artifact_cache,
-            inventory=inventory,
-        )
-        living = CloudflareLivingAuthority(
-            client=client,
-            workspace_id=self.workspace_id,
-            # Living pagination carries its own snapshot in `through`. Only an
-            # explicitly pinned caller should force the workspace sequence;
-            # otherwise a publication between pages would invalidate the
-            # previous page's cursor.
-            snapshot_sequence=snapshot_sequence,
-        )
-        handlers: dict[MethodAuthority, Callable[..., Any]] = {
-            MethodAuthority.PROJECT_INVENTORY: inventory,
-            MethodAuthority.LIVING: living,
-        }
-        metadata = {
-            "workspace_id": str(self.workspace_id),
-            "snapshot_sequence": sequence,
-            "source": "remote",
-            "freshness": "authoritative",
-            "content_scope": "facts",
-        }
+        historical = self.repository(access_token)
         return {
             "global_scope": True,
             "current_dir": current_dir or Path.cwd(),
             "historical_repository": historical,
-            "authority_handlers": handlers,
-            "transport_metadata": lambda: metadata,
+            "authority_handlers": {
+                MethodAuthority.PROJECT_INVENTORY: historical,
+                MethodAuthority.LIVING: historical,
+            },
+            "transport_metadata": historical.metadata,
         }
 
 
 def serve_http(
     *, factory: RemoteRuntimeFactory, host: str = "127.0.0.1", port: int = 8765
 ) -> None:
-    """Serve authenticated call, batch, and schema endpoints until interrupted."""
-
     build_http_server(factory=factory, host=host, port=port).serve_forever()
 
 
 def build_http_server(
     *, factory: RemoteRuntimeFactory, host: str = "127.0.0.1", port: int = 8765
 ) -> ThreadingHTTPServer:
-    """Build the HTTP server, allowing an owning process to manage its lifecycle."""
-
     class Handler(BaseHTTPRequestHandler):
         server_version = "CodingTrajectory/1"
 
         def do_POST(self) -> None:
-            token = self._bearer_token()
-            if token is None:
-                self._write(
-                    HTTPStatus.UNAUTHORIZED,
-                    self._error(
-                        None, None, "authentication_required", "bearer token required"
-                    ),
-                )
-                return
-            request_id: Any = None
-            method: Any = None
+            request_id = method = version = None
             try:
-                body = self._body()
-                if self.path != "/v1/core":
-                    self._write(
-                        HTTPStatus.NOT_FOUND, {"error": {"message": "not found"}}
+                authorization = self.headers.get("Authorization", "")
+                token = (
+                    authorization.removeprefix("Bearer ").strip()
+                    if authorization.startswith("Bearer ")
+                    else ""
+                )
+                if not token:
+                    raise RemoteControlPlaneError(
+                        "bearer token required",
+                        status=401,
+                        code="authentication_required",
                     )
-                    return
-                if set(body) - {
-                    "protocol",
-                    "id",
-                    "method",
-                    "params",
-                    "snapshot_sequence",
-                }:
-                    raise ValueError("request contains unknown fields")
-                if body.get("protocol") != CORE_PROTOCOL:
-                    raise ValueError(f"protocol must be {CORE_PROTOCOL}")
-                request_id = body.get("id")
-                method = body.get("method")
-                params = body.get("params")
-                if not isinstance(method, str) or not method:
-                    raise ValueError("method is required")
-                if not isinstance(params, dict):
-                    raise TypeError("params must be an object")
-                snapshot = body.get("snapshot_sequence")
-                with factory.build(token, snapshot_sequence=snapshot) as runtime:
-                    if method == "core.batch":
-                        if set(params) != {"requests"}:
-                            raise ValueError(
-                                "core.batch params must contain only requests"
-                            )
-                        requests = params.get("requests")
-                        if not isinstance(requests, list):
-                            raise ValueError("requests must be an array")
-                        batch = runtime.batch(requests)
-                        data = {
-                            "items": [
-                                self._runtime_item(item)
-                                for item in batch.get("items", [])
-                            ]
-                        }
-                    elif method == "core.schema":
-                        if set(params) != {"method"} or not isinstance(
-                            params.get("method"), str
-                        ):
-                            raise ValueError("core.schema params require method")
-                        target = params["method"]
-                        data = command_schema(target, command=f"ct api call {target}")
-                    else:
-                        executed = runtime.execute(
-                            {"id": request_id, "method": method, "params": params}
-                        )
-                        if not executed.get("ok"):
-                            message = str(
-                                executed.get("error", {}).get("message")
-                                or "core method failed"
-                            )
-                            self._write(
-                                HTTPStatus.BAD_REQUEST,
-                                self._error(
-                                    request_id, method, "method_failed", message
-                                ),
-                            )
-                            return
-                        data = executed.get("result")
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                self._write(
-                    HTTPStatus.BAD_REQUEST,
-                    self._error(request_id, method, "invalid_request", str(exc)),
+                if self.path != "/v1/api":
+                    raise RemoteControlPlaneError(
+                        "not found", status=404, code="not_found"
+                    )
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= MAX_API_REQUEST_BYTES:
+                    raise RemoteControlPlaneError(
+                        "request byte bound exceeded",
+                        status=413,
+                        code="request_too_large",
+                    )
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise TypeError("request must be an object")
+                request_id, method, version = (
+                    body.get("id"),
+                    body.get("method"),
+                    body.get("method_version"),
                 )
-                return
-            except Exception as exc:  # noqa: BLE001 - HTTP process boundary
-                self._write(
-                    HTTPStatus.BAD_GATEWAY,
-                    self._error(
-                        request_id, method, "authority_unavailable", str(exc)[:500]
-                    ),
-                )
-                return
-            self._write(
-                HTTPStatus.OK,
-                {
-                    "protocol": CORE_PROTOCOL,
+                if body.get("protocol") != API_PROTOCOL:
+                    raise RemoteControlPlaneError(
+                        "unsupported protocol", status=400, code="unsupported_version"
+                    )
+                request = ApiRequest.model_validate(body)
+                contract = service_contract(request.method)
+                if request.method_version != contract.version:
+                    raise RemoteControlPlaneError(
+                        "unsupported method version",
+                        status=400,
+                        code="unsupported_version",
+                    )
+                params = contract.request_model.model_validate(
+                    request.params
+                ).model_dump(mode="json")
+                repository = factory.repository(token)
+                try:
+                    data = repository.response_for(request.method, params)
+                    metadata = repository.metadata()
+                finally:
+                    repository.close()
+                payload = {
+                    "protocol": API_PROTOCOL,
                     "id": request_id,
                     "method": method,
+                    "method_version": version,
                     "ok": True,
                     "data": data,
                     "availability": {"state": "complete", "missing": []},
                     "error": None,
-                    "meta": runtime.transport_metadata(),
-                },
-            )
-
-        def _error(
-            self, request_id: Any, method: Any, code: str, message: str
-        ) -> dict[str, Any]:
-            return {
-                "protocol": CORE_PROTOCOL,
-                "id": request_id,
-                "method": method,
-                "ok": False,
-                "data": None,
-                "availability": {
-                    "state": "unavailable",
-                    "missing": [{"field": "$", "reason": code}],
-                },
-                "error": {"code": code, "message": message},
-                "meta": None,
-            }
-
-        def _runtime_item(self, item: dict[str, Any]) -> dict[str, Any]:
-            if item.get("ok"):
-                return {
-                    "protocol": CORE_PROTOCOL,
-                    "id": item.get("id"),
-                    "method": item.get("method"),
-                    "ok": True,
-                    "data": item.get("result"),
-                    "availability": {"state": "complete", "missing": []},
-                    "error": None,
-                    "meta": item.get("meta"),
+                    "meta": metadata,
                 }
-            message = str(item.get("error", {}).get("message") or "core method failed")
-            return self._error(
-                item.get("id"), item.get("method"), "method_failed", message
+                if (
+                    len(json.dumps(payload, separators=(",", ":")).encode())
+                    > MAX_API_RESPONSE_BYTES
+                ):
+                    raise RemoteControlPlaneError(
+                        "response byte bound exceeded",
+                        status=413,
+                        code="remote_result_too_large",
+                    )
+                self._write(200, payload)
+                return
+            except RemoteControlPlaneError as exc:
+                status, code, message = (
+                    exc.status or 502,
+                    exc.code or "authority_unavailable",
+                    str(exc),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                status, code, message = 400, "invalid_request", str(exc)
+            except Exception:  # noqa: BLE001 - HTTP boundary
+                status, code, message = (
+                    502,
+                    "authority_unavailable",
+                    "authority unavailable",
+                )
+            self._write(
+                status,
+                {
+                    "protocol": API_PROTOCOL,
+                    "id": request_id,
+                    "method": method,
+                    "method_version": version,
+                    "ok": False,
+                    "data": None,
+                    "availability": {
+                        "state": "unsupported"
+                        if code == "unsupported_version"
+                        else "unavailable",
+                        "missing": [{"field": "$", "reason": code}],
+                    },
+                    "error": {"code": code, "message": message[:500]},
+                    "meta": None,
+                },
             )
 
-        def _bearer_token(self) -> str | None:
-            value = self.headers.get("Authorization", "")
-            prefix = "Bearer "
-            token = value[len(prefix) :].strip() if value.startswith(prefix) else ""
-            return token or None
-
-        def _body(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > 1_000_000:
-                raise ValueError("request body must be between 1 byte and 1 MB")
-            value = json.loads(self.rfile.read(length))
-            if not isinstance(value, dict):
-                raise TypeError("request body must be an object")
-            return value
-
-        def _write(self, status: HTTPStatus, payload: Any) -> None:
-            encoded = json.dumps(payload, separators=(",", ":"), default=str).encode()
+        def _write(self, status: int, payload: Any) -> None:
+            body = json.dumps(payload, separators=(",", ":"), default=str).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(encoded)
+            self.wfile.write(body)
 
         def log_message(self, format: str, *args: object) -> None:
             return

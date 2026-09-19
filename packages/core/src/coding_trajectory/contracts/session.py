@@ -5,7 +5,7 @@ Clean-break historical contract revision (published-facts authority):
 - Graph methods require ``root_session_id``; session methods require
   ``session_id``; ``turn_id`` is a subordinate filter within a session scope.
 - ``num_turns``/``drop_turns`` are replaced by deterministic pagination:
-  ``session.overview``/``graph.overview`` take ``before_turn_id`` + ``limit``;
+  ``session.overview``/``graph.overview`` take signed ``cursor`` + ``limit``;
   ``session.items``/``session.events``/``session.search`` take ``cursor`` +
   ``limit``.
 - Inventory filters keep one absolute ``modified_since`` timestamp; relative
@@ -25,27 +25,30 @@ from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
 
-from coding_trajectory.contracts.base import ContractModel, RequestModel
+from coding_trajectory.contracts.base import ContractModel
+from coding_trajectory.contracts.prepared_api import ImmutableRequest, OverviewResponse
 
 
-class SessionScopedRequest(RequestModel):
+class SessionScopedRequest(ImmutableRequest):
     """Session entry point: ``session_id``; ``turn_id`` is subordinate only."""
 
     session_id: str
     turn_id: str | None = None
 
 
-class GraphScopedRequest(RequestModel):
+class GraphScopedRequest(ImmutableRequest):
     """Graph entry point: ``root_session_id`` is required."""
 
     root_session_id: str
 
 
-class ProjectListRequest(RequestModel):
+class ProjectListRequest(ImmutableRequest):
     project_id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
     project_name: str | None = None
     modified_since: datetime | None = None
     agent_vendor: str | None = None
+    limit: int = Field(default=100, ge=1, le=200)
+    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
 
     @field_validator("project_id")
     @classmethod
@@ -63,10 +66,10 @@ class ProjectSessionsRequest(ProjectListRequest):
     pass
 
 
-class SessionOverviewRequest(RequestModel):
+class SessionOverviewRequest(ImmutableRequest):
     session_id: str
     limit: int = Field(default=20, ge=1, le=200)
-    before_turn_id: str | None = None
+    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class SessionSummaryRequest(SessionScopedRequest):
@@ -123,16 +126,16 @@ class SessionSearchRequest(SessionScopedRequest):
         return normalized
 
 
-class SessionTreeRequest(SessionScopedRequest):
-    pass
+class SessionTreeRequest(ImmutableRequest):
+    session_id: str
 
 
 class GraphOverviewRequest(GraphScopedRequest):
     limit: int = Field(default=20, ge=1, le=200)
-    before_turn_id: str | None = None
+    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
-class SessionStatsRequest(RequestModel):
+class SessionStatsRequest(ImmutableRequest):
     session_id: str
 
 
@@ -185,13 +188,20 @@ class ProjectSummary(ContractModel):
     sessions: list[dict[str, Any]] | None = None
 
 
-class ProjectListResponse(ContractModel):
-    items: dict[str, ProjectSummary]
+class PagedResponse(ContractModel):
+    total: int = Field(ge=0)
+    returned: int = Field(ge=0)
+    next_cursor: str | None = None
+
+
+class ProjectListResponse(PagedResponse):
+    items: list[ProjectSummary]
 
 
 class SessionGraphSummary(ContractModel):
     graph_id: str | None = None
     root_session_id: str
+    view_manifest_sha256: str | None = None
     lineage_root_session_id: str | None = None
     project_id: str | None = None
     project: str | None = None
@@ -205,13 +215,12 @@ class SessionGraphSummary(ContractModel):
     warnings: list[str] | None = None
 
 
-class ProjectSessionsResponse(ContractModel):
+class ProjectSessionsResponse(PagedResponse):
     items: list[SessionGraphSummary]
 
 
-class SessionOverviewResponse(ContractModel):
-    root_session_id: str
-    sessions: list[dict[str, Any]]
+class SessionOverviewResponse(OverviewResponse):
+    pass
 
 
 class EvidenceReferences(ContractModel):
@@ -325,15 +334,8 @@ class SessionTreeResponse(ContractModel):
     branches: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class GraphOverviewResponse(ContractModel):
-    graph_id: str
-    root_session_id: str
-    project: str | None = None
-    graph: dict[str, Any] = Field(default_factory=dict)
-    summary: dict[str, Any] | None = None
-    sessions: list[dict[str, Any]] = Field(default_factory=list)
-    edges: list[dict[str, Any]] = Field(default_factory=list)
-    coverage: ProjectionCoverage | None = None
+class GraphOverviewResponse(OverviewResponse):
+    pass
 
 
 class SessionStatsResponse(ContractModel):
@@ -539,10 +541,11 @@ class CanonicalEventRecord(ContractModel):
     usage: CanonicalEventUsage | None = None
 
 
-class SessionEventsResponse(ContractModel):
+class SessionEventsResponse(PagedResponse):
     root_session_id: str | None = None
     events: list[CanonicalEventRecord] = Field(default_factory=list)
     next_cursor: str | None = None
+    unresolved_ids: list[str] = Field(default_factory=list)
     coverage: ProjectionCoverage | None = None
 
 
@@ -552,10 +555,11 @@ class CliSessionEventsResponse(ContractModel):
     next_cursor: str | None = None
 
 
-class SessionItemsResponse(ContractModel):
+class SessionItemsResponse(PagedResponse):
     root_session_id: str | None = None
     items: list[CanonicalItemRecord] = Field(default_factory=list)
     next_cursor: str | None = None
+    unresolved_ids: list[str] = Field(default_factory=list)
     coverage: ProjectionCoverage | None = None
 
 

@@ -1,10 +1,10 @@
 # Remote API responsibilities and evidence freeze — 2026-09-19
 
-Status: implementation-ready design, with the original read-only survey and
-measurements retained as historical evidence. The new decisions below supersede
-the survey's open choices; they are not implemented by this documentation change.
-This document does not enable a route, qualify Stage 3, or authorize deployment,
-workload, cleanup, push, or a pull request.
+Status: design implemented locally after the owner's subsequent implementation
+request, with the original read-only survey and measurements retained below as
+historical evidence. The new contract supersedes the survey's open choices.
+Local implementation and checks do not qualify Stage 3 or authorize deployment,
+remote workload, publication, cleanup, push, or a pull request.
 
 The owner approved broad remote support, the delivery order below, and separating
 overview from detail. The latest clarification makes **preserving session context
@@ -152,8 +152,15 @@ after cutover. This is a rebuild, not an in-place transformation of old data.
 Every immutable response carries an `identity` outside its method result:
 `workspace_id`, `source_snapshot_sequence`, `source_manifest_sha256`,
 `view_snapshot_sequence`, `view_manifest_sha256`. A prepared view manifest names
-one accepted source manifest and its exact method objects. Source and view
-sequences are different publication identities, never interchangeable. Optional
+the accepted source fact manifest and its exact method objects. For a graph,
+`source_manifest_sha256` is the existing `compute_fact_set_digest` over schema,
+graph ID and sorted `[kind, fact_id, row_hash]` entries; it is not the upload
+object's byte hash or the workspace-wide artifact manifest hash. Inventory
+source identity hashes its complete prepared project/session cards. The remote
+view manifest additionally binds the authority-assigned project ID; Worker
+overlays that ID on overview project metadata, not the producer's local ID.
+Source and view sequence fields record their publication fences (currently the
+same atomic accepted-publication sequence), not independent revision counters. Optional
 request `view_manifest_sha256` pins a read; otherwise authority resolves latest
 complete once. Local preparation uses a content-addressed manifest too; its
 sequence fields are null, and the local workspace ID/hash still bind cursors.
@@ -253,8 +260,8 @@ turn array, 128 KiB topology object, at most four object reads / 768 KiB fetched
 and one authority call / at most 20 returned authority rows per immutable read.
 JSON punctuation, escaping, metadata and cursor bytes count. Publication retains
 the existing 16 MiB fact-set, 512 KiB fact-row and fact cardinality bounds.
-These budgets may yield smaller pages or explicit size failures for formerly
-supported shapes; they do not establish equivalent coverage or improved CPU.
+These budgets can yield smaller pages or explicit size failures; they do not
+establish equivalent coverage or improved CPU compared with the historical design.
 
 Choose ordinary verified JSON: one index (at most 64 KiB), one topology, and
 source-order turn packs (at most 256 KiB each). An index stores ordinal ranges,
@@ -506,7 +513,7 @@ remote workload was rerun to create this document.
 
 1. **Shared contracts and preparation.** Implement the new Pydantic envelopes,
    method versions, shared full-path facts and bounded activity/coverage fields.
-   Reuse canonical Python computations, remove old readers, add immutable JSON
+   Reuse canonical Python computations, route owned readers only through the new API, add immutable JSON
    indexes/packs and the current-generation rebuild path. Update schema
    snapshots intentionally from these decisions, not from unexplained output.
 2. **Twelve foundation methods.** Add prepared publication/authority resolution
@@ -536,15 +543,15 @@ by each implementation slice:
 | Contract/build | `uv run python scripts/check-core-protocol.py`; `npm --prefix cloudflare/control-plane run check`. Explicitly update the protocol snapshot/generated schemas with the implementation, then require clean checks. |
 | Local context and round-trip | `uv run python scripts/qualify-chronicle-usage-roundtrip.py` and `uv run python scripts/validate-local-first-source-selection.py` when shared preparation changes. Extend existing synthetic scenarios for command arguments, file targets, failed/successful outcomes, preview truncation, and exact long Unicode/backslash `cwd`/`agent_path` round-trips. Do not use executable-only expected labels. |
 | Owned-client navigation | `uv run python scripts/check-loop.py`, updated for the new contracts, plus one CLI graph/session page. Use at least two sessions with unequal turn counts, forks, a zero-turn member, hidden turns and equal/out-of-order timestamps. Walk all pages: no gaps/duplicates, correct ordinals/totals, same topology on each graph page, exact pinned item/event ownership and unresolved IDs. Check offline use with unusable remote configuration. |
-| Direct-read boundaries | Extend `scripts/qualify-artifact-publication.py` and its existing loopback Wrangler workflow for prepared objects. Check actual response UTF-8 bytes just below/above limits, index/topology/pack overflow, single-row failure, two-pack continuation, sparse filters and full-path retention. Check missing/corrupt hashes/lengths, pending view rejection, cross-workspace/role denial (including after cache fill), cursor tampering/filter conflict/expiry, replaced views and unsupported versions. No remote endpoint or destructive cleanup script. |
+| Direct-read boundaries | `uv run python scripts/qualify-prepared-api.py` uses a disposable Miniflare Worker and the real producer, without Wrangler credentials or remote bindings. It replaces the old reconstruction-reader qualification for this endpoint. Check actual UTF-8 bounds, two-pack continuation, sparse detail IDs, full paths, missing/corrupt objects, absent views, workspace/role denial, cursor tampering/filter conflict/expiry and unsupported versions. The older artifact benchmark/qualification remains historical evidence, not a supported client fallback. |
 
 Do not run the entire historical suite for every edit. Repository metric gates
 apply if implementation changes metric-sensitive paths:
 `scripts/check-metrics-quality-gate.sh` and the full baseline workflow directly
 with `uv run python scripts/validate-metrics-baselines.py`; reconstruct any
 intentional metric change from committed source before changing expectations.
-For later UI rendering changes inspect the affected client states; this design
-document itself does not change rendered UI.
+For UI rendering changes inspect the affected client states, including pinned
+detail and expired-view restart rather than only the default overview.
 
 Measure performance when changing the serving path or making a performance
 claim: a representative internal session and the known near-budget shape are
@@ -563,5 +570,71 @@ destructive cleanup. Those shared-state actions still need specific approval;
 prior remote-run allocations are consumed. Accepting early breaking changes
 does not authorize deleting source data or shared resources.
 
-This document records the completed design and separately attributed evidence.
-It does not turn that design into serving code or a failed gate into a pass.
+### Local implementation and verification
+
+The producer/collector now prepares and publishes the new methods; Worker
+serves `/v1/api` from verified indexes/base/packs, and the owned Python remote
+runtime/proxy no longer reconstructs remote fact graphs. Local APIs use the
+same prepared method generation without networking. Loop and Monitor carry
+view hashes through detail/evaluation links. CLI overview, inventory and detail
+JSON preserve the new response fields; inventory continuation uses `--cursor`,
+`--limit` and an unchanged absolute `--modified-since` (no moving 30-day default).
+The shared command preview uses 280 characters, not the earlier 60-character
+compaction that could erase arguments before preparation.
+
+Executed locally: `scripts/qualify-prepared-api.py` passed the real producer →
+disposable Miniflare publication → overview → older pages → pinned item/event
+workflow, plus the owned Python remote runtime and authenticated HTTP proxy.
+It checked source-order completeness, full Unicode cwd, argument/outcome
+retention, size rejection, missing/corrupt objects, workspace/role isolation,
+unsupported versions, cursor tampering/filter conflict/expiry, and signed
+living-session continuation with fixed evaluation time. The 776-item exact
+tool ledger correctly returns 413; its one-turn result succeeds. No remote
+bindings or credentials were used. This is targeted qualification, not an
+exhaustive capacity or compatibility proof.
+
+One valid 97-turn/776-command fixture measured **18.138 s wall / 18.134 s CPU**
+for cold preparation on this orb. Its first local prepared page measured
+**11.9 ms wall / 11.8 ms CPU**, **4 reads**, **482,835 fetched bytes**, and
+**329,078 result bytes for 66 turns**. This is Python local timing, not Worker
+CPU or peak-memory qualification; no before/after speedup is claimed.
+
+The contract freeze, Worker TypeScript/schema check, Loop generated types/build,
+Loop/Monitor integration, collector replay/preparation, Chronicle usage
+round-trip and local-first selection checks passed. Both the full committed
+metric baseline workflow and the required quality gate passed all four cases;
+numeric usage/cost/runtime expectations are unchanged. A CLI two-session graph
+walk returned ordinal 1 then 0 with identical full topology on both pages.
+Chromium inspection covered desktop pinned detail, the narrow layout without
+horizontal overflow, and an expired-view error with a working restart link.
+
+Historical Stage 3 **CPU FAIL** and peak memory **UNQUALIFIED** above remain
+unchanged. Production performance, deployment and actual publication have not
+been tested or authorized. There is no unresolved owner product choice.
+
+### Fresh-session pre-deployment validation
+
+Coordinator validation created new disposable source journals rather than
+reading existing user sessions: a three-turn Amp journal exercised file reads,
+command arguments and failed/successful outcomes; the prepared-API qualification
+now starts from a new UUID-bearing Pi journal before generating its capacity
+shape. Real Amp ingestion exposed command-context loss for unfamiliar transport
+tool names. Classification now respects canonical command-execution items.
+Known detail IDs excluded by a turn/filter now remain nonmatches, not unresolved
+IDs, in both offline and Worker readers.
+
+Profiling the fresh 97-turn/776-command preparation identified repeated shell
+parsing. Reusing the existing token cache for the lifetime of one preparation
+measured **3.796 s wall / 3.883 s CPU** on the updated fixture; its first prepared
+page measured **10.4 ms**, **4 reads**, **480,307 fetched bytes**, and **327,356
+result bytes for 66 turns**. These are local observations, not a controlled
+speedup comparison or remote CPU qualification. Cold preparation still takes
+seconds at this size. The new three-turn Amp session produced its CLI overview
+in **0.926 s cold / 0.481 s repeat** before the cache-scope improvement.
+
+Browser validation followed pinned item → failed event → owning item, retaining
+the same view identity and exit code 7. Desktop and narrow screenshots were
+inspected; the narrow DOM had no horizontal overflow and retained command
+arguments. An expired pin displayed `view_expired`; restarting removed the old
+pin and loaded the current chronology. No existing user logs, Cloudflare calls,
+deployment, or shared-resource changes were involved.

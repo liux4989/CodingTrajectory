@@ -9,6 +9,6 @@
     {"surface": "canonical.graph", "path": "$.sessions[0].tools[3].tool_call_id", "expected": "call_313b", "source_refs": ["source/session.jsonl:11-12"], "audit_ref": "audit.md#lifecycle"},
     {"surface": "canonical.graph", "path": "$.sessions[0].tools[3].status", "expected": "completed", "source_refs": ["source/session.jsonl:12"], "audit_ref": "audit.md#lifecycle"},
     {"surface": "session.tree", "path": "$.branches[0].turn_count", "expected": 1, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#lifecycle"},
-    {"surface": "graph.overview", "path": "$.summary.session_count", "expected": 1, "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#lifecycle"}
+    {"surface": "graph.overview", "path": "$.orchestration.session_count", "expected": 1, "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#lifecycle"}
   ]
 }

@@ -24,7 +24,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     short_command,
     short_path,
 )
-from coding_trajectory.analysis.tool_summary_shell import classify_shell
+from coding_trajectory.analysis.tool_summary_shell import classify_shell, shell_cmd
 from coding_trajectory.ingestion.models import Item, ToolStatus
 
 _EXPANDED_EXEC_TOOL_NAME = "codex_exec_expanded"
@@ -142,13 +142,27 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         if item.kind == "command_execution"
         else getattr(item, "input", None)
     )
-    concept, description, optimization_profile = _classify(tool_name, tool_input)
+    # Adapters already identify canonical command items. A provider's transport
+    # name must not turn their shell semantics into an unknown generic tool.
+    classification_name = (
+        "exec_command"
+        if item.kind == "command_execution" and tool_name not in SHELL_TOOL_NAMES
+        else tool_name
+    )
+    concept, description, optimization_profile = _classify(
+        classification_name, tool_input
+    )
 
     result: dict[str, Any] = {"name": concept}
     if optimization_profile:
         result["optimization_profile"] = optimization_profile
     if description:
         result["description"] = description
+        if (
+            classification_name in SHELL_TOOL_NAMES
+            and len(" ".join((shell_cmd(tool_input) or "").split())) > 280
+        ):
+            result["description_truncated"] = True
     if item.kind != "command_execution" and concept != RUN_COMMAND:
         result["breakdown"] = _other_output_breakdown(tool_name, tool_input)
     status = getattr(item, "status", None)
@@ -332,7 +346,9 @@ def _describe_structured(concept: str, tool_input: Any) -> str | None:
                 target = first_str(operation, ("url", "uri"))
                 if target is None:
                     ref = first_str(operation, ("ref_id",))
-                    target = ref if ref and ref.startswith(("http://", "https://")) else None
+                    target = (
+                        ref if ref and ref.startswith(("http://", "https://")) else None
+                    )
                 if target is not None:
                     return target
         return None

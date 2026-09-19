@@ -1,4 +1,5 @@
-import { decode, encode, Fault, integer, Json, requireThat, stable, State, timestamp, validate } from "./shared";
+import { integer, Json, requireThat, stable, State, timestamp, validate } from "./shared";
+import { readCursor, signCursor } from "./prepared-api";
 
 export function livingWrite(state: State, method: string, request: Json): Json {
   const instance = request.agent_instance_id;
@@ -27,17 +28,13 @@ export function livingWrite(state: State, method: string, request: Json): Json {
   return receipt;
 }
 
-function cursor(value: Json): string { return encode(new TextEncoder().encode(stable(value))); }
-function parse(value: unknown): Json {
-  requireThat(typeof value === "string" && value.length <= 4096, "invalid_cursor");
-  try {
-    const result = JSON.parse(new TextDecoder().decode(decode(value)));
-    requireThat(result && result.version === 1 && ["watermark", "snapshot", "delta"].includes(result.kind), "invalid_cursor");
+export async function livingRead(state: State, request: Json, secret: string): Promise<Json> {
+  const cursor = (value: Json) => signCursor({ ...value, position: value.position_sequence ?? 0, expires: Math.floor(Date.now() / 1000) + 86400 }, secret);
+  const parse = async (value: string) => {
+    const result = await readCursor(value, secret);
+    requireThat(result.version === 2 && ["watermark", "snapshot", "delta"].includes(result.kind), "invalid_cursor");
     return result;
-  } catch { throw new Fault(400, "invalid_cursor"); }
-}
-
-export function livingRead(state: State, request: Json): Json {
+  };
   requireThat(Array.isArray(request.calls) && request.calls.length > 0 && request.calls.length <= 100, "invalid_living_batch");
   let sequence = state.pin(request.snapshot_sequence);
   let evaluatedAt = new Date().toISOString();
@@ -46,8 +43,9 @@ export function livingRead(state: State, request: Json): Json {
     requireThat(["living.events", "living.sessions"].includes(call.method), "invalid_living_method");
     validate(call.method === "living.events" ? "living_events_request" : "living_sessions_request", call.params);
     if (call.params.through) {
-      const value = parse(call.params.through);
+      const value = await parse(call.params.through);
       requireThat(value.kind === "watermark", "invalid_through_cursor");
+      requireThat(value.workspace_id === request.workspace_id && value.method === call.method, "cursor_scope_conflict");
       if (through) requireThat(value.sequence === through.sequence && value.evaluated_at === through.evaluated_at, "batch_snapshot_conflict");
       through = value;
     }
@@ -72,18 +70,18 @@ export function livingRead(state: State, request: Json): Json {
   const freshnessArgs = [sequence, sequence, evaluatedAt];
   const coverage = state.sql.exec<{ fresh: number; unknown: number }>(`${freshness}
     SELECT COALESCE(SUM(fresh), 0) AS fresh, COUNT(*) - COALESCE(SUM(fresh), 0) AS unknown FROM freshness`, ...freshnessArgs).one();
-  const results = request.calls.map((call: Json) => {
+  const results = await Promise.all(request.calls.map(async (call: Json) => {
     const params = call.params;
     const scope = call.method === "living.events" ? Object.fromEntries(Object.entries(params.scope ?? {}).filter(([, value]) => value != null)) : {};
-    const binding = { version: 1, workspace_id: request.workspace_id, method: call.method, scope: stable(scope) };
+    const binding = { version: 2, workspace_id: request.workspace_id, method: call.method, scope: stable(scope) };
     const matches = (value: Json) => requireThat(Object.entries(binding).every(([key, item]) => value[key] === item), "cursor_scope_conflict");
-    if (params.through) { const value = parse(params.through); matches(value); }
-    const watermark = cursor({ ...binding, kind: "watermark", sequence, evaluated_at: evaluatedAt });
+    if (params.through) { const value = await parse(params.through); matches(value); }
+    const watermark = await cursor({ ...binding, kind: "watermark", sequence, evaluated_at: evaluatedAt });
     let pageKind = "snapshot";
     let base = 0;
     let position = 0;
     if (params.after) {
-      const after = parse(params.after);
+      const after = await parse(params.after);
       matches(after);
       if (after.kind === "watermark") { pageKind = "delta"; base = integer(after.sequence, 0, sequence); }
       else {
@@ -126,9 +124,17 @@ export function livingRead(state: State, request: Json): Json {
       (${selection} ORDER BY sequence LIMIT ?) page JOIN records r
       ON r.kind='living' AND r.key=page.key AND r.sequence=page.sequence ORDER BY page.sequence`,
       ...canonicalArgs, Math.max(position, base), limit + 1).toArray().map(row => JSON.parse(row.payload));
-    const hasMore = rows.length > limit;
-    const changes = rows.slice(0, limit).map(row => ({ ...row.request.payload, revision: row.sequence,
-      cursor: cursor({ ...binding, kind: pageKind, base_sequence: base, through_sequence: sequence, evaluated_at: evaluatedAt, position_sequence: row.sequence }) }));
+    const changes: Json[] = [];
+    let size = 0;
+    for (const row of rows.slice(0, limit)) {
+      const change = { ...row.request.payload, revision: row.sequence,
+        cursor: await cursor({ ...binding, kind: pageKind, base_sequence: base, through_sequence: sequence, evaluated_at: evaluatedAt, position_sequence: row.sequence }) };
+      size += new TextEncoder().encode(stable(change)).length + 1;
+      if (size > 432 * 1024) break;
+      changes.push(change);
+    }
+    requireThat(!rows.length || changes.length, "remote_result_too_large", 413);
+    const hasMore = rows.length > changes.length;
     const unknown = coverage.unknown;
     const issues = [{ severity: "warning", code: "remote_living.observation_only", message: "Remote living authority exposes durable canonical observations only." }];
     if (unknown) issues.push({ severity: "warning", code: "remote_living.heartbeat_unknown", message: `${unknown} expired or missing agent leases; their state is unknown and their resources were omitted.` });
@@ -141,6 +147,6 @@ export function livingRead(state: State, request: Json): Json {
         completeness: !canonicalCount ? "heartbeat_only" : unknown ? "partial" : "canonical_observations" } };
     validate(call.method === "living.events" ? "living_events_response" : "living_sessions_response", result);
     return { method: call.method, result };
-  });
+  }));
   return { workspace_id: request.workspace_id, snapshot_sequence: sequence, evaluated_at: evaluatedAt, results };
 }

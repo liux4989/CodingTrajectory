@@ -24,7 +24,6 @@ from coding_trajectory.query import DocumentError, ResourceNotFoundError
 from coding_trajectory.service import (
     IndexCache,
     dispatch,
-    project_list_metadata,
 )
 
 
@@ -308,13 +307,6 @@ class ServiceRuntime:
             self.historical_repository.pin_snapshot()
 
     def call(self, method: str, params: dict[str, Any]) -> Any:
-        if (
-            method == "project.sessions"
-            and not self.global_scope
-            and not params.get("project_name")
-            and not params.get("project_id")
-        ):
-            params = {**params, "project_name": self.current_dir.name}
         params = service_contract(method).validate_request(params)
         self._last_call_metadata = None
         try:
@@ -334,6 +326,8 @@ class ServiceRuntime:
             self._last_call_metadata = fallback.transport_metadata()
             return result
         self._last_call_metadata = self._primary_metadata()
+        if method.startswith("living.") and self._last_call_metadata is not None:
+            self._last_call_metadata = {**self._last_call_metadata, "identity": None}
         return result
 
     def _get_fallback_runtime(self) -> ServiceRuntime:
@@ -353,9 +347,7 @@ class ServiceRuntime:
             raise KeyError(
                 f"no local project inventory handler registered for {method}"
             )
-        result = project_list_metadata(
-            params, global_scope=True, current_dir=self.current_dir
-        )
+        result = self.historical_repository.response_for(method, params)
         self._require_local_source_for_empty(result)
         return result
 

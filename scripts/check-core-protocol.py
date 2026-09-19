@@ -11,7 +11,7 @@ from typing import Any
 
 from coding_trajectory.contracts import SERVICE_CONTRACTS
 from coding_trajectory.contracts.envelope import (
-    CORE_PROTOCOL,
+    API_PROTOCOL,
     ApiErrorResponse,
     ApiSuccessResponse,
 )
@@ -93,7 +93,7 @@ def build_snapshot() -> dict[str, Any]:
         "method_count": len(methods),
         "methods": methods,
         "core_envelope": {
-            "protocol": CORE_PROTOCOL,
+            "protocol": API_PROTOCOL,
             "success": compact_schema(
                 ApiSuccessResponse[Any].model_json_schema(), shared_defs
             ),

@@ -4,6 +4,7 @@ import { artifactManifests, artifactReadLocator, claimArtifactUpload, cleanupArt
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { dropEmptyLegacyFactTables, legacyFactTables } from "./legacy-cleanup";
 import { livingRead, livingWrite } from "./living";
+import { apiLocator, initializeApi } from "./prepared-api";
 import { deleteWorkspaceArtifactPrefix, initializeReplacement, markWorkspaceReplacement, previewWorkspaceReplacement, workspaceReplacement } from "./replacement";
 
 const REPLACEMENT_MUTATIONS = new Set([
@@ -24,6 +25,7 @@ export class Workspace extends DurableObject<Env> {
   private initialize() {
     this.ctx.storage.transactionSync(() => {
       initializeArtifacts(this.state);
+      initializeApi(this.state);
       initializeReplacement(this.state);
       const target = this.env.CT_LEGACY_FACT_CLEANUP_WORKSPACE_ID;
       if (target && this.ctx.id.toString() === this.env.WORKSPACES.idFromName(target).toString()) {
@@ -94,12 +96,16 @@ export class Workspace extends DurableObject<Env> {
         "workspace_replacement_incomplete", 409);
       if (method === "ct_internal_artifact_claim") {
         requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
-        requireThat(["facts", "summary"].includes(request.kind)
+        requireThat(["facts", "summary", "api"].includes(request.kind)
           && typeof request.sha256 === "string"
           && /^[0-9a-f]{64}$/.test(request.sha256), "invalid_artifact_claim");
         this.ctx.storage.transactionSync(() =>
           claimArtifactUpload(this.state, request.kind, request.sha256));
         return { status: 200, body: {} };
+      }
+      if (method === "ct_internal_api_locator") {
+        requireThat(principal.roles.includes("read") || principal.roles.includes("owner"), "capability_required", 403);
+        return { status: 200, body: apiLocator(this.state, request) };
       }
       // Compute identity before schema defaults normalize the request.
       const identity = await digest(stable(request));
@@ -107,7 +113,11 @@ export class Workspace extends DurableObject<Env> {
       if (method === "ct_artifact_read") {
         return { status: 200, body: artifactReadLocator(this.state, request) };
       }
+      if (method === "ct_remote_living") {
+        return { status: 200, body: await livingRead(this.state, request, this.env.CT_CURSOR_KEY) };
+      }
       if (method === "ct_collector_publish_artifacts") {
+        return await this.ctx.blockConcurrencyWhile(async () => {
         const key = envelope.idempotency_key
           ? stable([principal.agent_id, method, envelope.idempotency_key])
           : null;
@@ -128,10 +138,10 @@ export class Workspace extends DurableObject<Env> {
           pruneArtifactReceipts(this.state);
           return result;
         });
-        this.ctx.waitUntil(this.ctx.blockConcurrencyWhile(() =>
-          cleanupArtifactObjects(this.state, this.env, request.workspace_id)
-            .catch(() => console.error(JSON.stringify({ event: "artifact_cleanup_deferred" })))));
+        await cleanupArtifactObjects(this.state, this.env, request.workspace_id)
+          .catch(() => console.error(JSON.stringify({ event: "artifact_cleanup_deferred" })));
         return { status: 200, body };
+        });
       }
       if (method === "ct_collector_publish_observation") {
         requireThat(request.payload.source_checkpoint?.segments?.every((offset: unknown) => Number.isSafeInteger(offset) && Number(offset) > 0), "invalid_checkpoint_offsets");
@@ -162,7 +172,6 @@ export class Workspace extends DurableObject<Env> {
       case "ct_collector_recover": return recovery(this.state, request);
       case "ct_collector_publish_observation": validate("checkpoint", request.payload); return checkpoint(this.state, request);
       case "ct_collector_heartbeat": case "ct_collector_publish_living_observation": return livingWrite(this.state, method, request);
-      case "ct_remote_living": return livingRead(this.state, request);
       case "ct_workspace_snapshot": return { workspace_id: request.workspace_id, snapshot_sequence: this.state.pin(request.snapshot_sequence) };
       case "ct_legacy_fact_cleanup_status": return {
         workspace_id: request.workspace_id, snapshot_sequence: this.state.head(),

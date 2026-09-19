@@ -22,8 +22,8 @@ def _graph_entry_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {"root_session_id": args.session_id}
     if getattr(args, "limit", None) is not None:
         params["limit"] = args.limit
-    if getattr(args, "before_turn_id", None):
-        params["before_turn_id"] = args.before_turn_id
+    if getattr(args, "cursor", None):
+        params["cursor"] = args.cursor
     return params
 
 
@@ -36,7 +36,7 @@ def _graph_usage_params(args: argparse.Namespace) -> dict[str, Any]:
 
 def _render_graph_overview_text(payload: dict[str, Any]) -> str:
     body = _render_session_overview_text(payload).replace("# Session `", "# Graph `", 1)
-    orchestration = (payload.get("graph") or {}).get("orchestration") or {}
+    orchestration = payload.get("orchestration") or {}
     if orchestration:
         kind = orchestration.get("kind") or "-"
         versions = ", ".join(orchestration.get("multi_agent_versions") or []) or "-"

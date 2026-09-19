@@ -19,6 +19,11 @@ from coding_trajectory.control_plane.artifact_protocol import (
     PreparedGraphSummary,
 )
 from coding_trajectory.control_plane.fact_projection import build_fact_rows
+from coding_trajectory.control_plane.prepared_api import (
+    PreparedApi,
+    json_value,
+    prepare_graph_api,
+)
 from coding_trajectory.control_plane.published_facts import (
     FactIndex,
     FactRow,
@@ -38,6 +43,7 @@ class PreparedGraph(BaseModel):
 
     rows: list[FactRow]
     summary: PreparedGraphSummary
+    api: PreparedApi
 
     def publication(self) -> PublishedFactSet:
         """Enforce transport bounds without truncating the local read view."""
@@ -51,19 +57,13 @@ def graph_input_digest(graph: SessionGraph) -> str:
 
 
 def prepared_graph_summary(index: FactIndex) -> PreparedGraphSummary:
-    from coding_trajectory.service.handlers import dispatch
+    from coding_trajectory.service.handlers import SERVICE_HANDLERS, ServiceContext
     from coding_trajectory.service.store import IndexCache
 
     (graph_id,) = index.graph_ids
     rows = list(index.rows_for_graph(graph_id))
-    response = dispatch(
-        "project.sessions",
-        {},
-        store=index,
-        global_scope=True,
-        current_dir=Path.cwd(),
-        discovery_note="prepared artifact",
-        cache=IndexCache(),
+    response = SERVICE_HANDLERS["project.sessions"](
+        {}, ServiceContext(index, True, Path.cwd(), "prepared artifact", IndexCache())
     )
     # Project ownership belongs to the local inventory / remote manifest, not
     # content-addressed graph bytes. Keep existing immutable summary bytes stable.
@@ -80,7 +80,7 @@ def prepared_graph_summary(index: FactIndex) -> PreparedGraphSummary:
             },
             key=str,
         ),
-        project_sessions=response["items"],
+        project_sessions=json_value(response["items"]),
     )
 
 
@@ -103,8 +103,11 @@ def prepare_graph(
         if row is not None:
             return PreparedGraph.model_validate_json(row[0])
         rows = build_fact_rows(graph)
+        index = FactIndex.from_rows(rows)
         prepared = PreparedGraph(
-            rows=rows, summary=prepared_graph_summary(FactIndex.from_rows(rows))
+            rows=rows,
+            summary=prepared_graph_summary(index),
+            api=prepare_graph_api(index),
         )
         body = prepared.model_dump_json().encode()
         # Bound disk use as well as individual entries; oversized local graphs

@@ -65,13 +65,19 @@ export type TurnId = string;
 export type Type = string | null;
 export type Items = CanonicalItemRecord[];
 export type NextCursor = string | null;
+export type Returned = number;
 export type RootSessionId = string | null;
+export type Total = number;
+export type UnresolvedIds = string[];
 
 export interface SessionItemsResponse {
   coverage?: ProjectionCoverage | null;
   items?: Items;
   next_cursor?: NextCursor;
+  returned: Returned;
   root_session_id?: RootSessionId;
+  total: Total;
+  unresolved_ids?: UnresolvedIds;
   [k: string]: unknown;
 }
 /**

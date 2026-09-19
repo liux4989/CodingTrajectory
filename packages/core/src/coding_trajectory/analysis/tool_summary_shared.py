@@ -184,7 +184,7 @@ def safe_split(cmd: str) -> list[str]:
     return tokens
 
 
-def short_command(cmd: str, *, max_len: int = 60) -> str:
+def short_command(cmd: str, *, max_len: int = 280) -> str:
     """Return a bounded command while preserving its action and final target.
 
     Generic shell commands are already the most faithful available description;

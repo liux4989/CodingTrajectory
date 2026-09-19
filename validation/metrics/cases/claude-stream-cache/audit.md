@@ -21,3 +21,11 @@ The turn spans `13:54:11.521Z` to `13:55:26.766Z` (`session.jsonl:1,5`) = `75.24
 ## Cross-check
 
 Assertions cover response de-duplication, cache accounting, one-turn status, tool lifecycle counts, model attribution, and pinned estimated cost.
+
+## Prepared overview v4
+
+The identity from line 1 is now `root_session_id`; the completed turn evidenced
+by lines 1 and 5 is now in top-level `turns`. `orchestration.kind` still describes
+the one source session. These are field-placement changes, not metric changes.
+The bounded activity list retains canonical actions even when their subject is
+unavailable; the historical display omission described above is no longer used.

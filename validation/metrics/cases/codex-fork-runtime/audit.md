@@ -38,3 +38,11 @@ into the parent's `graph.*` surfaces.
 The expected artifacts assert the parent-thread session boundary and preserve
 the fork relation through the conversation-tree projection. Presentation-only
 text and generated item identifiers are intentionally omitted.
+
+## Prepared overview v4
+
+The same source evidence now appears at `root_session_id`, top-level `turns`,
+and `orchestration`. Parent line 1 has no parent, hence relationship `root`
+(formerly the presentation role `main`). Lines 2–6 prove the single turn's
+zero-based source ordinal 0 and completed status. Replace the duplicate status
+assertion with that ordinal. No usage, cost, runtime or membership value changes.

@@ -84,7 +84,8 @@ function App() {
   const { setOpenMobile, openMobile, open, isMobile } = useSidebar();
   const [saved, setSaved] = useState<Investigation[]>([]);
   const [savedError, setSavedError] = useState<string>();
-  const inventory = useCore<ProjectListResponse>("project.list", {});
+  const [projectCursors, setProjectCursors] = useState<string[]>([]);
+  const inventory = useCore<ProjectListResponse>("project.list", { cursor: projectCursors.at(-1) });
   const savedView = saved.find(
     (view) =>
       view.id ===
@@ -191,17 +192,17 @@ function App() {
                     All local sessions
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                {Object.entries(inventory.data?.result.items ?? {}).map(
-                  ([name, details]) => (
-                    <SidebarMenuItem key={name}>
+                {(inventory.data?.result.items ?? []).map(
+                  (details) => (
+                    <SidebarMenuItem key={details.project_id}>
                       <SidebarMenuButton
                         title={details.path ?? details.display_name}
-                        isActive={!reference && project === name}
+                        isActive={!reference && project === details.project_id}
                         aria-current={
-                          !reference && project === name ? "page" : undefined
+                          !reference && project === details.project_id ? "page" : undefined
                         }
                         onClick={() => {
-                          setProject(name);
+                          setProject(details.project_id);
                           location.hash = "";
                           setOpenMobile(false);
                         }}
@@ -213,6 +214,10 @@ function App() {
                   ),
                 )}
               </SidebarMenu>
+              <div className="flex gap-2">
+                {!!projectCursors.length && <Button variant="outline" onClick={() => setProjectCursors(value => value.slice(0, -1))}>Previous projects</Button>}
+                {inventory.data?.result.next_cursor && <Button variant="outline" onClick={() => setProjectCursors(value => [...value, inventory.data!.result.next_cursor!])}>More projects</Button>}
+              </div>
             </SidebarGroupContent>
           </SidebarGroup>
           <SidebarGroup>
@@ -273,14 +278,14 @@ function App() {
           <span className="product-name">CodingTrajectory</span>
           <div className="source-status">
             <span />
-            Local evidence · latest
+            Local evidence
           </div>
         </header>
         {monitorRoute ? (
           <MonitorHome route={monitorRoute} />
         ) : reference ? (
           <InvestigationView
-            key={`${reference.session_id}:${savedView?.id ?? ""}`}
+            key={`${reference.session_id}:${reference.view_manifest_sha256 ?? ""}:${savedView?.id ?? ""}`}
             reference={reference}
             onSave={loadSaved}
             savedView={savedView}
@@ -290,7 +295,7 @@ function App() {
             key={project}
             project={project}
             projectName={
-              inventory.data?.result.items[project]?.display_name ?? ""
+              inventory.data?.result.items.find(item => item.project_id === project)?.display_name ?? ""
             }
           />
         )}
@@ -307,9 +312,10 @@ function Explore({
   projectName: string;
 }) {
   const [filter, setFilter] = useState("");
+  const [cursors, setCursors] = useState<string[]>([]);
   const sessions = useCore<ProjectSessionsResponse>(
     "project.sessions",
-    project ? { project_id: project } : {},
+    { ...(project ? { project_id: project } : {}), cursor: cursors.at(-1) },
   );
   const all = sessions.data?.result.items ?? [];
   const matches = all.filter((session) =>
@@ -347,8 +353,7 @@ function Explore({
         </span>
       </div>
       <p className="muted small">
-        Core inventory is unpaginated. Coverage is inspected when you open a
-        session.
+        This page contains {all.length} of {sessions.data?.result.total ?? "…"} sessions. The metadata filter applies to this page.
       </p>
       <ErrorNotice message={sessions.error} />
       {sessions.loading && <Loading />}
@@ -368,7 +373,7 @@ function Explore({
               </div>
               <h3>
                 <a
-                  href={referenceLink({ session_id: session.root_session_id })}
+                  href={referenceLink({ session_id: session.root_session_id, view_manifest_sha256: session.view_manifest_sha256 })}
                 >
                   {session.title || `Session ${short(session.root_session_id)}`}
                   <ArrowUpRight size={18} />
@@ -387,7 +392,7 @@ function Explore({
                   <summary>Open a member session</summary>
                   {session.session_ids?.map((id) => (
                     <p key={id}>
-                      <EvidenceLink reference={{ session_id: id }}>
+                      <EvidenceLink reference={{ session_id: id, view_manifest_sha256: session.view_manifest_sha256 }}>
                         Session {short(id)}
                       </EvidenceLink>
                     </p>
@@ -396,13 +401,17 @@ function Explore({
               )}
             </div>
             <Button asChild variant="outline">
-              <a href={referenceLink({ session_id: session.root_session_id })}>
+              <a href={referenceLink({ session_id: session.root_session_id, view_manifest_sha256: session.view_manifest_sha256 })}>
                 Investigate
                 <ArrowUpRight data-icon="inline-end" />
               </a>
             </Button>
           </article>
         ))}
+      </div>
+      <div className="flex gap-2">
+        {!!cursors.length && <Button variant="outline" onClick={() => setCursors(value => value.slice(0, -1))}>Previous sessions</Button>}
+        {sessions.data?.result.next_cursor && <Button variant="outline" onClick={() => setCursors(value => [...value, sessions.data!.result.next_cursor!])}>More sessions</Button>}
       </div>
       {!sessions.loading && !sessions.error && !matches.length && (
         <Blank
@@ -435,29 +444,34 @@ function InvestigationView({
     savedView?.title ?? `Session ${short(reference.session_id)}`,
   );
   const [turnCursors, setTurnCursors] = useState<string[]>([]);
-  const summary = useCore<SessionSummaryResponse>("session.summary", {
-    session_id: reference.session_id,
-    ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
-  });
+  const [viewHash, setViewHash] = useState(reference.view_manifest_sha256);
   const overview = useCore<SessionOverviewResponse>("session.overview", {
     session_id: reference.session_id,
+    view_manifest_sha256: viewHash,
     limit: 5,
     ...(turnCursors.length
-      ? { before_turn_id: turnCursors.at(-1) }
+      ? { cursor: turnCursors.at(-1) }
       : {}),
   });
+  useEffect(() => {
+    if (overview.data?.meta?.identity?.view_manifest_sha256) setViewHash(overview.data.meta.identity.view_manifest_sha256);
+  }, [overview.data]);
+  const pinnedReference = { ...reference, view_manifest_sha256: viewHash };
+  const summary = useCore<SessionSummaryResponse>("session.summary", {
+    session_id: reference.session_id,
+    view_manifest_sha256: viewHash,
+    ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
+  }, Boolean(viewHash));
   const brief = summary.data?.result;
-  const overviewTurns = (overview.data?.result.sessions ?? []).flatMap(
-    (session) => rows(session.turns),
-  );
-  const oldestTurnId = string(overviewTurns.at(-1)?.turn_id);
+  const overviewTurns = overview.data?.result.turns ?? [];
+  const nextTurnCursor = overview.data?.result.page.next_cursor;
   async function save() {
     setSaveState("Saving…");
     try {
       await request("/api/investigations", {
         id,
         title,
-        reference,
+        reference: pinnedReference,
         source: "host_local",
         revision: "latest",
       });
@@ -476,7 +490,7 @@ function InvestigationView({
         </a>
         <div className="section-heading">
           <h1>Investigation</h1>
-          <Badge variant="outline">Latest local evidence · not pinned</Badge>
+          <Badge variant="outline">{viewHash ? "Pinned prepared evidence" : "Loading evidence identity"}</Badge>
         </div>
         <code className="session-id">{reference.session_id}</code>
         <div className="save-toolbar">
@@ -543,7 +557,7 @@ function InvestigationView({
                     "No objective retained in this scope."}
                 </p>
                 {brief.objective && (
-                  <EvidenceLink reference={cite(brief.objective.references)}>
+                  <EvidenceLink reference={{ ...cite(brief.objective.references), view_manifest_sha256: viewHash }}>
                     Inspect objective evidence
                   </EvidenceLink>
                 )}
@@ -562,7 +576,7 @@ function InvestigationView({
                     {values.length > 0 && <h3>{String(label)}</h3>}
                     {values.map((claim, i) => (
                       <p key={i}>
-                        <EvidenceLink reference={cite(claim.references)}>
+                        <EvidenceLink reference={{ ...cite(claim.references), view_manifest_sha256: viewHash }}>
                           {claim.text}
                         </EvidenceLink>
                       </p>
@@ -572,7 +586,7 @@ function InvestigationView({
                 {!!brief.changes?.length && <h3>Changes</h3>}
                 {brief.changes?.map((change, i) => (
                   <p key={i}>
-                    <EvidenceLink reference={cite(change.references)}>
+                    <EvidenceLink reference={{ ...cite(change.references), view_manifest_sha256: viewHash }}>
                       {change.path} · {change.operations?.join(", ")}
                     </EvidenceLink>
                   </p>
@@ -587,7 +601,7 @@ function InvestigationView({
                     {values.length > 0 && <h3>{String(label)}</h3>}
                     {values.map((entry, i) => (
                       <p key={i}>
-                        <EvidenceLink reference={cite(entry.references)}>
+                        <EvidenceLink reference={{ ...cite(entry.references), view_manifest_sha256: viewHash }}>
                           {entry.label} · {entry.status}
                         </EvidenceLink>
                       </p>
@@ -619,13 +633,15 @@ function InvestigationView({
               </span>
             </div>
             <ErrorNotice message={overview.error} />
+            {overview.error && <a href={referenceLink({ session_id: reference.session_id })} onClick={() => { setTurnCursors([]); setViewHash(undefined); }}>Open latest available view</a>}
             {overview.loading && <Loading />}
             {overview.data?.result.sessions.map((session, i) => (
               <div key={string(session.session_id) || i}>
-                {rows(session.turns).map((turn, j) => (
+                <p className="small">{session.cwd && <>cwd: <code className="break-all">{session.cwd}</code><br /></>}{session.agent_path && <>agent_path: <code className="break-all">{session.agent_path}</code></>}</p>
+                {overviewTurns.filter(turn => turn.session_id === session.session_id).map((turn, j) => (
                   <article className="turn" key={string(turn.turn_id) || j}>
                     <div className="section-heading">
-                      <h3>Turn {Number(turn.sequence) + 1}</h3>
+                      <h3>Turn {turn.source_turn_ordinal + 1}</h3>
                       <Badge variant="outline">
                         {string(turn.status) || "Unknown status"}
                       </Badge>
@@ -635,34 +651,29 @@ function InvestigationView({
                       {string(object(turn.user_request).content) ||
                         "Request content unavailable"}
                     </p>
-                    {rows(turn.activity).map((activity, index) => (
+                    {turn.assistant_responses.map(response => <p key={response.item_id}>{response.preview}</p>)}
+                    {turn.activities.map((activity, index) => (
                       <div className="activity" key={index}>
                         <p>
-                          {string(activity.text) ||
-                            string(activity.label) ||
-                            "Activity"}
+                          {activity.target || activity.path || activity.concept || activity.kind} · {activity.outcome || activity.status || "Outcome unknown"}
                         </p>
-                        {Array.isArray(activity.item_ids) &&
-                          activity.item_ids
-                            .filter((v): v is string => typeof v === "string")
-                            .map((item) => (
                               <EvidenceLink
-                                key={item}
                                 reference={{
                                   session_id: string(session.session_id),
                                   turn_id: string(turn.turn_id),
-                                  item_id: item,
+                                  item_id: activity.item_id,
+                                  view_manifest_sha256: viewHash,
                                 }}
                               >
-                                Item {short(item)}
+                                Item {short(activity.item_id)}
                               </EvidenceLink>
-                            ))}
                       </div>
                     ))}
                     <EvidenceLink
                       reference={{
                         session_id: string(session.session_id),
                         turn_id: string(turn.turn_id),
+                        view_manifest_sha256: viewHash,
                       }}
                     >
                       Inspect turn items
@@ -681,28 +692,26 @@ function InvestigationView({
                     Newer turns
                   </Button>
                 )}
-                {overviewTurns.length >= 5 && oldestTurnId && (
+                {nextTurnCursor && (
                   <Button
                     variant="outline"
                     onClick={() =>
-                      setTurnCursors((cursors) => [...cursors, oldestTurnId])
+                      setTurnCursors((cursors) => [...cursors, nextTurnCursor])
                     }
                   >
                     Older turns
                   </Button>
                 )}
-                {!overview.data.result.sessions.some(
-                  (session) => rows(session.turns).length,
-                ) && <p className="muted small">No turns in this window.</p>}
+                {!overviewTurns.length && <p className="muted small">No turns in this window.</p>}
               </div>
             )}
           </section>
           <Items
-            key={`${reference.session_id}:${reference.turn_id}`}
-            reference={reference}
+            key={`${reference.session_id}:${reference.turn_id}:${viewHash}`}
+            reference={pinnedReference}
           />
         </div>
-        <Evidence reference={reference} />
+        <Evidence reference={pinnedReference} />
       </div>
     </div>
   );
@@ -723,6 +732,7 @@ function Items({ reference }: { reference: CanonicalReference }) {
           method: "session.items",
           params: {
             session_id: reference.session_id,
+            view_manifest_sha256: reference.view_manifest_sha256,
             ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
             limit: 20,
             ...(cursor ? { cursor } : {}),
@@ -746,7 +756,7 @@ function Items({ reference }: { reference: CanonicalReference }) {
         </span>
       </div>
       <p className="small muted">
-        Read canonical metadata first. Open an item to fetch its local content.
+        Read canonical metadata first. Open an item to inspect its retained evidence.
       </p>
       <ErrorNotice message={error} />
       {items.map((item) => (
@@ -760,6 +770,7 @@ function Items({ reference }: { reference: CanonicalReference }) {
               session_id: item.session_id,
               turn_id: item.turn_id,
               item_id: item.item_id,
+              view_manifest_sha256: reference.view_manifest_sha256,
             }}
           >
             {item.operation ?? item.kind} · {short(item.item_id)}
@@ -770,7 +781,7 @@ function Items({ reference }: { reference: CanonicalReference }) {
         </article>
       ))}
       {cursor !== null && (
-        <Button variant="outline" disabled={loading} onClick={load}>
+        <Button variant="outline" disabled={loading || !reference.view_manifest_sha256} onClick={load}>
           {loading
             ? "Loading items…"
             : cursor
@@ -790,12 +801,13 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
     isEvent ? "session.events" : "session.items",
     {
       session_id: reference.session_id,
+      view_manifest_sha256: reference.view_manifest_sha256,
       ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
       ...(isEvent
         ? { event_ids: [reference.event_id], limit: 1 }
         : { item_ids: [reference.item_id], limit: 1 }),
     },
-    selected,
+    selected && Boolean(reference.view_manifest_sha256),
   );
   const item = isEvent ? undefined : detail.data?.result.items?.[0];
   const event = isEvent ? detail.data?.result.events?.[0] : undefined;
@@ -803,7 +815,7 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
   const record =
     candidate &&
     Object.entries(reference).every(
-      ([key, value]) => !value || candidate[key] === value,
+      ([key, value]) => key === "view_manifest_sha256" || !value || candidate[key] === value,
     )
       ? candidate
       : undefined;
@@ -926,6 +938,7 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
                   session_id: event.session_id,
                   turn_id: event.turn_id ?? undefined,
                   item_id: event.item_id,
+                  view_manifest_sha256: reference.view_manifest_sha256,
                 }}
               >
                 Resolve owning item evidence
@@ -943,6 +956,7 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
                       turn_id: item.turn_id,
                       item_id: item.item_id,
                       event_id,
+                      view_manifest_sha256: reference.view_manifest_sha256,
                     }}
                   >
                     Event {short(event_id)}
@@ -972,8 +986,8 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
         />
       </details>
       <p className="muted small">
-        No revision pinning. A link opens the latest available local evidence,
-        not an archived snapshot.
+        Links pin this prepared view while it remains available. If it expires,
+        open the latest view to restart; raw transcripts are not archived here.
       </p>
       <Button
         className="reading-jump"

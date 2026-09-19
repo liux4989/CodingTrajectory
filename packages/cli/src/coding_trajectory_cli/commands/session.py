@@ -45,8 +45,8 @@ def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {"session_id": args.session_id}
     if getattr(args, "limit", None) is not None:
         params["limit"] = args.limit
-    if getattr(args, "before_turn_id", None):
-        params["before_turn_id"] = args.before_turn_id
+    if getattr(args, "cursor", None):
+        params["cursor"] = args.cursor
     return params
 
 
@@ -185,7 +185,8 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
 
 def _render_session_overview_text(payload: dict[str, Any]) -> str:
     sessions = payload.get("sessions") or []
-    turn_count = sum(len(session.get("turns") or []) for session in sessions)
+    turns = payload.get("turns") or []
+    turn_count = len(turns)
     lines = [
         f"# Session `{payload.get('root_session_id') or '-'}`",
         "",
@@ -193,37 +194,48 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
         "",
     ]
 
-    by_id = {
-        str(session.get("session_id")): session
-        for session in sessions
-        if session.get("session_id")
-    }
-    children_by_parent: dict[str, list[dict[str, Any]]] = {}
-    roots: list[dict[str, Any]] = []
     for session in sessions:
-        relationship = session.get("relationship") or {}
-        parent_id = (
-            relationship.get("parent_session_id")
-            or relationship.get("parent")
-            or session.get("parent_session_id")
+        lines.extend(
+            [
+                f"## {session.get('title') or session['session_id']}",
+                f"Session: `{session['session_id']}` · {session['relationship']}",
+            ]
         )
-        if parent_id and str(parent_id) in by_id:
-            children_by_parent.setdefault(str(parent_id), []).append(session)
-        else:
-            roots.append(session)
-    # Stable child ordering by started_at/session_id when available.
-    for kids in children_by_parent.values():
-        kids.sort(
-            key=lambda s: (s.get("started_at") or "", str(s.get("session_id") or ""))
-        )
-
-    if roots:
-        for root in roots:
-            _render_session_tree_node(root, children_by_parent, depth=0, lines=lines)
-    else:  # no parent linkage resolved - fall back to flat rendering
-        for session in sessions:
-            _render_session_tree_node(session, {}, depth=0, lines=lines)
-
+        for field in ("cwd", "agent_path"):
+            if session.get(field) is not None:
+                lines.append(f"{field}: `{session[field]}`")
+        for turn in turns:
+            if turn["session_id"] != session["session_id"]:
+                continue
+            lines.extend(
+                [
+                    "",
+                    f"### Turn {turn['source_turn_ordinal'] + 1} · {turn['status']}",
+                    (turn.get("user_request") or {}).get("content")
+                    or "Request unavailable",
+                ]
+            )
+            for response in turn["assistant_responses"]:
+                lines.append(f"Assistant: {response['preview']}")
+            for activity in turn["activities"]:
+                label = (
+                    activity.get("target")
+                    or activity.get("path")
+                    or activity.get("concept")
+                    or activity["kind"]
+                )
+                lines.append(
+                    f"- {label} · {activity.get('outcome') or activity.get('status') or 'unknown'} (item `{activity['item_id']}`)"
+                )
+    page = payload["page"]
+    lines.extend(
+        [
+            "",
+            f"Page: {page['returned']} of {page['total']} narrative turns · source order",
+        ]
+    )
+    if page["next_cursor"]:
+        lines.append(f"Older page: --cursor '{page['next_cursor']}'")
     return "\n".join(lines).rstrip()
 
 

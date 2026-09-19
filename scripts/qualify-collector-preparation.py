@@ -70,7 +70,7 @@ def qualify_semantic_details(graph, root: Path) -> None:
     ]
     cache_path = root / "semantic-preparation.sqlite"
     prepared = prepare_graph(graph, cache_path=cache_path)
-    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v2"
+    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v3"
     assert prepared.summary.preparation_version == ARTIFACT_PREPARATION_VERSION
     facts = prepared.publication()
     reconstructed = session_graph_from_fact_index(
@@ -147,7 +147,7 @@ class CheckpointRemote:
         )
 
     def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None:
-        assert kind in {"facts", "summary"} and len(sha256) == 64 and body
+        assert kind in {"facts", "summary", "api"} and len(sha256) == 64 and body
         self.uploads += 1
 
     def publish_artifacts(self, request, *, idempotency_key: str) -> ObservationReceipt:
@@ -278,9 +278,12 @@ def main():
         listed = repo.response_for("project.sessions", {"project_id": project_id})
         assert len(listed["items"]) == 2
         assert {item["project_id"] for item in listed["items"]} == {project_id}
-        assert repo.response_for(
-            "project.sessions", {"project_id": str(UUID(int=999))}
-        ) == {"items": []}
+        assert (
+            repo.response_for("project.sessions", {"project_id": str(UUID(int=999))})[
+                "items"
+            ]
+            == []
+        )
         changed = json.loads(paths[0].read_text().splitlines()[-1])
         changed["message"]["id"] = "assistant-1"
         changed["message"]["content"] = [
@@ -337,8 +340,9 @@ def main():
         with ServiceRuntime(global_scope=True, current_dir=root) as runtime:
             inventory = runtime.call("project.list", {})["items"]
             assert len(inventory) == 2
-            assert len({entry["display_name"] for entry in inventory.values()}) == 1
-            for selected_id in inventory:
+            assert len({entry["display_name"] for entry in inventory}) == 1
+            for entry in inventory:
+                selected_id = entry["project_id"]
                 cards = runtime.call("project.sessions", {"project_id": selected_id})[
                     "items"
                 ]
@@ -464,8 +468,8 @@ def main():
                     heartbeat=False,
                 )
             except RuntimeError as error:
-                assert "legacy SQL publication" in str(error)
-                assert "legacy-key" in str(error)
+                assert "unsupported_prepared_version" in str(error)
+                assert "canonical source" in str(error)
             else:
                 raise AssertionError("pending legacy SQL publication was not rejected")
             preserved = tuple(
@@ -489,7 +493,7 @@ def main():
                 try:
                     collector.flush(remote)
                 except RuntimeError as error:
-                    assert "legacy SQL publication" in str(error)
+                    assert "unsupported_prepared_version" in str(error)
                 else:
                     raise AssertionError("legacy retry was not rejected")
                 assert (

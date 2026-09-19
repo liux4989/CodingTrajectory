@@ -1,7 +1,8 @@
-import { Fault, Json, receipt, requireThat, stable, State, validate } from "./shared";
+import { bounded, digest, Fault, Json, receipt, requireThat, stable, State, validate } from "./shared";
+import { apiView, commitApiView, prepareInventory, pruneApi } from "./prepared-api";
 
 
-const MANIFEST_SCHEMA = "ct.artifact-manifest.v1";
+const MANIFEST_SCHEMA = "ct.artifact-manifest.v2";
 const RETAINED_MANIFESTS = 3;
 const CLEANUP_PAGES_PER_PUBLICATION = 4;
 const UPLOAD_CLAIM_SECONDS = 7 * 24 * 60 * 60;
@@ -36,6 +37,9 @@ export function claimArtifactUpload(state: State, kind: string, sha256: string) 
 export interface ArtifactPublicationPlan {
   complete: true;
   releaseClaims: Array<{ kind: string; sha256: string }>;
+  views: Json[];
+  cards: Json[];
+  inventory: Awaited<ReturnType<typeof prepareInventory>>;
 }
 
 /** Verify all immutable objects and source fences before making a manifest visible. */
@@ -65,18 +69,39 @@ export async function prepareArtifactPublication(
   for (const row of state.sql.exec<{ manifest: string }>("SELECT manifest FROM artifact_manifests").toArray()) {
     const manifest = JSON.parse(row.manifest);
     for (const graph of manifest.graphs) {
-      for (const object of [graph.facts, graph.summary]) {
+      for (const object of [graph.facts, graph.summary, ...(graph.api_objects ?? [])]) {
         retained.set(`${object.kind}:${object.sha256}`, object.bytes);
       }
     }
   }
   const graphIds = new Set<string>();
   const releaseClaims: Array<{ kind: string; sha256: string }> = [];
+  const views: Json[] = [], cards: Json[] = [];
   for (const graph of request.graphs) {
     requireThat(!graphIds.has(graph.graph_id), "duplicate_graph_publication");
     graphIds.add(graph.graph_id);
     requireThat(graph.source_ids.every((sourceId: string) => vector.has(sourceId)), "invalid_graph_sources");
-    for (const object of [graph.facts, graph.summary]) {
+    const keys = new Set<string>();
+    const references = new Map<string, number>(graph.api_objects.map((ref: Json) => [ref.sha256, ref.bytes]));
+    for (const method of graph.api_methods) {
+      const key = stable([method.method, method.scope, method.turn_id]);
+      requireThat(!keys.has(key) && Boolean(method.index) !== Boolean(method.error), "invalid_prepared_method");
+      keys.add(key);
+      requireThat(!method.index || graph.api_objects.some((ref: Json) => ref.sha256 === method.index.sha256 && ref.bytes === method.index.bytes), "invalid_prepared_reference");
+      if (method.index) {
+        requireThat(method.index.bytes <= 64 * 1024, "invalid_prepared_reference");
+        const stored = await env.ARTIFACTS.get(artifactKey(request.workspace_id, "api", method.index.sha256));
+        requireThat(stored && stored.size === method.index.bytes, "artifact_upload_incomplete", 409);
+        const body = await bounded(stored.body, method.index.bytes);
+        requireThat(await digest(body) === method.index.sha256, "prepared_object_corrupt", 503);
+        const index = JSON.parse(new TextDecoder().decode(body));
+        requireThat(index.schema_version === "ct.prepared-api.v1" && index.source_manifest_sha256 === graph.fact_set_digest && index.method === method.method && index.method_version === method.method_version && index.scope === method.scope && index.turn_id === method.turn_id, "invalid_prepared_reference");
+        requireThat(["exact", "page"].includes(index.mode), "invalid_prepared_reference");
+        const refs = index.mode === "exact" ? [index.result] : [index.topology, ...index.packs.map((pack: Json) => pack.object)];
+        requireThat(refs.every((ref: Json) => ref.kind === "api" && references.get(ref.sha256) === ref.bytes), "invalid_prepared_reference");
+      }
+    }
+    for (const object of [graph.facts, graph.summary, ...graph.api_objects]) {
       if (retained.get(`${object.kind}:${object.sha256}`) === object.bytes) continue;
       const key = artifactKey(request.workspace_id, object.kind, object.sha256);
       const head = await env.ARTIFACTS.head(key);
@@ -87,8 +112,23 @@ export async function prepareArtifactPublication(
       "artifact_upload_incomplete", 409);
       releaseClaims.push({ kind: object.kind, sha256: object.sha256 });
     }
+    const summaryObject = await env.ARTIFACTS.get(artifactKey(request.workspace_id, "summary", graph.summary.sha256));
+    requireThat(summaryObject && summaryObject.size === graph.summary.bytes, "artifact_upload_incomplete", 409);
+    const body = new Uint8Array(await summaryObject.arrayBuffer());
+    requireThat(await digest(body) === graph.summary.sha256, "artifact_object_corrupt", 503);
+    const summary = JSON.parse(new TextDecoder().decode(body));
+    requireThat(summary.schema_version === "ct.prepared-summary.v2" && summary.fact_set_digest === graph.fact_set_digest && summary.graph_id === graph.graph_id && Array.isArray(summary.project_sessions), "unsupported_prepared_version", 409);
+    const view = await apiView(request.workspace_id, graph.fact_set_digest, graph.api_methods, request.project_id);
+    cards.push(...summary.project_sessions.map((card: Json) => ({ ...card, project_id: request.project_id, view_manifest_sha256: view.view_manifest_sha256 })));
+    views.push(view);
   }
-  return { complete: true, releaseClaims };
+  const allCards = state.sql.exec<{ cards: string }>("SELECT cards FROM api_inventory_cards WHERE project_id<>?", request.project_id)
+    .toArray().flatMap(row => JSON.parse(row.cards)).concat(cards);
+  const projects = state.all("project").map(project => ({ project_id: project.project_id,
+    display_name: project.display_name, vendors: [...new Set(allCards.filter(card => card.project_id === project.project_id).flatMap(card => card.vendors ?? []))].sort(),
+    modified: allCards.filter(card => card.project_id === project.project_id).map(card => card.modified).filter(Boolean).sort().at(-1) ?? null }));
+  const inventory = await prepareInventory(env, request.workspace_id, projects, allCards);
+  return { complete: true, releaseClaims, views, cards, inventory };
 }
 
 /** Commit one complete inventory and retain only a bounded rollback window. */
@@ -124,10 +164,16 @@ export function commitArtifactPublication(
       vendors: graph.vendors,
       facts: graph.facts,
       summary: graph.summary,
+      api_methods: graph.api_methods,
+      api_objects: graph.api_objects,
     })),
   };
   state.sql.exec("INSERT INTO artifact_manifests VALUES(?,?,?,?,?)",
     request.project_id, request.publication_sequence, sequence, request.agent_id, stable(manifest));
+  request.graphs.forEach((graph: Json, index: number) => commitApiView(state, request.project_id, sequence, plan.views[index], graph.api_methods));
+  state.sql.exec("INSERT OR REPLACE INTO api_inventory_cards VALUES(?,?)", request.project_id, stable(plan.cards));
+  commitApiView(state, "workspace", sequence, plan.inventory.identity, plan.inventory.methods);
+  for (const hash of plan.inventory.objects) state.sql.exec("INSERT OR IGNORE INTO api_inventory_objects VALUES(?,?)", plan.inventory.identity.view_manifest_sha256, hash);
   state.sql.exec(`DELETE FROM artifact_manifests WHERE project_id=? AND publication_sequence NOT IN (
     SELECT publication_sequence FROM artifact_manifests WHERE project_id=?
     ORDER BY publication_sequence DESC LIMIT ?)`, request.project_id, request.project_id, RETAINED_MANIFESTS);
@@ -145,7 +191,8 @@ export function commitArtifactPublication(
       SELECT MIN(sequence) FROM records WHERE kind='artifact_project_publisher' AND key=?
       UNION SELECT workspace_sequence FROM artifact_manifests WHERE project_id=?)`,
   request.project_id, request.project_id, request.project_id);
-  for (const kind of ["facts", "summary"]) {
+  pruneApi(state);
+  for (const kind of ["facts", "summary", "api"]) {
     const hashes = plan.releaseClaims.filter(claim => claim.kind === kind)
       .map(claim => claim.sha256);
     for (let offset = 0; offset < hashes.length; offset += 50) {
@@ -213,8 +260,10 @@ export async function cleanupArtifactObjects(state: State, env: Env, workspaceId
     for (const graph of manifest.graphs) {
       referenced.add(artifactKey(workspaceId, "facts", graph.facts.sha256));
       referenced.add(artifactKey(workspaceId, "summary", graph.summary.sha256));
+      for (const ref of graph.api_objects ?? []) referenced.add(artifactKey(workspaceId, "api", ref.sha256));
     }
   }
+  for (const row of state.sql.exec<{ hash: string }>("SELECT hash FROM api_inventory_objects").toArray()) referenced.add(artifactKey(workspaceId, "api", row.hash));
   const now = Math.floor(Date.now() / 1000);
   state.sql.exec("DELETE FROM artifact_upload_claims WHERE expires_at<=?", now);
   for (const claim of state.sql.exec<{ kind: string; sha256: string }>(

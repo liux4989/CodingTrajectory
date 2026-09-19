@@ -60,7 +60,7 @@ class StubRemoteRuntime:
 def runtime_with_inventory(inventory: Any, fallback_factory: Any) -> ServiceRuntime:
     def local_inventory(method: str, params: dict[str, Any]) -> dict[str, Any]:
         assert method == "project.list"
-        assert params == {}
+        assert params == {"limit": 100}
         if isinstance(inventory, Exception):
             raise inventory
         return inventory
@@ -92,13 +92,26 @@ def validate_local_preference_and_empty_success() -> None:
         raise AssertionError("remote fallback must remain lazy")
 
     for result in (
-        {"items": {"CodingTrajectory": {"path": None, "vendors": ["codex_cli"]}}},
-        {"items": {}},
+        {
+            "items": [
+                {
+                    "project_id": "local",
+                    "display_name": "CodingTrajectory",
+                    "path": None,
+                    "vendors": ["codex_cli"],
+                }
+            ],
+            "total": 1,
+            "returned": 1,
+        },
+        {"items": [], "total": 0, "returned": 0},
     ):
         with runtime_with_inventory(result, forbidden_fallback) as runtime:
             response = runtime.execute({"method": "project.list", "params": {}})
         assert response["ok"] is True
-        assert set(response["result"]["items"]) == set(result["items"])
+        assert [item["project_id"] for item in response["result"]["items"]] == [
+            item["project_id"] for item in result["items"]
+        ]
         assert response["meta"]["source"] == "local"
     assert fallback_calls == 0
 
@@ -124,14 +137,25 @@ def validate_explicit_fallback_conditions() -> None:
     remote = StubRemoteRuntime(
         method="project.list",
         params={},
-        result={"items": {"RemoteProject": {"path": None, "vendors": ["codex_cli"]}}},
+        result={
+            "items": [
+                {
+                    "project_id": "remote",
+                    "display_name": "RemoteProject",
+                    "path": None,
+                    "vendors": ["codex_cli"],
+                }
+            ],
+            "total": 1,
+            "returned": 1,
+        },
     )
     with runtime_with_inventory(
         LocalSourceUnavailableError("local discovery unavailable"), lambda: remote
     ) as runtime:
         response = runtime.execute({"method": "project.list", "params": {}})
     assert response["ok"] is True
-    assert "RemoteProject" in response["result"]["items"]
+    assert response["result"]["items"][0]["display_name"] == "RemoteProject"
     assert response["meta"]["source"] == "remote"
     assert remote.calls == 1
 
@@ -184,7 +208,6 @@ def validate_read_only_remote_fallback(profile_name: str) -> None:
     def remote_runtime() -> ServiceRuntime:
         return factory.build(
             credentials.access_token,
-            local_evidence=False,
             current_dir=Path.cwd(),
         )
 
@@ -198,7 +221,7 @@ def validate_read_only_remote_fallback(profile_name: str) -> None:
     print(
         "read-only remote fallback passed "
         f"({len(response['result']['items'])} projects, "
-        f"snapshot {response['meta']['snapshot_sequence']})"
+        f"view {response['meta']['identity']['view_manifest_sha256']})"
     )
 
 

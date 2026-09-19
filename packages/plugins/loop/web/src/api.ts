@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CanonicalReference } from "./generated/investigation";
 
-export type CoreResult<T> = { result: T; meta?: Record<string, unknown> };
+export type CoreResult<T> = { result: T; meta?: { identity?: { view_manifest_sha256: string } | null } };
 
 export async function request<T>(
   path: string,
@@ -86,6 +86,7 @@ export function readReference(): CanonicalReference | null {
     turn_id: query.get("turn_id"),
     item_id: query.get("item_id"),
     event_id: query.get("event_id"),
+    view_manifest_sha256: query.get("view_manifest_sha256"),
   };
 }
 

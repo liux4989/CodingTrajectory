@@ -16,8 +16,8 @@
     {"surface": "canonical.graph", "path": "$.edges[0].provenance", "expected": "derived", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
     {"surface": "session.tree", "path": "$.branches[0].graph_session_count", "expected": 2, "source_refs": ["source/parent.jsonl:1", "source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
     {"surface": "session.tree", "path": "$.branches[0].spawned_agent_count", "expected": 1, "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
-    {"surface": "graph.overview", "path": "$.graph.orchestration.kind", "expected": "multi_agent", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
-    {"surface": "graph.overview", "path": "$.summary.turn_count", "expected": 3, "source_refs": ["source/parent.jsonl:2-6", "source/fork.jsonl:5-16"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "graph.overview", "path": "$.orchestration.kind", "expected": "multi_agent", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
+    {"surface": "graph.overview", "path": "$.totals.source_turns", "expected": 3, "source_refs": ["source/parent.jsonl:2-6", "source/fork.jsonl:5-16"], "audit_ref": "audit.md#graph-and-runtime"},
     {"surface": "graph.overview", "path": "$.edges[0].type", "expected": "spawned_subagent", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"},
     {"surface": "graph.overview", "path": "$.edges[0].confidence", "expected": "medium", "source_refs": ["source/fork.jsonl:1"], "audit_ref": "audit.md#graph-and-runtime"}
   ]

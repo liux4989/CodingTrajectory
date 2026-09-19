@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coding_trajectory.contracts.prepared_api import API_PROTOCOL, ViewIdentity
+
 CORE_PROTOCOL = "ct.core.v1"
 
 
@@ -16,9 +18,8 @@ class ApiEnvelopeModel(BaseModel):
 class ApiTransportMetadata(ApiEnvelopeModel):
     """Authority and snapshot facts carried outside versioned method results."""
 
-    workspace_id: str
-    snapshot_sequence: int
-    source: Literal["remote"]
+    identity: ViewIdentity | None = None
+    source: Literal["local", "remote"]
     freshness: Literal["authoritative"]
     content_scope: Literal["facts"]
 
@@ -29,9 +30,10 @@ class ApiAvailability(ApiEnvelopeModel):
 
 
 class ApiSuccessResponse[ResultT](ApiEnvelopeModel):
-    protocol: Literal["ct.core.v1"] = CORE_PROTOCOL
+    protocol: Literal["ct.api.v1"] = API_PROTOCOL
     id: Any
     method: str
+    method_version: int
     ok: Literal[True]
     data: ResultT
     availability: ApiAvailability = Field(
@@ -47,9 +49,10 @@ class ApiErrorDetail(ApiEnvelopeModel):
 
 
 class ApiErrorResponse(ApiEnvelopeModel):
-    protocol: Literal["ct.core.v1"] = CORE_PROTOCOL
+    protocol: Literal["ct.api.v1"] = API_PROTOCOL
     id: Any
     method: Any
+    method_version: int | None = None
     ok: Literal[False]
     data: None = None
     availability: ApiAvailability

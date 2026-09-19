@@ -60,7 +60,7 @@ _CostText = Annotated[
     ),
 ]
 
-FACT_SET_SCHEMA_VERSION = "ct.published_facts.v1"
+FACT_SET_SCHEMA_VERSION = "ct.published_facts.v2"
 # The measured legitimate maximum is 10,602,862 bytes. 16 MiB provides 58%
 # headroom while keeping graph-at-a-time validation bounded.
 MAX_FACT_SET_BYTES = 16 * 1024 * 1024
@@ -116,6 +116,8 @@ class SessionFactPayload(FactModel):
     title: str | None = Field(default=None, min_length=1, max_length=280)
     preview: str | None = Field(default=None, min_length=1, max_length=280)
     agent_name: str | None = Field(default=None, max_length=512)
+    cwd: str | None = None
+    agent_path: str | None = None
     topology: ChronicleSessionTopology = Field(default_factory=ChronicleSessionTopology)
 
 
@@ -476,7 +478,7 @@ def _row(
 class PublishedFactSet(FactModel):
     """One graph's complete, deterministic, bounded publication facts."""
 
-    schema_version: Literal["ct.published_facts.v1"] = FACT_SET_SCHEMA_VERSION
+    schema_version: Literal["ct.published_facts.v2"] = FACT_SET_SCHEMA_VERSION
     graph_id: UUID
     fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     kind_counts: dict[str, int]
@@ -845,6 +847,8 @@ def _assemble_fact_rows(
                     title=session.title,
                     preview=session.preview,
                     agent_name=session.agent_name,
+                    cwd=session.cwd,
+                    agent_path=session.agent_path,
                     topology=session.topology,
                 ),
             )

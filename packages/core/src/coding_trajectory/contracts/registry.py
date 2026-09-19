@@ -18,10 +18,6 @@ from coding_trajectory.contracts.living import (
     LivingSessionsResponse,
 )
 from coding_trajectory.contracts.session import (
-    CliProjectSessionsResponse,
-    CliSessionEventsResponse,
-    CliSessionItemsResponse,
-    CliSessionOverviewResponse,
     CliSessionStatsResponse,
     CliSessionUsageResponse,
     GraphOverviewRequest,
@@ -106,24 +102,22 @@ class ServiceContract:
 SERVICE_CONTRACTS = {
     contract.method: contract
     for contract in (
-        ServiceContract("project.list", 4, ProjectListRequest, ProjectListResponse),
+        ServiceContract("project.list", 5, ProjectListRequest, ProjectListResponse),
         ServiceContract(
             "project.sessions",
-            4,
+            5,
             ProjectSessionsRequest,
             ProjectSessionsResponse,
-            CliProjectSessionsResponse,
         ),
         ServiceContract(
             "session.overview",
-            3,
+            4,
             SessionOverviewRequest,
             SessionOverviewResponse,
-            CliSessionOverviewResponse,
         ),
         ServiceContract(
             "session.summary",
-            2,
+            3,
             SessionSummaryRequest,
             SessionSummaryResponse,
         ),
@@ -133,57 +127,55 @@ SERVICE_CONTRACTS = {
             SessionSearchRequest,
             SessionSearchResponse,
         ),
-        ServiceContract("session.tree", 3, SessionTreeRequest, SessionTreeResponse),
+        ServiceContract("session.tree", 4, SessionTreeRequest, SessionTreeResponse),
         ServiceContract(
             "graph.overview",
-            3,
+            4,
             GraphOverviewRequest,
             GraphOverviewResponse,
         ),
         ServiceContract(
             "session.stats",
-            3,
+            4,
             SessionStatsRequest,
             SessionStatsResponse,
             CliSessionStatsResponse,
         ),
-        ServiceContract("graph.stats", 3, GraphStatsRequest, SessionStatsResponse),
+        ServiceContract("graph.stats", 4, GraphStatsRequest, SessionStatsResponse),
         ServiceContract(
             "session.usage",
-            3,
+            4,
             SessionUsageRequest,
             SessionUsageResponse,
             CliSessionUsageResponse,
         ),
-        ServiceContract("graph.usage", 3, GraphUsageRequest, SessionUsageResponse),
+        ServiceContract("graph.usage", 4, GraphUsageRequest, SessionUsageResponse),
         ServiceContract(
             "session.model_usage",
-            3,
+            4,
             SessionModelUsageRequest,
             SessionModelUsageResponse,
         ),
         ServiceContract(
             "session.request_usage",
-            3,
+            4,
             SessionRequestUsageRequest,
             SessionRequestUsageResponse,
         ),
         ServiceContract(
-            "session.tool_usage", 3, SessionToolUsageRequest, SessionToolUsageResponse
+            "session.tool_usage", 4, SessionToolUsageRequest, SessionToolUsageResponse
         ),
         ServiceContract(
             "session.events",
-            4,
+            5,
             SessionEventsRequest,
             SessionEventsResponse,
-            CliSessionEventsResponse,
         ),
         ServiceContract(
             "session.items",
-            4,
+            5,
             SessionItemsRequest,
             SessionItemsResponse,
-            CliSessionItemsResponse,
         ),
         ServiceContract(
             "living.events",
@@ -193,7 +185,7 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "living.sessions",
-            2,
+            3,
             LivingSessionsRequest,
             LivingSessionsResponse,
         ),
