@@ -150,6 +150,12 @@ function auth(run, extra = {}) {
   return { authorization: `Bearer ${run.token}`, ...extra };
 }
 
+function validatePlanSource(plan) {
+  const tree = execFileSync('git', ['show', '-s', '--format=%T', plan.source_head],
+    { encoding: 'utf8' }).trim();
+  requireThat(tree === plan.source_tree, 'plan source tree drift');
+}
+
 async function publish(planPath, output) {
   const plan = JSON.parse(readFileSync(planPath));
   const run = runtime();
@@ -218,6 +224,112 @@ async function publish(planPath, output) {
     requireThat(report.http_requests === plan.publication.total_http_requests, 'publication request count');
     requireThat(report.object_puts === plan.publication.total_object_puts, 'publication PUT count');
     requireThat(report.object_put_bytes === plan.publication.total_object_put_bytes, 'publication byte count');
+    report.status = 'PASS';
+  } catch (error) {
+    report.status = 'FAIL'; report.failure = error instanceof Error ? error.message : String(error); throw error;
+  } finally { report.completed_at = new Date().toISOString(); save(output, report); }
+}
+
+async function resumePublication(planPath, priorPath, recoveryPath, output) {
+  const planBytes = readFileSync(planPath);
+  const priorBytes = readFileSync(priorPath);
+  const plan = JSON.parse(planBytes);
+  const prior = JSON.parse(priorBytes);
+  const recovery = JSON.parse(readFileSync(recoveryPath));
+  const run = runtime();
+  validatePlanSource(plan);
+  requireThat(prior.status === 'FAIL' && prior.http_requests === 70
+    && prior.object_puts === 62 && prior.object_put_bytes === 220426,
+  'unexpected prior publication totals');
+  requireThat(prior.fixtures.length === 1 && prior.fixtures[0].shape === 'representative',
+    'representative publication receipt missing');
+  const near = plan.fixtures.find(row => row.shape === 'near-budget');
+  requireThat(near && recovery.shape === near.shape
+    && recovery.fixture_sha256 === near.fixture_sha256, 'near-budget recovery fixture drift');
+  requireThat(recovery.plan_sha256 === sha(planBytes)
+    && recovery.prior_publication_sha256 === sha(priorBytes), 'recovery evidence digest drift');
+  requireThat(/^[0-9a-f-]{36}$/.test(recovery.project_id)
+    && /^[0-9a-f-]{36}$/.test(recovery.source_id), 'recovered identifiers required');
+  requireThat(recovery.source_epoch === 1, 'recovered source epoch drift');
+  const nearRequests = prior.requests.slice(-4);
+  requireThat(nearRequests.length === 4
+    && nearRequests.slice(0, 3).every(row => row.outcome === 'success')
+    && nearRequests[3].method === 'PUT artifact/facts'
+    && nearRequests[3].outcome === 'unknown' && nearRequests[3].http_status === null,
+  'prior near-budget transition drift');
+  const record = fixtureRecord(resolve(near.fixture_path));
+  requireThat(record.manifest.fixture_sha256 === near.fixture_sha256, 'near-budget fixture drift');
+  const facts = record.bodies.find(row => row.kind === 'facts');
+  requireThat(facts && facts.sha256 === recovery.facts.sha256
+    && facts.bytes === recovery.facts.bytes, 'reconciled facts identity drift');
+  requireThat(['object_not_found', 'present_exact'].includes(recovery.facts.outcome),
+    'reconciled facts outcome required');
+  const report = {
+    schema_version: 'ct.prepared-api-staging-publication-resume.v1', output,
+    source_head: plan.source_head, source_tree: plan.source_tree,
+    harness_head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    plan_sha256: sha(planBytes), prior_publication_sha256: sha(priorBytes),
+    prior_http_requests: prior.http_requests, started_at: new Date().toISOString(),
+    completed_at: null, status: 'running', http_requests: 0, object_puts: 0,
+    object_put_bytes: 0, skipped_existing_objects: 0, requests: [],
+    fixtures: structuredClone(prior.fixtures), failure: null,
+  };
+  save(output, report);
+  async function rpc(method, params, requestId) {
+    const evidence = { request_id: requestId, method, outcome: 'issued', http_status: null };
+    const { body } = await checkedFetch(run, report, '/v1/core', { method: 'POST',
+      headers: auth(run, { 'content-type': 'application/json', 'x-ct-stage-request-id': requestId }),
+      body: JSON.stringify({ protocol: 'ct.core.v1', id: requestId, method,
+        params: { workspace_id: run.workspaceId, ...params } }) }, 200, evidence);
+    const parsed = JSON.parse(body);
+    requireThat(parsed.ok === true && parsed.id === requestId, `${method}: response envelope`);
+    evidence.outcome = 'success'; save(output, report); return parsed.data;
+  }
+  try {
+    const refs = [];
+    for (const object of record.bodies) {
+      if (object.kind === 'facts' && recovery.facts.outcome === 'present_exact') {
+        refs.push({ kind: object.kind, sha256: object.sha256, bytes: object.bytes });
+        report.skipped_existing_objects++; save(output, report); continue;
+      }
+      const requestId = `resume-near-budget-put-${object.kind}-${object.sha256.slice(0, 12)}-${randomUUID()}`;
+      const evidence = { request_id: requestId, method: `PUT artifact/${object.kind}`,
+        transition: object.kind === 'facts' ? 'unknown_to_retried' : 'unissued_to_issued',
+        outcome: 'issued', http_status: null, sha256: object.sha256, bytes: object.bytes };
+      await checkedFetch(run, report, `/v1/artifacts/${object.kind}/${object.sha256}`, {
+        method: 'PUT', headers: auth(run, { 'content-type': 'application/json',
+          'x-ct-stage-request-id': requestId }), body: object.body }, 200, evidence, 120_000);
+      evidence.outcome = 'success'; report.object_puts++; report.object_put_bytes += object.bytes;
+      refs.push({ kind: object.kind, sha256: object.sha256, bytes: object.bytes }); save(output, report);
+    }
+    const byKind = kind => refs.find(row => row.kind === kind);
+    const fixture = record.fixture;
+    const contentPayload = { kind: 'ct.source_checkpoint.v1', source_checkpoint: { segments: [1] },
+      session_digest: fixture.source };
+    const content = sha(stable(contentPayload));
+    const publication = { agent_id: run.agentId, project_id: recovery.project_id,
+      publication_sequence: 0,
+      source_vector: [{ source_id: recovery.source_id, source_epoch: recovery.source_epoch,
+        source_sequence: 0, content_sha256: content }],
+      graphs: [{ graph_id: fixture.root, graph_input_sha256: fixture.source,
+        fact_set_digest: fixture.source, fact_count: fixture.facts.rows.length,
+        source_ids: [recovery.source_id], vendors: ['pi'], observed_at: '2026-09-19T00:00:00Z',
+        facts: byKind('facts'), summary: byKind('summary'), api_methods: fixture.api.methods,
+        api_objects: refs.filter(row => row.kind === 'api') }] };
+    const published = await rpc('ct_collector_publish_artifacts', publication,
+      `resume-near-budget-manifest-${randomUUID()}`);
+    report.fixtures.push({ shape: near.shape, fixture_sha256: near.fixture_sha256,
+      root_session_id: fixture.root, project_id: recovery.project_id, source_id: recovery.source_id,
+      publication_result: published, object_puts: record.manifest.object_puts,
+      object_put_bytes: record.manifest.object_put_bytes });
+    const expectedPuts = record.manifest.object_puts
+      - (recovery.facts.outcome === 'present_exact' ? 1 : 0);
+    requireThat(report.http_requests === expectedPuts + 1, 'resume request count');
+    requireThat(report.object_puts === expectedPuts, 'resume PUT count');
+    requireThat(report.fixtures.length === 2, 'combined fixture receipts');
+    report.combined_http_requests = prior.http_requests + report.http_requests;
+    requireThat(report.combined_http_requests === plan.publication.total_http_requests + 1
+      - (recovery.facts.outcome === 'present_exact' ? 1 : 0), 'combined publication allocation');
     report.status = 'PASS';
   } catch (error) {
     report.status = 'FAIL'; report.failure = error instanceof Error ? error.message : String(error); throw error;
@@ -312,6 +424,9 @@ if (command === 'plan') {
 } else if (command === 'publish') {
   requireThat(args.length === 2, 'usage: publish PLAN OUTPUT');
   await publish(resolve(args[0]), resolve(args[1]));
+} else if (command === 'resume') {
+  requireThat(args.length === 4, 'usage: resume PLAN PRIOR RECOVERY OUTPUT');
+  await resumePublication(...args.map(value => resolve(value)));
 } else if (command === 'measure') {
   const mode = args.includes('--preflight') ? 'preflight' : args.includes('--full') ? 'full' : null;
   const positional = args.filter(value => !value.startsWith('--'));

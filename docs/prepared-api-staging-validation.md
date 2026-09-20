@@ -41,3 +41,20 @@ Publication and measurement reports are saved before and after each request.
 On a timeout or transport failure, preserve the partial report and treat the
 request outcome as unknown. Do not retry or continue to trace/full workload
 without a new review of remote state and the retry boundary.
+
+When that review authorizes a receipt-based continuation, record the exact
+plan and prior-report digests, recovered project/source identifiers, and the
+read-only status of the unknown object in a recovery JSON file. Then run:
+
+```sh
+node scripts/run-prepared-api-staging.mjs resume \
+  PLAN PRIOR_PUBLICATION RECOVERY SUCCESSOR_PUBLICATION
+```
+
+`resume` accepts only the known partial boundary: one completed representative
+fixture, the three completed near-budget RPCs, and the unknown first facts PUT.
+It never replays those completed operations. It either skips facts after an
+exact read-only reconciliation or performs its one reviewed retry, uploads only
+the remaining objects, and publishes the near-budget manifest. Every object PUT
+has a 120-second timeout. Any transport failure remains unknown and stops the
+workflow before measurement.
