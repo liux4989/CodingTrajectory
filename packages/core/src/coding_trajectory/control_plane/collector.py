@@ -12,6 +12,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +29,9 @@ from coding_trajectory.control_plane.artifact_protocol import (
     ArtifactGraphPublication,
     ArtifactObjectReference,
     ArtifactPublicationRequest,
+    ArtifactReadinessReference,
+    ArtifactReadinessRequest,
+    ArtifactReadinessResponse,
     PreparedGraphSummary,
     compact_publication,
 )
@@ -93,6 +97,10 @@ class CollectorRemote(Protocol):
     ) -> ObservationReceipt: ...
 
     def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None: ...
+
+    def artifact_readiness(
+        self, request: ArtifactReadinessRequest
+    ) -> ArtifactReadinessResponse: ...
 
     def publish_artifacts(
         self, request: ArtifactPublicationRequest, *, idempotency_key: str
@@ -236,6 +244,18 @@ class CloudflareCollectorRemote:
                 idempotency_key=idempotency_key,
             )
         )
+
+    def artifact_readiness(
+        self, request: ArtifactReadinessRequest
+    ) -> ArtifactReadinessResponse:
+        response = ArtifactReadinessResponse.model_validate(
+            self._rpc(
+                "ct_collector_artifact_readiness", request.model_dump(mode="json")
+            )
+        )
+        if len(response.ready) != len(request.objects):
+            raise CollectorRemoteError("artifact readiness response length mismatch")
+        return response
 
     def upload_artifact(self, *, kind: str, sha256: str, body: bytes) -> None:
         """Idempotently upload one content-addressed object before publication."""
@@ -820,28 +840,6 @@ class LocalCollector:
             is not None
         )
 
-    def _previous_artifact_references(self, publication_sequence: int) -> set[str]:
-        """Return objects acknowledged by the immediately preceding manifest."""
-
-        row = self._connection.execute(
-            "select request_json from publication_outbox where state = 'accepted' and publication_sequence < ? order by publication_sequence desc limit 1",
-            (publication_sequence,),
-        ).fetchone()
-        if row is None:
-            return set()
-        artifact = json.loads(row["request_json"]).get("artifact_publication")
-        if artifact is None:
-            return set()
-        return {
-            reference["sha256"]
-            for graph in artifact["graphs"]
-            for reference in (
-                graph["facts"],
-                graph["summary"],
-                *graph.get("api_objects", []),
-            )
-        }
-
     def _source_delivery_accepted(self, source: _CollectedSource) -> bool:
         if (
             source.source_id is None
@@ -1060,6 +1058,63 @@ class LocalCollector:
         self._connection.commit()
         return 1
 
+    def _upload_artifacts(
+        self, remote: CollectorRemote, request: ArtifactPublicationRequest
+    ) -> None:
+        indexes = {
+            method.index.sha256
+            for graph in request.graphs
+            for method in graph.api_methods
+            if method.index is not None
+        }
+        references = {}
+        for graph in request.graphs:
+            for ref in (graph.facts, graph.summary, *graph.api_objects):
+                key = (ref.kind, ref.sha256)
+                if key in references and references[key].bytes != ref.bytes:
+                    raise ValueError("conflicting artifact byte counts")
+                references[key] = ArtifactReadinessReference(
+                    **ref.model_dump(),
+                    requires_index=ref.kind == "api" and ref.sha256 in indexes,
+                )
+        objects = list(references.values())
+        # Only HTTP runs on workers. SQLite and readiness stay on this thread.
+        # At most four in-flight bodies (64 MiB); drain on all failures.
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            for offset in range(0, len(objects), 512):
+                batch = objects[offset : offset + 512]
+                readiness = remote.artifact_readiness(
+                    ArtifactReadinessRequest(
+                        workspace_id=request.workspace_id,
+                        agent_id=request.agent_id,
+                        objects=batch,
+                    )
+                )
+                missing = [
+                    ref
+                    for ref, ready in zip(batch, readiness.ready, strict=True)
+                    if not ready
+                ]
+                for start in range(0, len(missing), 4):
+                    uploads = []
+                    for ref in missing[start : start + 4]:
+                        artifact = self._connection.execute(
+                            "select body from artifact_objects where sha256 = ? and kind = ?",
+                            (ref.sha256, ref.kind),
+                        ).fetchone()
+                        if artifact is None:
+                            raise ValueError("prepared artifact is unavailable")
+                        uploads.append(
+                            workers.submit(
+                                remote.upload_artifact,
+                                kind=ref.kind,
+                                sha256=ref.sha256,
+                                body=bytes(artifact["body"]),
+                            )
+                        )
+                    for upload in uploads:
+                        upload.result()
+
     def _flush_facts(self, remote: CollectorRemote) -> tuple[int, int]:
         self._reject_pending_legacy_publications()
         accepted = 0
@@ -1085,9 +1140,6 @@ class LocalCollector:
             )
             self._connection.commit()
             try:
-                acknowledged = self._previous_artifact_references(
-                    artifact_request.publication_sequence
-                )
                 recovered_receipt = None
                 if row["attempts"] > 0:
                     recovered = remote.recover(
@@ -1102,30 +1154,9 @@ class LocalCollector:
                         recovered_receipt = ObservationReceipt.model_validate(
                             recovered.publication_receipt
                         )
-                committed = recovered_receipt is not None
-                # The authority validates new references and attests exact
-                # retained ones. Skip locally acknowledged immutable objects;
-                # after an uncommitted uncertain response, upload all. A
-                # recovered receipt is authoritative: do not replay it through
-                # a newer wire encoding with a different request identity.
-                force_upload = row["attempts"] > 0 and not committed
-                for graph in artifact_request.graphs:
-                    for reference in (graph.facts, graph.summary, *graph.api_objects):
-                        if committed or (
-                            not force_upload and reference.sha256 in acknowledged
-                        ):
-                            continue
-                        artifact = self._connection.execute(
-                            "select body from artifact_objects where sha256 = ? and kind = ?",
-                            (reference.sha256, reference.kind),
-                        ).fetchone()
-                        if artifact is None:
-                            raise ValueError("prepared artifact is unavailable")
-                        remote.upload_artifact(
-                            kind=reference.kind,
-                            sha256=reference.sha256,
-                            body=bytes(artifact["body"]),
-                        )
+                # Never replay a recovered commit or trust old local PUT receipts.
+                if recovered_receipt is None:
+                    self._upload_artifacts(remote, artifact_request)
                 receipt = recovered_receipt or remote.publish_artifacts(
                     artifact_request, idempotency_key=row["idempotency_key"]
                 )

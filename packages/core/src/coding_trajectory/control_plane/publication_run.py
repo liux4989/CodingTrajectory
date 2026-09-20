@@ -12,6 +12,7 @@ import subprocess
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -21,6 +22,7 @@ from coding_trajectory.control_plane.artifact_protocol import (
     ArtifactManifest,
     ArtifactManifestGraph,
     ArtifactPublicationRequest,
+    ArtifactReadinessResponse,
     compact_graph,
     compact_publication,
 )
@@ -150,6 +152,7 @@ class PinnedRemote(CloudflareCollectorRemote):
             url=plan.url, access_token=credentials.access_token, timeout=120
         )
         self.plan, self.audit = plan, audit
+        self._audit_lock = Lock()
         self._client.event_hooks["response"].append(self._check_version)
 
     def _check_version(self, response):
@@ -160,7 +163,8 @@ class PinnedRemote(CloudflareCollectorRemote):
 
     def _event(self, event, **values):
         if self.audit:
-            record(self.audit, event, **values)
+            with self._audit_lock:
+                record(self.audit, event, **values)
 
     def _rpc(self, name, request, *, idempotency_key=None):
         body = _collector_rpc_body(name, request, idempotency_key=idempotency_key)
@@ -190,6 +194,12 @@ class PinnedRemote(CloudflareCollectorRemote):
                     raise PublicationStopped("remote rejected publication work")
             elif name == "ct_collector_recover":
                 CollectorRecoveryResponse.model_validate(result)
+            elif name == "ct_collector_artifact_readiness":
+                readiness = ArtifactReadinessResponse.model_validate(result)
+                if len(readiness.ready) != len(request["objects"]):
+                    raise PublicationStopped(
+                        "artifact readiness response length mismatch"
+                    )
         except (CollectorRemoteError, PublicationStopped, ValueError, OSError) as exc:
             self._event(
                 "rpc_stopped",
@@ -560,7 +570,7 @@ class PublicationRun:
             "state": "resumable",
             "settled_observations": settled,
             "staged_publication": bool(row),
-            "uploads": "re-complete uncommitted claims; never assume local PUT receipts are retained",
+            "uploads": "batch-check authority readiness, then upload missing objects; local PUT receipts are not retention proof",
         }
 
     def reconcile(self):

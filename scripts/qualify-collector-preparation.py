@@ -8,6 +8,7 @@ import os
 import sqlite3
 import tempfile
 from pathlib import Path
+from threading import Barrier, Lock, get_ident
 from unittest.mock import patch
 from uuid import UUID
 
@@ -16,6 +17,8 @@ from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.control_plane import graph_preparation
 from coding_trajectory.control_plane.artifact_protocol import (
     ARTIFACT_PREPARATION_VERSION,
+    ArtifactPublicationRequest,
+    ArtifactReadinessResponse,
 )
 from coding_trajectory.control_plane.collector import (
     CloudflareCollectorRemote,
@@ -154,6 +157,9 @@ class CheckpointRemote:
         assert kind in {"facts", "summary", "api"} and len(sha256) == 64 and body
         self.uploads += 1
 
+    def artifact_readiness(self, request):
+        return ArtifactReadinessResponse(ready=[False] * len(request.objects))
+
     def publish_artifacts(self, request, *, idempotency_key: str) -> ObservationReceipt:
         assert request.graphs and idempotency_key
         self.publications += 1
@@ -162,6 +168,130 @@ class CheckpointRemote:
         return ObservationReceipt(
             receipt_id=UUID(int=300 + self.publications), outcome="accepted"
         )
+
+
+def qualify_upload_scheduling(collector) -> None:
+    from coding_trajectory.contracts.prepared_api import PreparedObject
+
+    row = collector._connection.execute(
+        "SELECT request_json FROM publication_outbox LIMIT 1"
+    ).fetchone()
+    request = ArtifactPublicationRequest.model_validate(
+        json.loads(row[0])["artifact_publication"]
+    )
+    extra = []
+    for ordinal in range(521):
+        body = json.dumps({"synthetic": ordinal}).encode()
+        digest = hashlib.sha256(body).hexdigest()
+        extra.append(PreparedObject(sha256=digest, bytes=len(body)))
+        collector._connection.execute(
+            "INSERT INTO artifact_objects VALUES (?, 'api', ?, ?)",
+            (digest, body, len(body)),
+        )
+    request.graphs[0].api_objects.extend(extra)
+    request.graphs.append(request.graphs[0])  # Repeated refs must upload only once.
+    missing = {ref.sha256 for ref in extra[:8]}
+    owner = get_ident()
+
+    class Authority:
+        def __init__(self, fail=False):
+            self.fail, self.calls, self.batches = fail, [], []
+            self.completed = set()
+            self.active = self.maximum = 0
+            self.lock, self.barrier = Lock(), Barrier(4, timeout=10)
+
+        def artifact_readiness(self, query):
+            assert get_ident() == owner
+            self.batches.append(query.objects)
+            return ArtifactReadinessResponse(
+                ready=[
+                    ref.sha256 not in missing or ref.sha256 in self.completed
+                    for ref in query.objects
+                ]
+            )
+
+        def upload_artifact(self, *, kind, sha256, body):
+            assert get_ident() != owner and kind == "api"
+            assert hashlib.sha256(body).hexdigest() == sha256
+            with self.lock:
+                self.calls.append(sha256)
+                self.active += 1
+                self.maximum = max(self.maximum, self.active)
+            try:
+                self.barrier.wait()
+                if self.fail and sha256 == extra[0].sha256:
+                    raise CollectorRemoteError("synthetic uncertain upload")
+                with self.lock:
+                    self.completed.add(sha256)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    authority = Authority()
+    collector._upload_artifacts(authority, request)
+    assert len(authority.calls) == 8 and set(authority.calls) == missing
+    assert authority.maximum == 4 and authority.active == 0
+    assert len(authority.batches) == 2 and len(authority.batches[0]) == 512
+    assert sum(len(batch) for batch in authority.batches) == len(
+        {
+            (ref.kind, ref.sha256)
+            for graph in request.graphs
+            for ref in (graph.facts, graph.summary, *graph.api_objects)
+        }
+    )
+    indexes = {
+        method.index.sha256
+        for graph in request.graphs
+        for method in graph.api_methods
+        if method.index
+    }
+    assert {
+        ref.sha256 for batch in authority.batches for ref in batch if ref.requires_index
+    } == indexes
+    collector._upload_artifacts(authority, request)
+    assert len(authority.calls) == 8  # Fresh authority evidence, not local receipts.
+    failing = Authority(fail=True)
+    try:
+        collector._upload_artifacts(failing, request)
+    except CollectorRemoteError:
+        pass
+    else:
+        raise AssertionError("upload failure swallowed")
+    assert (
+        len(failing.calls) == 4 and len(failing.completed) == 3 and failing.active == 0
+    )
+    # Old Workers and malformed readiness responses must stop before any PUT.
+    remote = CloudflareCollectorRemote(url="http://localhost", access_token="synthetic")
+    remote._client.close()
+    for status, payload in (
+        (400, {"error": {"code": "unknown_method"}}),
+        (200, {"ok": True, "data": {"ready": [True]}}),
+        (200, {"ok": True, "data": {"ready": ["true"] * 512}}),
+    ):
+        calls = []
+
+        def respond(message, calls=calls, status=status, payload=payload):
+            calls.append(message.method)
+            return httpx.Response(status, json=payload)
+
+        remote._client = httpx.Client(transport=httpx.MockTransport(respond))
+        try:
+            collector._upload_artifacts(remote, request)
+        except (CollectorRemoteError, ValueError):
+            pass
+        else:
+            raise AssertionError("invalid readiness accepted")
+        finally:
+            remote.close()
+        assert calls == ["POST"]
+    for ref in extra:
+        collector._connection.execute(
+            "DELETE FROM artifact_objects WHERE sha256=?", (ref.sha256,)
+        )
+    collector._connection.commit()
+    print(
+        "PASS 512-reference batching, deduplication, authority reuse, four concurrent uploads, failure drain and no later scheduling"
+    )
 
 
 def qualify_upload_transport() -> None:
@@ -392,6 +522,13 @@ def qualify_pinned_publication(root: Path, journal: Path) -> None:
                     "publication_receipt": self.receipt
                     if params.get("publication_idempotency_key")
                     else None,
+                }
+            elif method == "ct_collector_artifact_readiness":
+                data = {
+                    "ready": [
+                        f"/v1/artifacts/{ref['kind']}/{ref['sha256']}" in self.objects
+                        for ref in params["objects"]
+                    ]
                 }
             elif method == "ct_collector_register_source":
                 self.writes.append("register")
@@ -895,6 +1032,7 @@ def main():
             assert collector._connection.execute(
                 "SELECT COUNT(*) FROM publication_outbox WHERE state = 'accepted'"
             ).fetchone()[0]
+            qualify_upload_scheduling(collector)
             qualify_publication_transport(
                 root,
                 checkpoint_identity,

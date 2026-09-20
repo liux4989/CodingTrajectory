@@ -38,6 +38,26 @@ MAX_ARTIFACT_GRAPHS = 512
 MAX_ARTIFACT_ALIASES = 262_144
 
 
+class ArtifactReadinessReference(CollectorModel):
+    kind: Literal["facts", "summary", "api"]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bytes: int = Field(ge=1, le=MAX_ARTIFACT_BYTES)
+    requires_index: bool = False
+
+
+class ArtifactReadinessRequest(CollectorModel):
+    workspace_id: UUID
+    agent_id: UUID
+    objects: list[ArtifactReadinessReference] = Field(min_length=1, max_length=512)
+
+
+class ArtifactReadinessResponse(CollectorModel):
+    # Positional results attest current authority state, not a retention lease.
+    ready: list[Annotated[bool, Field(strict=True)]] = Field(
+        min_length=1, max_length=512
+    )
+
+
 class PreparedGraphSummary(CollectorModel):
     """Small, validated read projection stored separately from graph facts."""
 

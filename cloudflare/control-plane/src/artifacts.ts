@@ -52,6 +52,47 @@ export function completeArtifactUpload(state: State, request: Json) {
   requireThat(updated.rowsWritten === 1, "artifact_claim_expired", 409);
 }
 
+/** Read-only hints: publication must revalidate after expiry/pruning/cleanup. */
+export function artifactReadiness(state: State, request: Json): Json {
+  const completed = new Map<string, Json>();
+  for (const kind of ["facts", "summary", "api"]) {
+    const hashes = [...new Set<string>(request.objects.filter((ref: Json) => ref.kind === kind).map((ref: Json) => ref.sha256))];
+    for (let offset = 0; offset < hashes.length; offset += 50) {
+      const batch = hashes.slice(offset, offset + 50);
+      for (const row of state.sql.exec<{ sha256: string; completion: string }>(
+        `SELECT sha256,completion FROM artifact_upload_claims WHERE kind=? AND sha256 IN (${batch.map(() => "?").join(",")}) AND expires_at>? AND completion IS NOT NULL`,
+        kind, ...batch, Math.floor(Date.now() / 1000)).toArray()) {
+        const completion = JSON.parse(row.completion);
+        if (completion.workspace_id === request.workspace_id) completed.set(`${kind}:${row.sha256}`, completion);
+      }
+    }
+  }
+  const ready = request.objects.map((ref: Json) => {
+    const completion = completed.get(`${ref.kind}:${ref.sha256}`);
+    return Boolean(completion && completion.bytes === ref.bytes && (!ref.requires_index || completion.index));
+  });
+  if (ready.every(Boolean)) return { ready };
+  // Parse retained manifests once per bounded batch, never once per object.
+  const retained = new Map<string, number>(), indexes = new Set<string>();
+  for (const row of state.sql.exec<{ manifest: string }>("SELECT manifest FROM artifact_manifests").toArray()) {
+    for (const graph of expandManifest(JSON.parse(row.manifest)).graphs) {
+      for (const ref of [graph.facts, graph.summary, ...(graph.api_objects ?? [])]) retained.set(`${ref.kind}:${ref.sha256}`, ref.bytes);
+    }
+  }
+  const hashes = request.objects.filter((ref: Json, index: number) => !ready[index] && ref.requires_index
+    && retained.get(`${ref.kind}:${ref.sha256}`) === ref.bytes).map((ref: Json) => ref.sha256);
+  for (let offset = 0; offset < hashes.length; offset += 50) {
+    const batch = hashes.slice(offset, offset + 50);
+    for (const row of state.sql.exec<{ descriptor: string }>(`SELECT descriptor FROM api_methods
+      WHERE json_extract(descriptor,'$.index.sha256') IN (${batch.map(() => "?").join(",")})`, ...batch).toArray()) {
+      const descriptor = JSON.parse(row.descriptor);
+      if (descriptor.publication_index) indexes.add(descriptor.index.sha256);
+    }
+  }
+  return { ready: request.objects.map((ref: Json, index: number) => ready[index]
+    || (retained.get(`${ref.kind}:${ref.sha256}`) === ref.bytes && (!ref.requires_index || indexes.has(ref.sha256)))) };
+}
+
 export interface ArtifactPublicationPlan {
   complete: true;
   releaseClaims: Array<{ kind: string; sha256: string }>;

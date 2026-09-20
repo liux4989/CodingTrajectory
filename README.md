@@ -124,7 +124,9 @@ contain private content/paths and must not be shared**. Requests have 120-second
 per-operation transport timeouts, not a 120-second total-transfer deadline.
 Artifact bodies stream in 64 KiB writes with their original `Content-Length`;
 bytes, hashes and JSON encoding are unchanged (no HTTP chunked encoding).
-There is no internal resume loop or concurrency increase.
+Missing objects upload in waves of at most four, with no internal retry loop.
+After an error, already-started uploads settle before the run stops; the manifest
+is not submitted. SQLite remains on the collector thread and audit writes are serialized.
 
 After any interruption, preserve the directory and reconcile before resuming:
 
@@ -143,11 +145,15 @@ it is never submitted again. Version, sequence, source-watermark or manifest
 disagreements stop for review. This is manifest verification, not full API parity
 or runtime performance qualification.
 
-Uncommitted uploads are conservatively re-completed through the existing
-authenticated immutable-object path: a local successful PUT is not proof that
-its server-side claim is still retained. This may repeat HTTP bodies and take
-time; it does not silently skip claims, truncate data or rewrite existing valid
-objects. Legacy/ad-hoc run directories are not imported automatically. Keep
+The collector checks authority readiness in batches of up to 512 unique references,
+including byte counts and whether an object needs validated index metadata.
+Only unexpired completed claims or retained manifest references qualify; local
+successful PUT receipts alone never justify skipping an upload. Readiness is
+read-only, not a lease: publication revalidates completeness after any expiry or
+pruning. Missing objects follow the unchanged authenticated hash/schema/size and
+completion checks. Deploy the matching Worker before using this collector; an
+unsupported readiness RPC stops the run rather than silently falling back.
+Legacy/ad-hoc run directories are not imported automatically. Keep
 their receipts and reconcile them using their original pinned tooling rather
 than starting a second publication from this command.
 

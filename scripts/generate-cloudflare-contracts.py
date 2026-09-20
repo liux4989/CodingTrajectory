@@ -24,6 +24,7 @@ def main():
         "ct_collector_recover": protocol.CollectorRecoveryRequest,
         "ct_collector_publish_observation": protocol.ObservationRequest,
         "ct_collector_publish_artifacts": artifact_protocol.ArtifactPublicationRequest,
+        "ct_collector_artifact_readiness": artifact_protocol.ArtifactReadinessRequest,
         "compact_publication": artifact_protocol.CompactPublicationRequest,
         "ct_collector_heartbeat": protocol.LeaseHeartbeatRequest,
         "ct_collector_publish_living_observation": protocol.LivingObservationRequest,

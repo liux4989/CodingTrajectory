@@ -79,6 +79,11 @@ export class Workspace extends SqlInstrumentedWorkspace {
 
   artifactClaimProbe(value: any) {
     const sql = this.ctx.storage.sql;
+    if (value.action === "index-facts") {
+      const prior = sql.exec<{ descriptor: string }>("SELECT descriptor FROM api_methods WHERE json_extract(descriptor,'$.index.sha256')=?", value.sha256).toArray();
+      sql.exec("UPDATE api_methods SET descriptor=json_set(descriptor,'$.publication_index',json(?)) WHERE json_extract(descriptor,'$.index.sha256')=?", JSON.stringify(value.completion), value.sha256);
+      return prior.map(row => JSON.parse(row.descriptor).publication_index);
+    }
     if (value.action === "legacy-manifests") {
       for (const row of sql.exec<{ project_id: string; publication_sequence: number; manifest: string }>("SELECT project_id,publication_sequence,manifest FROM artifact_manifests").toArray()) {
         sql.exec("UPDATE artifact_manifests SET manifest=? WHERE project_id=? AND publication_sequence=?",

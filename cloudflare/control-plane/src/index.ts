@@ -4,7 +4,7 @@ import { publicationIndex, readCursor, servePrepared, validateApi } from "./prep
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
-  "ct_collector_publish_observation", "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
+  "ct_collector_publish_observation", "ct_collector_publish_artifacts", "ct_collector_artifact_readiness", "ct_collector_heartbeat", "ct_collector_publish_living_observation"]);
 const READ = new Set(["ct_workspace_snapshot", "ct_legacy_fact_cleanup_status", "ct_artifact_manifest", "ct_artifact_read", "ct_project_inventory_snapshot", "ct_remote_living"]);
 const REPLACE = "ct_workspace_replace";
 const PROTOCOL = "ct.core.v1";

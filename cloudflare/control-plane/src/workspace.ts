@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { expandManifest } from "./artifact-manifest";
 import { authorityFailure, digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
-import { artifactManifests, artifactReadLocator, claimArtifactUpload, completeArtifactUpload, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
+import { artifactManifests, artifactReadiness, artifactReadLocator, claimArtifactUpload, completeArtifactUpload, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { dropEmptyLegacyFactTables, legacyFactTables } from "./legacy-cleanup";
 import { livingRead, livingWrite } from "./living";
@@ -121,6 +121,10 @@ export class Workspace extends DurableObject<Env> {
         request = expandManifest(request);
       }
       validate(method, request);
+      if (method === "ct_collector_artifact_readiness") {
+        requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
+        return { status: 200, body: artifactReadiness(this.state, request) };
+      }
       if (method === "ct_artifact_read") {
         return { status: 200, body: artifactReadLocator(this.state, request) };
       }

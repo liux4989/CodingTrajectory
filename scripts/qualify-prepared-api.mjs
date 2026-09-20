@@ -17,10 +17,10 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value !== null && typeof value === 'object'
   ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}` : JSON.stringify(value);
 const workspace = '00000000-0000-0000-0000-000000000001', agent = '00000000-0000-0000-0000-000000000002';
-const tokens = { owner: 'direct-api-local-owner-token-00000001', collect: 'direct-api-local-collect-token-000001', other: 'direct-api-local-other-token-00000001' };
+const tokens = { owner: 'direct-api-local-owner-token-00000001', read: 'direct-api-local-reader-token-0000001', collect: 'direct-api-local-collect-token-000001', other: 'direct-api-local-other-token-00000001' };
 const principals = Object.fromEntries(Object.entries(tokens).map(([role, token]) => [sha(token), {
   workspace_id: role === 'other' ? '00000000-0000-0000-0000-000000000009' : workspace, agent_id: agent,
-  roles: role === 'collect' ? ['collect'] : ['owner'],
+  roles: ['collect', 'read'].includes(role) ? [role] : ['owner'],
 }]));
 const publicationBenchmark = ['--publication', '--publication-timing', '--publication-baseline'].includes(process.argv[3]);
 const qualifyPublication = process.argv[3] === '--publication';
@@ -64,6 +64,7 @@ const local = async (path, value) => (await mf.dispatchFetch(`http://local/__ben
 const claimProbe = (ref, action, completion) => local('claim-probe', { ...ref, action, completion });
 const internal = (method, ref) => local('internal', { method: `ct_internal_artifact_${method}`, request: { workspace_id: workspace, ...ref } });
 const objectKey = ref => `workspaces/${workspace}/artifacts/${ref.kind}/${ref.sha256}`;
+const readiness = async objects => (await rpc('ct_collector_artifact_readiness', { agent_id: agent, objects })).ready;
 async function waitGate(name) {
   for (let attempt = 0; attempt < 1000; attempt++) {
     if ((await (await mf.dispatchFetch(`http://local/__benchmark/${name}`)).json()).entered) return;
@@ -93,10 +94,32 @@ async function qualifyReceiptsBefore(publication) {
   const metadata = { workspace_id: workspace, kind: ref.kind, sha256: ref.sha256 };
   const original = (await claimProbe(ref))[0];
   assert.ok(original.completion);
+  assert.deepEqual(await readiness([ref, { ...ref, bytes: ref.bytes + 1 }, { ...ref, kind: 'facts' }]), [true, false, false]);
+  assert.deepEqual((await claimProbe(ref))[0], original); // Readiness never renews a claim.
+  const envelope = { protocol: 'ct.core.v1', method: 'ct_collector_artifact_readiness', params: { workspace_id: workspace, agent_id: agent, objects: [ref] } };
+  await post('/v1/core', envelope, 'read', 403);
+  await post('/v1/core', envelope, 'other', 403);
+  assert.deepEqual((await post('/v1/core', envelope, 'collect')).data.ready, [true]);
+  assert.deepEqual((await post('/v1/core', { ...envelope, params: { ...envelope.params, workspace_id: '00000000-0000-0000-0000-000000000009' } }, 'other')).data.ready, [false]);
+  await post('/v1/core', { ...envelope, params: { ...envelope.params, objects: Array(513).fill(ref) } }, 'owner', 400);
+  const batch = Array.from({ length: 512 }, (_, n) => n % 2 ? ref : { ...ref, sha256: n.toString(16).padStart(64, '0') });
+  const r2Before = await (await mf.dispatchFetch('http://local/__benchmark/r2')).json();
+  const checked = await rpc('ct_collector_artifact_readiness', { agent_id: agent, objects: batch });
+  assert.deepEqual(checked.ready, batch.map((_, n) => Boolean(n % 2)));
+  assert.ok(Object.values(checked.__benchmark.groups).every(group => group.rowsWritten === 0));
+  assert.deepEqual(await (await mf.dispatchFetch('http://local/__benchmark/r2')).json(), r2Before);
+  const indexRef = graph.api_methods.find(method => method.index).index;
+  const indexClaim = (await claimProbe(indexRef))[0];
+  await claimProbe(indexRef, 'completion', { ...JSON.parse(indexClaim.completion), index: null });
+  assert.deepEqual(await readiness([indexRef, { ...indexRef, requires_index: true }]), [true, false]);
+  await claimProbe(indexRef, 'completion', JSON.parse(indexClaim.completion));
+  assert.deepEqual(await readiness([{ ...indexRef, requires_index: true }]), [true]);
   // An R2 object alone, or a pending/expired claim, is not readiness.
   await claimProbe(ref, 'delete');
+  assert.deepEqual(await readiness([ref]), [false]);
   await rejectPublication(publication, 'artifact_upload_incomplete');
   const pending = await internal('claim', ref);
+  assert.deepEqual(await readiness([ref]), [false]);
   await rejectPublication(publication, 'artifact_upload_incomplete');
   for (const customMetadata of [{ ...metadata, workspace_id: 'other' }, { ...metadata, kind: 'facts' }, { ...metadata, sha256: 'f'.repeat(64) }]) {
     await bucket.put(key, body, { customMetadata });
@@ -119,10 +142,12 @@ async function qualifyReceiptsBefore(publication) {
   assert.equal((await claimProbe(ref))[0].completion, completed.completion);
   for (const completion of [{ ...JSON.parse(completed.completion), bytes: ref.bytes + 1 }, { ...JSON.parse(completed.completion), workspace_id: 'other' }]) {
     await claimProbe(ref, 'completion', completion);
+    assert.deepEqual(await readiness([ref]), [false]);
     await rejectPublication(publication, 'artifact_upload_incomplete');
   }
   await claimProbe(ref, 'completion', JSON.parse(completed.completion));
   await local('claim-expiry', { ...ref, expiresAt: 0 });
+  assert.deepEqual(await readiness([ref]), [false]);
   await rejectPublication(publication, 'artifact_upload_incomplete');
   const renewed = await internal('claim', ref);
   assert.notEqual(renewed.body.token, completed.token);
@@ -182,6 +207,13 @@ async function qualifyReceiptsBefore(publication) {
 async function qualifyReceiptsAfter(publication, published) {
   const ref = publication.graphs[0].summary;
   assert.deepEqual(await claimProbe(ref), []);
+  const indexRef = publication.graphs[0].api_methods.find(method => method.index).index;
+  assert.deepEqual(await readiness([ref, { ...indexRef, requires_index: true }]), [true, true]);
+  const priorFacts = await claimProbe(indexRef, 'index-facts', null);
+  assert.deepEqual(await readiness([indexRef, { ...indexRef, requires_index: true }]), [true, false]);
+  await claimProbe(indexRef, 'index-facts', priorFacts[0]);
+  assert.deepEqual(await readiness([{ ...indexRef, requires_index: true }]), [true]);
+  console.log('PASS batched readiness: auth/isolation, 512 bound, bytes/kind/index metadata, missing/pending/expired claims, retained and legacy indexes');
   const replay = await rpc('ct_collector_publish_artifacts', publication, 'publication:0');
   delete replay.__benchmark; delete published.__benchmark;
   assert.deepEqual(replay, published);
@@ -221,11 +253,14 @@ async function qualifyReceiptsAfter(publication, published) {
   assert.ok(await bucket.head(objectKey(pendingRef)));
   await mf.dispatchFetch('http://local/__benchmark/object-gate', { method: 'DELETE' });
   await pendingUpload;
+  assert.deepEqual(await readiness([pendingRef]), [true]);
   await publish();
   assert.ok(await bucket.head(objectKey(pendingRef))); // Completed uncommitted claim also protected.
   await local('claim-expiry', { ...pendingRef, expiresAt: 0 });
   await publish();
   assert.equal(await bucket.head(objectKey(pendingRef)), null);
+  assert.deepEqual(await readiness([pendingRef]), [false]);
+  await rejectPublication(incomplete, 'artifact_upload_incomplete'); // A formerly ready hint is no lease.
   // A duplicate claim cannot downgrade completion; late completion cannot resurrect release.
   await upload('summary', stable(fixture.summary));
   await local('object-gate', { operation: 'get', key: objectKey(ref), fail: false });
