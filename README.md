@@ -79,6 +79,46 @@ Do not roll back to a pre-retirement Worker: it would recreate the old tables.
 Use `node scripts/qualify-legacy-fact-cleanup.mjs` for disposable workerd/SQLite
 qualification of table guards, target isolation, gate teardown, and retry.
 
+## Staging deployment CI
+
+`.github/workflows/deploy-staging.yml` is manual-only and deploys code, not session
+data. It checks the full supplied commit SHA against the selected `main` ref,
+installs locked dependencies with pinned actions/tool versions, runs metric and
+prepared-publication qualifications locally, and builds the staging Worker once.
+The deploy job verifies the immutable artifact's hashes and source/configuration
+identity, then uploads that same bundle with `--no-bundle --env staging --strict`.
+It records source/tree/tool versions, bundle checksums, deployment output and
+before/after remote status in run artifacts retained for 30 days. This makes the
+promoted artifact identifiable; it does not claim hermetic, bit-for-bit rebuilds
+across GitHub runner image updates or certify live application/data behavior.
+
+One-time repository setup (not performed by adding the workflow):
+
+1. Create the GitHub Environment **`staging`**. Require a reviewer, prevent
+   self-review and restrict deployment branches to `main`. An environment name
+   in YAML alone does **not** enforce approval; configure protection before
+   adding credentials. Availability depends on the repository's GitHub plan.
+2. Add environment-only secrets `CLOUDFLARE_ACCOUNT_ID` and
+   `CLOUDFLARE_API_TOKEN`. Scope the token to the existing staging account and
+   the permissions needed to deploy/read the existing Worker and its bindings.
+   Do not add unrelated account-administration privileges or copy collector/
+   principal credentials into CI. Existing `CT_PRINCIPALS` and `CT_CURSOR_KEY`
+   stay in Cloudflare; token capabilities may be broader than this workflow.
+3. After the reviewed workflow/source reaches `main`, choose **Actions → Deploy
+   control plane to staging → Run workflow**, select `main` and supply its full
+   reviewed SHA. Inspect the build provenance and approve the environment job.
+   Do not overlap this with a manual deployment or an active collector run;
+   workflow concurrency only serializes this workflow, not external operators.
+
+Neither pushes nor pull requests deploy. Workflow reruns are rejected, including
+“rerun failed jobs”: a failed/timeout deployment may already have committed.
+Preserve the evidence and reconcile remote status read-only before approving a
+new dispatch. There is no automatic rollback; SQL changes may be roll-forward
+only. The workflow applies the reviewed staging Wrangler configuration but does
+not provision credentials, publish private sessions, replay outboxes, run remote
+benchmarks, or switch production traffic. Collector publication and bounded
+correct-workspace read-back remain separately authorized operations.
+
 ## Docs
 
 - [Documentation index](docs/README.md)
