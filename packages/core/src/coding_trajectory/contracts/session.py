@@ -156,11 +156,13 @@ class SessionModelUsageRequest(SessionScopedRequest):
 
 
 class SessionRequestUsageRequest(SessionScopedRequest):
-    pass
+    limit: int = Field(default=200, ge=1, le=1000)
+    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class SessionToolUsageRequest(SessionScopedRequest):
-    pass
+    limit: int = Field(default=200, ge=1, le=1000)
+    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class SessionEventsRequest(SessionScopedRequest):
@@ -386,7 +388,7 @@ class SessionModelUsageResponse(ContractModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class SessionRequestUsageResponse(ContractModel):
+class SessionRequestUsageResponse(PagedResponse):
     root_session_id: str
     request_count: int = 0
     usage: dict[str, Any] = Field(default_factory=dict)
@@ -395,7 +397,7 @@ class SessionRequestUsageResponse(ContractModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class SessionToolUsageResponse(ContractModel):
+class SessionToolUsageResponse(PagedResponse):
     root_session_id: str
     tool_item_count: int = 0
     tool_output_chars: int = 0

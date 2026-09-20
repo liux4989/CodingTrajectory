@@ -158,12 +158,12 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.request_usage",
-            4,
+            5,
             SessionRequestUsageRequest,
             SessionRequestUsageResponse,
         ),
         ServiceContract(
-            "session.tool_usage", 4, SessionToolUsageRequest, SessionToolUsageResponse
+            "session.tool_usage", 5, SessionToolUsageRequest, SessionToolUsageResponse
         ),
         ServiceContract(
             "session.events",

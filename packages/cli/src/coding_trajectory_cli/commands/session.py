@@ -81,7 +81,11 @@ def _session_usage_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _session_request_usage_params(args: argparse.Namespace) -> dict[str, Any]:
-    return _session_usage_params(args)
+    return {
+        **_session_usage_params(args),
+        "limit": args.limit,
+        **({"cursor": args.cursor} if args.cursor else {}),
+    }
 
 
 def _session_events_params(args: argparse.Namespace) -> dict[str, Any]:
@@ -1273,6 +1277,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         metavar="TURN_ID",
         default=None,
         help="Limit request usage to one turn.",
+    )
+    session_request_usage.add_argument(
+        "--limit", type=int, default=200, help="Maximum request rows per page (1–1000)."
+    )
+    session_request_usage.add_argument(
+        "--cursor", default=None, help="Continue with the previous page's next_cursor."
     )
     add_json_output_flag(session_request_usage)
     session_request_usage.set_defaults(

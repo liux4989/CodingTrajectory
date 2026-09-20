@@ -203,3 +203,80 @@ atomic oversized-row rejection and the existing receipt/cleanup races and API
 reads. Collector qualification covers exact UTF-8 ingress boundaries, rejection
 before uploads, and old-receipt recovery without replay. These checks are local;
 this follow-up does not deploy, retry publication or alter staging data.
+
+## Follow-up: oversized prepared results
+
+Local replay of the preserved corpus isolated all 76 errors: 32 event indexes
+(71,307–558,042 B) and 10 item indexes (66,390–160,472 B) exceeded the 64 KiB
+index bound. No individual event/item record, topology or pack failed.
+The other errors were 27 complete tool-usage responses (20 session, 7 turn)
+and 7 complete session request-usage responses, exceeding the 440 KiB result
+bound. The largest complete tool response was 2,721,779 B.
+
+Large item/event indexes now use `mode: page_columns`: their small root retains
+sizes and pack references, while `posting_objects` references separate immutable
+lookup columns (`id`, `item_id`, `turn_id`, `types`, `status`, `tool_name`).
+Only columns selected by request filters are fetched. Upload validation checks
+column semantics and publication retains every dependency. Unfiltered reads
+still need at most root + base + two packs (4 objects); filtered reads may use
+up to 10 objects. The 768 KiB total fetched-byte limit, 64 KiB root limit and
+448 KiB response/object limit remain. Item/event packs target 128 KiB to leave
+room for metadata; individually larger existing records still have the original
+256 KiB pack allowance. Selection budgets actual pack bytes before fetching.
+
+`session.request_usage` and `session.tool_usage` are v5 paged methods, accepting
+`limit` (default 200, maximum 1000) and a signed `cursor`. Aggregate counts,
+usage, costs, warnings and policy remain complete and repeat on each page.
+Append `requests`, or independently append `tool_items` and
+`item_real_token_costs`, until `next_cursor` is null. Tool arrays are paired only
+by position internally: their membership, order and unequal lengths are kept,
+not joined or deduplicated by item ID. `total`/`returned` count these detail
+positions (the maximum of the two array lengths), not aggregate tool count.
+`tool_item_count` keeps its original meaning. Pagination reserves space for
+cursor, missing IDs and page metadata before selecting rows.
+
+Preparation v4 invalidates cached v3 API views. Canonical facts, metric builders
+and their expected values are unchanged. Existing v3 manifests remain readable,
+but usage v4 descriptors cannot satisfy v5 requests. Reprepare and republish to
+make those views available; deployment alone does not repair old descriptors.
+The collector's existing obsolete-outbox guard stops old pending preparations
+without sending them. Preserve the old database/receipts and use fresh disposable
+collector state after reconciliation, rather than rewriting an uncertain outbox.
+No rollout or remote reconciliation is performed by this local change.
+
+The executable prepared-API qualifier adds `--shape index-heavy` for large
+indexes and asymmetric usage collections. It checks full ordered reconstruction,
+canonical aggregate equality, filters, sparse IDs, pagination/cursor binding,
+malformed column uploads, missing dependencies and maximum-size usage pages.
+Finite object and fetch bounds remain intentional; this does not promise
+unlimited graph sizes or silently truncate oversized future records.
+
+The private local replay with the final reader prepared all 76 formerly failing
+methods and passed 764 scenarios / 10,441 reader calls, including `limit=1000`.
+Maximum measured fetch was 694,050 B / 9 reads; maximum response was 446,619 B
+(limit 450,560 B), root 34,138 B and posting object 298,443 B. Full array order
+and noncollection totals matched the preserved inputs. The original database
+hash remained unchanged. This is Python corpus evidence, not a deployed Worker
+measurement. The local Worker index-heavy publication qualification separately
+passed column/filter parity, maximum usage pages and receipt/cleanup adversarial
+checks. Normal producer qualification, collector (30), connection (15), npm
+check, Ruff and all four direct metric baselines also passed.
+
+The private verifier subsequently completed all 102 graphs / 175 sources from
+preserved facts in 105.848 seconds: 7,278 methods, 18,640 API object references,
+and zero error descriptors. All 2,428 usage inputs matched array order and
+noncollection totals across 2,619 pages at limit 200; all 34 saved canonical
+usage inputs also matched the current producer bases. Full-corpus maximum root
+was 64,295 B, posting object 298,443 B, pack 262,140 B and references/graph 1,822.
+
+The exact sorted-object-order collector RPC is 1,799,761 B, leaving 1,345,967 B
+under the unchanged 3 MiB ingress limit (SHA256
+`dc36e7336d408fa6ed6e9cad1c5f72747eaaef53c2995cbab54633893b6c9d97`).
+Projected compact storage is 1,747,078 B, leaving 345,978 B under the 2,093,056 B
+row guard (SHA256
+`fc9f4d67954597e8d8b65105ab90a3f624910bd6aab75ecf87e4e4a62ee1f1fd`).
+The storage projection uses snapshot 999 and published_at
+`2026-09-20T09:30:00.000Z`; both compact graph expansions matched their originals.
+These are local corpus measurements, not remote runtime certification. Network
+was blocked and the original database, cache, outbox and accepted publication
+were untouched. No private scratch or session content was transferred.

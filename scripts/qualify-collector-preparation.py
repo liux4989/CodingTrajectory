@@ -73,7 +73,7 @@ def qualify_semantic_details(graph, root: Path) -> None:
     ]
     cache_path = root / "semantic-preparation.sqlite"
     prepared = prepare_graph(graph, cache_path=cache_path)
-    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v3"
+    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v4"
     assert prepared.summary.preparation_version == ARTIFACT_PREPARATION_VERSION
     facts = prepared.publication()
     reconstructed = session_graph_from_fact_index(

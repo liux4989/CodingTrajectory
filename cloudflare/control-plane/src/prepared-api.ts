@@ -4,18 +4,27 @@ import { decode, digest, encode, Fault, Json, requireThat, stable, State, valida
 export const API_VERSIONS: Record<string, number> = {
   "project.list": 5, "project.sessions": 5, "session.overview": 4, "session.summary": 3,
   "session.tree": 4, "session.stats": 4, "session.usage": 4, "session.model_usage": 4,
-  "session.request_usage": 4, "session.tool_usage": 4, "graph.stats": 4, "graph.usage": 4,
+  "session.request_usage": 5, "session.tool_usage": 5, "graph.stats": 4, "graph.usage": 4,
   "graph.overview": 4, "session.items": 5, "session.events": 5, "living.sessions": 3,
 };
 const SCHEMA = "ct.prepared-api.v1";
+const POSTING_COLUMNS = ["id", "item_id", "turn_id", "types", "status", "tool_name"];
+const PAGE_FIELDS = ["turns", "items", "events", "requests", "tool_usage"];
 /** Validate index semantics once at upload; retain only publication dependencies. */
 export function publicationIndex(value: Json, length: number): Json | null {
-  if (!("mode" in value)) return null;
+  if (!("mode" in value) && !("posting" in value)) return null;
   const valid = (condition: unknown) => requireThat(condition, "invalid_prepared_reference");
-  valid(length <= 64 * 1024 && value.schema_version === SCHEMA);
+  valid(length <= ("posting" in value ? 448 : 64) * 1024 && value.schema_version === SCHEMA);
   valid(Number.isSafeInteger(value.method_version) && API_VERSIONS[value.method] === value.method_version && typeof value.scope === "string"
     && (value.turn_id === null || typeof value.turn_id === "string")
     && typeof value.source_manifest_sha256 === "string" && /^[0-9a-f]{64}$/.test(value.source_manifest_sha256));
+  if ("posting" in value) {
+    valid(POSTING_COLUMNS.includes(value.posting) && Number.isSafeInteger(value.total) && value.total >= 0
+      && value.values && typeof value.values === "object" && !Array.isArray(value.values));
+    for (const positions of Object.values(value.values) as number[][]) valid(Array.isArray(positions)
+      && positions.every((p, i) => Number.isSafeInteger(p) && p >= 0 && p < value.total && (!i || positions[i - 1] < p)));
+    return null;
+  }
   const ref = (reference: Json, bound: number) => {
     valid(reference?.kind === "api" && typeof reference.sha256 === "string"
       && /^[0-9a-f]{64}$/.test(reference.sha256) && Number.isSafeInteger(reference.bytes)
@@ -25,7 +34,7 @@ export function publicationIndex(value: Json, length: number): Json | null {
   let references: Json[];
   if (value.mode === "exact") references = [ref(value.result, 440 * 1024)];
   else {
-    valid(value.mode === "page" && ["turns", "items", "events"].includes(value.field));
+    valid(["page", "page_columns"].includes(value.mode) && PAGE_FIELDS.includes(value.field));
     valid(Number.isSafeInteger(value.total) && value.total >= 0 && Array.isArray(value.sizes)
       && value.sizes.length === value.total && value.sizes.every((n: number) => Number.isSafeInteger(n) && n > 0));
     valid(Array.isArray(value.packs));
@@ -37,6 +46,13 @@ export function publicationIndex(value: Json, length: number): Json | null {
       references.push(ref(pack.object, 256 * 1024));
     }
     valid(end === value.total);
+    if (value.mode === "page_columns") {
+      valid(["items", "events"].includes(value.field) && value.posting_objects
+        && typeof value.posting_objects === "object" && !Array.isArray(value.posting_objects)
+        && Object.keys(value.posting_objects).every(name => POSTING_COLUMNS.includes(name)));
+      for (const reference of Object.values(value.posting_objects)) references.push(ref(reference as Json, 448 * 1024));
+      valid(value.postings && Object.keys(value.postings).length === 0);
+    }
     valid(value.postings && typeof value.postings === "object" && !Array.isArray(value.postings));
     for (const entries of Object.values(value.postings)) {
       valid(entries && typeof entries === "object" && !Array.isArray(entries));
@@ -174,7 +190,7 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
     scope: descriptor.scope, turn_id: descriptor.turn_id, source_manifest_sha256: identity.source_manifest_sha256 };
   async function load(ref: Json, bound: number): Promise<Json> {
     requireThat(ref?.kind === "api" && /^[0-9a-f]{64}$/.test(ref.sha256) && Number.isSafeInteger(ref.bytes) && ref.bytes > 0, "prepared_object_corrupt", 503);
-    requireThat(ref.bytes <= bound && ++reads <= 4 && fetched + ref.bytes <= 768 * 1024, "remote_result_too_large", 413);
+    requireThat(ref.bytes <= bound && ++reads <= 10 && fetched + ref.bytes <= 768 * 1024, "remote_result_too_large", 413);
     const object = await env.ARTIFACTS.get(artifactKey(identity.workspace_id, "api", ref.sha256));
     requireThat(object, "prepared_object_missing", 503);
     requireThat(object.size === ref.bytes, "prepared_object_corrupt", 503);
@@ -190,9 +206,18 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
   }
   const index = await load(descriptor.index, 64 * 1024);
   if (index.mode === "exact") return (await load(index.result, 440 * 1024)).data;
-  requireThat(index.mode === "page" && ["turns", "items", "events"].includes(index.field), "prepared_object_corrupt", 503);
+  requireThat(["page", "page_columns"].includes(index.mode) && PAGE_FIELDS.includes(index.field), "prepared_object_corrupt", 503);
   requireThat(Array.isArray(index.packs) && index.postings && typeof index.postings === "object" && !Array.isArray(index.postings), "prepared_object_corrupt", 503);
   const base = (await load(index.topology, 128 * 1024)).data;
+  if (index.mode === "page_columns") {
+    const needed = new Set(Object.entries(params).filter(([, value]) => value != null)
+      .map(([name]) => ["item_ids", "event_ids"].includes(name) ? "id" : name));
+    for (const [name, reference] of Object.entries(index.posting_objects)) if (needed.has(name)) {
+      const column = await load(reference as Json, 448 * 1024);
+      requireThat(column.posting === name && column.total === index.total, "prepared_object_corrupt", 503);
+      index.postings[name] = column.values;
+    }
+  }
   if (index.field === "turns") base.project = { ...base.project, project_id: locator.project_id };
   const total = index.total;
   requireThat(Number.isSafeInteger(total) && total >= 0 && Array.isArray(index.sizes) && index.sizes.length === total && index.sizes.every((n: number) => Number.isSafeInteger(n) && n > 0), "prepared_object_corrupt", 503);
@@ -218,6 +243,7 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
   const missing = new Set<string>();
   for (const name of ["turn_id", "item_id", "item_ids", "event_ids", "types", "status", "tool_name", "project_id", "project_name", "agent_vendor", "modified_since"]) {
     if (params[name] == null) continue;
+    if (name === "turn_id" && ["requests", "tool_usage"].includes(index.field)) continue;
     const key = ["item_ids", "event_ids"].includes(name) ? "id" : name;
     const values = Array.isArray(params[name]) ? params[name] : [params[name]];
     const matches = new Set<number>();
@@ -241,9 +267,13 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
   let size = 2;
   // Key order affects signatures, not JSON byte length. Keep canonical
   // serialization for cursor bindings, but use native JSON for size checks.
-  const budget = Math.min(440 * 1024 - new TextEncoder().encode(JSON.stringify(base)).length, older ? 320 * 1024 : Infinity);
+  // Reserve the bounded cursor, missing-ID strings and page keys/counters.
+  const paginationBytes = 4096 + new TextEncoder().encode(JSON.stringify([...missing])).length + 512;
+  const budget = Math.min(440 * 1024 - new TextEncoder().encode(JSON.stringify(base)).length - paginationBytes, older ? 320 * 1024 : Infinity);
   for (const p of candidates) {
-    if (chosen.length === params.limit || size + index.sizes[p] + 1 > budget || (!packs.has(packFor[p]) && packs.size === 2)) break;
+    const nextPacks = new Set([...packs, packFor[p]]);
+    if (chosen.length === params.limit || size + index.sizes[p] + 1 > budget || nextPacks.size > 2
+      || fetched + [...nextPacks].reduce((sum, n) => sum + index.packs[n].object.bytes, 0) > 768 * 1024) break;
     chosen.push(p); packs.add(packFor[p]); size += index.sizes[p] + 1;
   }
   requireThat(!candidates.length || chosen.length, "remote_result_too_large", 413);
@@ -262,6 +292,12 @@ export async function servePrepared(env: Env, locator: Json, method: string, par
   const more = chosen.length < candidates.length;
   const next = more ? await signCursor({ ...binding, position: older ? chosen[0] : chosen[chosen.length - 1] + 1, expires: Math.floor(Date.now() / 1000) + 86400 }, env.CT_CURSOR_KEY) : null;
   const result = { ...base, [index.field]: chosen.map(p => rows.get(p)) };
+  if (index.field === "tool_usage") {
+    const details = result.tool_usage;
+    delete result.tool_usage;
+    result.tool_items = details.filter((row: Json) => row.tool_item !== null).map((row: Json) => row.tool_item);
+    if (result.item_real_token_costs !== null) result.item_real_token_costs = details.filter((row: Json) => row.item_real_token_cost !== null).map((row: Json) => row.item_real_token_cost);
+  }
   if (older) result.page = { direction: "older", requested_limit: params.limit, start_ordinal: chosen[0] ?? 0,
     end_ordinal_exclusive: chosen.length ? chosen[chosen.length - 1] + 1 : 0, returned: chosen.length, total, has_more: more, next_cursor: next };
   else Object.assign(result, { total: positions.length, returned: chosen.length, next_cursor: next, unresolved_ids: [...missing].sort() });

@@ -45,7 +45,9 @@ def main():
     parser.add_argument("--benchmark-output", type=Path)
     parser.add_argument("--fixture-output", type=Path)
     parser.add_argument(
-        "--shape", choices=("representative", "near-budget"), default="near-budget"
+        "--shape",
+        choices=("representative", "near-budget", "index-heavy"),
+        default="near-budget",
     )
     args = parser.parse_args()
     benchmark_shape = (
@@ -155,6 +157,14 @@ def main():
             turn.items[3].event_ids = [event.event_id]
             turn.event_ids = [event.event_id]
             session.events.append(event)
+            if args.shape == "index-heavy":
+                for offset in range(60):
+                    extra = event.model_copy(
+                        update={"event_id": UUID(int=50000 + ordinal * 60 + offset)}
+                    )
+                    session.events.append(extra)
+                    turn.event_ids.append(extra.event_id)
+                    turn.items[offset % 3].event_ids.append(extra.event_id)
             session.turns.append(turn)
         build_published_fact_set(
             graph
@@ -167,6 +177,59 @@ def main():
         )
         assert prepare_graph(graph) == prepared
         api = prepared.api
+        usage_cases = []
+        if args.shape == "index-heavy":
+            # Asymmetric independent collections expose accidental ID joins,
+            # dropped cost-only rows and ordering changes in both readers.
+            scope = str(UUID(int=900000))
+            for method, data in [
+                (
+                    "session.request_usage",
+                    {
+                        "root_session_id": scope,
+                        "request_count": 701,
+                        "usage": {"input_tokens": 245350},
+                        "warnings": [],
+                        "requests": [
+                            {
+                                "sequence": i,
+                                "usage": {"input_tokens": i},
+                                "detail": "雪" * 300,
+                            }
+                            for i in range(701)
+                        ],
+                    },
+                ),
+                (
+                    "session.tool_usage",
+                    {
+                        "root_session_id": scope,
+                        "tool_item_count": 531,
+                        "tool_output_chars": 159300,
+                        "tool_output_original_tokens": 0,
+                        "warnings": [],
+                        "attribution_policy": {},
+                        "tool_items": [
+                            {"item_id": str(i), "detail": "雪" * 300}
+                            for i in range(531)
+                        ],
+                        "item_real_token_costs": [
+                            {"item_id": str(1000 - i), "cost": i, "detail": "x" * 600}
+                            for i in range(877)
+                        ],
+                    },
+                ),
+            ]:
+                api.prepare(
+                    method,
+                    scope,
+                    base=data,
+                    source_digest=prepared.summary.fact_set_digest,
+                )
+                assert not api.methods[-1].error
+                usage_cases.append(
+                    {"method": method, "params": {"session_id": scope}, "data": data}
+                )
         identity = save_local_view(api, prepared.summary.fact_set_digest)
         fixture = {
             "root": str(session.session_id),
@@ -179,6 +242,127 @@ def main():
                 m.method: service_contract(m.method).version for m in api.methods
             },
         }
+        from coding_trajectory.control_plane.published_facts import FactIndex
+        from coding_trajectory.service.handlers import SERVICE_HANDLERS, ServiceContext
+        from coding_trajectory.service.store import IndexCache
+
+        context = ServiceContext(
+            FactIndex.from_rows(prepared.rows),
+            True,
+            Path.cwd(),
+            "qualification",
+            IndexCache(),
+        )
+        if args.shape == "index-heavy":
+            fixture["column_queries"] = []
+            descriptor = next(m for m in api.methods if m.method == "session.events")
+            assert (
+                json.loads(api.objects[descriptor.index.sha256])["mode"]
+                == "page_columns"
+            )
+            for filters in [
+                {},
+                {"turn_id": str(session.turns[0].turn_id)},
+                {
+                    "event_ids": [
+                        str(UUID(int=30000)),
+                        str(UUID(int=50000)),
+                        str(UUID(int=50061)),
+                        str(UUID(int=999999)),
+                    ]
+                },
+                {"item_id": str(session.turns[0].items[0].item_id)},
+                {
+                    "turn_id": str(session.turns[0].turn_id),
+                    "types": ["tool.call.failed"],
+                    "tool_name": "shell_command",
+                },
+            ]:
+                params = {"session_id": str(session.session_id), **filters}
+                expected = json.loads(
+                    encoded(
+                        SERVICE_HANDLERS["session.events"](
+                            {**params, "limit": 2**31 - 1}, context
+                        )
+                    )
+                )["events"]
+                cursor, collected = None, []
+                while True:
+                    fetched = []
+
+                    def fetch_column(key, fetched=fetched):
+                        body = api.objects[key].encode()
+                        fetched.append(len(body))
+                        return body
+
+                    page = read_prepared(
+                        descriptor,
+                        {**params, "limit": 41, "cursor": cursor},
+                        identity=identity,
+                        fetch=fetch_column,
+                        signing_key=b"k" * 32,
+                    )
+                    assert (
+                        len(fetched) <= (10 if filters else 4)
+                        and sum(fetched) <= 768 * 1024
+                    )
+                    collected.extend(page["events"])
+                    assert page["total"] == len(expected)
+                    cursor = page["next_cursor"]
+                    if cursor is None:
+                        break
+                assert collected == expected
+                fixture["column_queries"].append({"params": params, "events": expected})
+        fixture["usage_expected"] = usage_cases
+        for method in ("session.request_usage", "session.tool_usage"):
+            for turn_id in (None, str(session.turns[-1].turn_id)):
+                params = {
+                    "session_id": str(session.session_id),
+                    **({"turn_id": turn_id} if turn_id else {}),
+                }
+                expected = json.loads(
+                    encoded(SERVICE_HANDLERS[method](params, context))
+                )
+                method_descriptor = next(
+                    m
+                    for m in api.methods
+                    if m.method == method and m.turn_id == turn_id
+                )
+                fields = (
+                    ["requests"]
+                    if method == "session.request_usage"
+                    else ["tool_items", "item_real_token_costs"]
+                )
+                collected = {
+                    field: [] for field in fields if expected.get(field) is not None
+                }
+                cursor = None
+                while True:
+                    result = read_prepared(
+                        method_descriptor,
+                        {**params, "limit": 37, "cursor": cursor},
+                        identity=identity,
+                        fetch=lambda key: api.objects[key].encode(),
+                        signing_key=b"k" * 32,
+                    )
+                    service_contract(method).validate_response(result)
+                    for field in collected:
+                        collected[field].extend(result[field])
+                    assert {
+                        k: v
+                        for k, v in result.items()
+                        if k
+                        not in fields
+                        + ["total", "returned", "next_cursor", "unresolved_ids"]
+                    } == {k: v for k, v in expected.items() if k not in fields}
+                    cursor = result["next_cursor"]
+                    if cursor is None:
+                        break
+                for field, rows in collected.items():
+                    assert rows == expected[field]
+                fixture["usage_expected"].append(
+                    {"method": method, "params": params, "data": expected}
+                )
         expanded_api = {
             "api_methods": fixture["api"]["methods"],
             "api_objects": [

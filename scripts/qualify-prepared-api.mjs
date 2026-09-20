@@ -148,6 +148,20 @@ async function qualifyReceiptsBefore(publication) {
     assert.equal(response.status, 400, await response.text());
     assert.deepEqual(await claimProbe({ kind: 'api', sha256: hash }), []);
   }
+  const columnIndex = graph.api_methods.map(m => m.index && JSON.parse(fixture.api.objects[m.index.sha256])).find(i => i?.mode === 'page_columns');
+  if (columnIndex) {
+    const ref = Object.values(columnIndex.posting_objects)[0];
+    await rejectPublication(changed(p => p.graphs[0].api_objects = p.graphs[0].api_objects.filter(r => r.sha256 !== ref.sha256)), 'invalid_prepared_reference', 400);
+    const column = JSON.parse(fixture.api.objects[ref.sha256]);
+    for (const value of [{ ...column, posting: 'unknown' }, { ...column, values: { invalid: [column.total] } },
+      { ...column, values: { invalid: [1, 0] } }, { ...columnIndex, posting_objects: { unknown: ref } }]) {
+      const body = stable(value), hash = sha(body);
+      const response = await mf.dispatchFetch(`http://local/v1/artifacts/api/${hash}`, {
+        method: 'PUT', headers: { authorization: `Bearer ${tokens.owner}` }, body });
+      assert.equal(response.status, 400, await response.text());
+      assert.deepEqual(await claimProbe({ kind: 'api', sha256: hash }), []);
+    }
+  }
   // A failed PUT leaves a pending fence, never a completion.
   const failedBody = stable({ ...fixture.facts, qualification: 'failed-put' });
   const failedRef = { kind: 'facts', sha256: sha(failedBody), bytes: Buffer.byteLength(failedBody) };
@@ -366,6 +380,18 @@ async function main() { try {
   assert.equal(events.data.events.length, 1);
   assert.equal(events.data.events[0].item_id, detail.data.items[0].item_id);
   assert.equal(events.data.events[0].type, 'tool.call.failed');
+  for (const expected of fixture.column_queries ?? []) {
+    let cursor = null;
+    const collected = [];
+    do {
+      const page = (await api('session.events', { ...expected.params, limit: 41, cursor, view_manifest_sha256: hash })).data;
+      assert.equal(page.total, expected.events.length);
+      collected.push(...page.events);
+      cursor = page.next_cursor;
+    } while (cursor);
+    assert.deepEqual(collected, expected.events);
+  }
+  if (fixture.column_queries) console.log('PASS large column index: complete pages, filtered totals/order, sparse IDs and combined filters');
   let page = first.data, seen = page.turns.map(row => row.global_ordinal);
   assert.equal(Boolean(page.page.next_cursor), fixture.benchmark?.shape !== 'representative');
   const cursor = page.page.next_cursor;
@@ -407,10 +433,23 @@ async function main() { try {
   assert.equal(living.coverage.evaluated_at, continuation.coverage.evaluated_at);
   await api('living.sessions', { through: living.through + 'x' }, 'owner', 400, 3);
   await api('living.sessions', { through: living.through }, 'other', 400, 3);
-  // The exact tool ledger for 776 long-command items exceeds the unpaged
-  // result bound. Its independently scoped one-turn ledger remains available.
-  await api('session.tool_usage', { session_id: fixture.root, view_manifest_sha256: hash },
-    'owner', fixture.benchmark?.shape === 'representative' ? 200 : 413);
+  for (const expected of fixture.usage_expected ?? []) for (const limit of [37, 1000]) {
+    const fields = expected.method === 'session.request_usage' ? ['requests'] : ['tool_items', 'item_real_token_costs'];
+    const collected = Object.fromEntries(fields.filter(field => expected.data[field] != null).map(field => [field, []]));
+    let cursor = null;
+    do {
+      const result = (await api(expected.method, { ...expected.params, limit, cursor, view_manifest_sha256: hash })).data;
+      for (const field of Object.keys(collected)) collected[field].push(...result[field]);
+      const omitted = new Set([...fields, 'total', 'returned', 'next_cursor', 'unresolved_ids']);
+      assert.deepEqual(Object.fromEntries(Object.entries(result).filter(([key]) => !omitted.has(key))),
+        Object.fromEntries(Object.entries(expected.data).filter(([key]) => !fields.includes(key))));
+      cursor = result.next_cursor;
+      if (cursor) await api(expected.method, { ...expected.params, limit: limit - 1, cursor, view_manifest_sha256: hash }, 'owner', 400);
+    } while (cursor);
+    for (const field of Object.keys(collected)) assert.deepEqual(collected[field], expected.data[field]);
+  }
+  console.log('PASS paged usage: every detail row and aggregate matches canonical handlers, session/turn scope and cursor binding');
+  await api('session.tool_usage', { session_id: fixture.root, view_manifest_sha256: hash });
   await api('session.tool_usage', { session_id: fixture.root, turn_id: selected.turn_id, view_manifest_sha256: hash });
   for (const method of ['session.summary', 'session.tree', 'session.stats', 'session.usage', 'session.model_usage', 'session.request_usage', 'graph.stats', 'graph.usage', 'graph.overview']) {
     const scoped = method.startsWith('graph.') ? { root_session_id: fixture.root } : { session_id: fixture.root };

@@ -82,6 +82,25 @@ class PreparedApi(BaseModel):
     ) -> None:
         from coding_trajectory.contracts import service_contract
 
+        base = dict(base)
+        if rows is None and method == "session.request_usage":
+            rows, field = base.pop("requests"), "requests"
+        elif rows is None and method == "session.tool_usage":
+            items = base.pop("tool_items")
+            costs = base.get("item_real_token_costs")
+            base["item_real_token_costs"] = None if costs is None else []
+            # Preserve both independent source orders and unequal lengths.
+            # Pair by position only: no ID join or attribution recomputation.
+            rows = [
+                {
+                    "tool_item": items[i] if i < len(items) else None,
+                    "item_real_token_cost": costs[i]
+                    if costs and i < len(costs)
+                    else None,
+                }
+                for i in range(max(len(items), len(costs or [])))
+            ]
+            field = "tool_usage"
         version = service_contract(method).version
         descriptor = PreparedMethod(
             method=method, method_version=version, scope=scope, turn_id=turn_id
@@ -106,14 +125,20 @@ class PreparedApi(BaseModel):
                 packs: list[dict[str, Any]] = []
                 sizes = [len(encoded(row)) for row in rows]
                 start = 0
+                pack_bound = (
+                    MAX_API_PACK_BYTES // 2
+                    if field in {"items", "events"}
+                    else MAX_API_PACK_BYTES
+                )
                 # Header and array punctuation are included in the pack bound.
                 overhead = len(encoded({**header, "start": len(rows), "rows": []}))
                 while start < len(rows):
                     end = start
                     size = overhead
-                    while (
-                        end < len(rows) and size + sizes[end] + 1 <= MAX_API_PACK_BYTES
-                    ):
+                    current_bound = max(
+                        pack_bound, min(MAX_API_PACK_BYTES, overhead + sizes[start] + 1)
+                    )
+                    while end < len(rows) and size + sizes[end] + 1 <= current_bound:
                         size += sizes[end] + 1
                         end += 1
                     if end == start:
@@ -134,6 +159,24 @@ class PreparedApi(BaseModel):
                     "packs": packs,
                     "postings": postings or {},
                 }
+                if len(encoded(index)) > MAX_API_INDEX_BYTES and field in {
+                    "items",
+                    "events",
+                }:
+                    index["mode"] = "page_columns"
+                    index["posting_objects"] = {
+                        name: self.put(
+                            {
+                                **header,
+                                "posting": name,
+                                "total": len(rows),
+                                "values": values,
+                            },
+                            MAX_API_RESPONSE_BYTES,
+                        )
+                        for name, values in index["postings"].items()
+                    }
+                    index["postings"] = {}
             descriptor.index = PreparedObject.model_validate(
                 self.put(index, MAX_API_INDEX_BYTES)
             )
@@ -156,6 +199,9 @@ class PreparedApi(BaseModel):
             else:
                 refs.add(index["topology"]["sha256"])
                 refs.update(pack["object"]["sha256"] for pack in index["packs"])
+                refs.update(
+                    ref["sha256"] for ref in index.get("posting_objects", {}).values()
+                )
         return refs
 
 

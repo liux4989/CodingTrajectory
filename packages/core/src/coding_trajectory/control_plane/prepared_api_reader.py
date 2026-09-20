@@ -244,7 +244,7 @@ def read_prepared(
     fetch: Callable[[str], bytes],
     signing_key: bytes,
 ) -> dict[str, Any]:
-    """Read at most index + base + two packs; every byte is length/hash checked."""
+    """Read bounded metadata + two packs; every byte is length/hash checked."""
     method = descriptor.method
     if descriptor.method_version != service_contract(method).version:
         raise PreparedApiError("unsupported_prepared_version", 409)
@@ -261,7 +261,7 @@ def read_prepared(
         reference = PreparedObject.model_validate(ref)
         if (
             reference.bytes > bound
-            or reads >= 4
+            or reads >= 10
             or fetched + reference.bytes > MAX_API_FETCH_BYTES
         ):
             raise PreparedApiError("remote_result_too_large", 413)
@@ -310,7 +310,24 @@ def read_prepared(
         return load(index["result"], MAX_API_RESPONSE_BYTES - API_ENVELOPE_RESERVE)[
             "data"
         ]
+    if index["mode"] not in {"page", "page_columns"}:
+        raise PreparedApiError("prepared_object_corrupt", 503)
     base = load(index["topology"], MAX_API_TOPOLOGY_BYTES)["data"]
+    if index["mode"] == "page_columns":
+        needed = {
+            "id" if name in {"item_ids", "event_ids"} else name
+            for name, value in params.items()
+            if value is not None
+        }
+        for name, ref in index["posting_objects"].items():
+            if name in needed:
+                column = load(ref, MAX_API_RESPONSE_BYTES)
+                if (
+                    column.get("posting") != name
+                    or column.get("total") != index["total"]
+                ):
+                    raise PreparedApiError("prepared_object_corrupt", 503)
+                index["postings"][name] = column["values"]
     total = index["total"]
     if type(total) is not int or total < 0 or len(index["sizes"]) != total:
         raise PreparedApiError("prepared_object_corrupt", 503)
@@ -326,7 +343,10 @@ def read_prepared(
     ):
         raise PreparedApiError("prepared_object_corrupt", 503)
     older = index["field"] == "turns"
-    positions, unresolved = selected_positions(index, params)
+    usage = index["field"] in {"requests", "tool_usage"}
+    positions, unresolved = selected_positions(
+        index, {k: v for k, v in params.items() if not usage or k != "turn_id"}
+    )
     limit = params["limit"]
     binding = {
         "workspace_id": identity.workspace_id,
@@ -356,7 +376,15 @@ def read_prepared(
     selected = []
     packs: set[int] = set()
     size = 2
-    budget = MAX_API_RESPONSE_BYTES - API_ENVELOPE_RESERVE - len(encoded(base))
+    # A cursor can occupy 4096 bytes. Missing-ID strings are request-sized;
+    # reserve them explicitly plus bounded page keys/counters before selection.
+    pagination_bytes = 4096 + len(encoded(unresolved)) + 512
+    budget = (
+        MAX_API_RESPONSE_BYTES
+        - API_ENVELOPE_RESERVE
+        - len(encoded(base))
+        - pagination_bytes
+    )
     if older:
         budget = min(budget, MAX_API_TURN_BYTES)
     for ordinal in candidates:
@@ -367,6 +395,9 @@ def read_prepared(
             len(selected) == limit
             or size + index["sizes"][ordinal] + 1 > budget
             or len(packs | {pack_number}) > 2
+            or fetched
+            + sum(index["packs"][p]["object"]["bytes"] for p in packs | {pack_number})
+            > MAX_API_FETCH_BYTES
         ):
             break
         packs.add(pack_number)
@@ -407,6 +438,17 @@ def read_prepared(
         else None
     )
     result = {**base, index["field"]: [rows_by_position[key] for key in selected]}
+    if index["field"] == "tool_usage":
+        details = result.pop("tool_usage")
+        result["tool_items"] = [
+            row["tool_item"] for row in details if row["tool_item"] is not None
+        ]
+        if result["item_real_token_costs"] is not None:
+            result["item_real_token_costs"] = [
+                row["item_real_token_cost"]
+                for row in details
+                if row["item_real_token_cost"] is not None
+            ]
     if older:
         result["page"] = {
             "direction": "older",
