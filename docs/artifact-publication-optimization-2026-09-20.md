@@ -150,3 +150,56 @@ The added SQL columns are a forward migration. Old source uses positional
 three-column claim inserts, so rolling back to it after migration is not a safe
 upload rollback. Review that boundary before any deployment; no compatibility
 framework or production data deletion is included. Staging remains untouched.
+
+## Follow-up: structural manifest deduplication
+
+The subsequent real-project inventory exceeded ingress and documented SQLite
+row bounds. Manifest v3 changes the wire and stored representation, not the
+prepared object payloads or the complete-inventory publication model. Each graph
+replaces `api_objects` and `api_methods` with four explicit `api` tables:
+
+| Table | Row |
+| --- | --- |
+| `objects` | `[sha256, bytes]`; kind is always `api` |
+| `methods` | `[method, method_version]` |
+| `scopes` | Full session/graph scope string |
+| `entries` | `[method_position, scope_position, turn_id, object_position]` |
+
+Positions are zero-based integers. A null object position represents the existing
+`remote_result_too_large` descriptor; zero is a valid object position, not an
+error. Turn IDs remain explicit, including null. Tables are per graph; entries
+and objects retain their original order. Expansion restores explicit kind,
+index, error and turn fields before existing publication checks and view hashing.
+Full paths, content, identities and prepared-object hashes remain unchanged.
+There is no compression, truncation, larger ingress cap or publication batching.
+
+New collectors send v3, and new publications store/return v3. The Worker still
+accepts v2 requests; updated Python readers and retention/cleanup code understand
+both stored forms. Local staged requests remain in their original expanded form.
+Before uploads, the collector measures the exact compact HTTP body, retaining the
+3 MiB bound and unchanged outbox on rejection. Recovered publication receipts
+settle retries without replaying an old committed request in a new wire encoding.
+The transaction rejects stored manifests above 2 MiB minus 4 KiB row headroom.
+Update Worker and readers before running the updated collector. Old readers and
+old cleanup code do not understand newly stored v3 manifests: do not roll back
+to them after v3 publication without a separately reviewed migration.
+
+Local-only measurement of the exact private 175-source/102-graph inventory:
+
+| Representation | Before | Compact |
+| --- | ---: | ---: |
+| RPC envelope | 3,429,365 B | 1,537,087 B |
+| Normalized stored manifest | 3,502,541 B | 1,484,404 B |
+
+The stored figure is a deterministic projection, not a Cloudflare measurement.
+It leaves 608,652 B below the guarded row limit. Full normalized equality held
+for every graph and stored manifest, including all 15,112 API objects, 7,278
+methods, 7,202 indexed methods and 76 existing size errors. Those method size
+errors are unchanged and are not solved by manifest deduplication.
+
+The executable prepared-API qualifier covers Python/TypeScript table parity,
+invalid positions, duplicate objects, compact commit/read, legacy retention,
+atomic oversized-row rejection and the existing receipt/cleanup races and API
+reads. Collector qualification covers exact UTF-8 ingress boundaries, rejection
+before uploads, and old-receipt recovery without replay. These checks are local;
+this follow-up does not deploy, retry publication or alter staging data.

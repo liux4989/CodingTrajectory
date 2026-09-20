@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -9,12 +10,14 @@ import tempfile
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.control_plane import graph_preparation
 from coding_trajectory.control_plane.artifact_protocol import (
     ARTIFACT_PREPARATION_VERSION,
 )
 from coding_trajectory.control_plane.collector import (
+    CloudflareCollectorRemote,
     CollectorIdentity,
     CollectorRemoteError,
     LocalCollector,
@@ -158,6 +161,130 @@ class CheckpointRemote:
         return ObservationReceipt(
             receipt_id=UUID(int=300 + self.publications), outcome="accepted"
         )
+
+
+def qualify_publication_transport(root, identity, publication_row) -> None:
+    bound = 3 * 1024 * 1024
+    worker = (
+        Path(__file__).resolve().parents[1] / "cloudflare/control-plane/src/shared.ts"
+    )
+    assert "MAX_BODY = 3 * 1024 * 1024;" in worker.read_text()
+    method = "ct_collector_publish_artifacts"
+    key = "transport-boundary"
+    params = {"padding": "雪"}
+
+    def expected_body():
+        return httpx.Request(
+            "POST",
+            "http://localhost/v1/core",
+            json={
+                "protocol": "ct.core.v1",
+                "id": None,
+                "method": method,
+                "params": params,
+                "idempotency_key": key,
+                "request_sha256": hashlib.sha256(
+                    canonical_json(params).encode()
+                ).hexdigest(),
+            },
+        ).content
+
+    params["padding"] += "x" * (bound - len(expected_body()) - 1)
+    sent = []
+
+    def respond(request):
+        assert request.headers["content-type"] == "application/json"
+        sent.append(request.content)
+        return httpx.Response(200, json={"ok": True, "data": {}})
+
+    remote = CloudflareCollectorRemote(url="http://localhost", access_token="synthetic")
+    remote._client.close()
+    remote._client = httpx.Client(
+        transport=httpx.MockTransport(respond),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        for length in (bound - 1, bound, bound + 1):
+            expected = expected_body()
+            assert len(expected) == length
+            try:
+                remote._rpc(method, params, idempotency_key=key)
+            except CollectorRemoteError as error:
+                assert length == bound + 1
+                assert error.code == "body_too_large" and error.status_code == 413
+                assert str(length) in str(error) and str(bound) in str(error)
+            else:
+                assert length <= bound and sent[-1] == expected
+            params["padding"] += "x"
+        assert len(sent) == 2
+    finally:
+        remote.close()
+
+    staged = json.loads(publication_row["request_json"])
+    staged["artifact_publication"]["graphs"][0]["api_objects"].extend(
+        {"kind": "api", "sha256": f"{number:064x}", "bytes": 128}
+        for number in range(45_000)
+    )
+    row = dict(publication_row)
+    row.update(request_json=json.dumps(staged), state="pending", last_error=None)
+    authority = CheckpointRemote()
+    with LocalCollector(
+        database_path=root / "transport.sqlite3", identity=identity
+    ) as collector:
+        for attempts in (0, 1):
+            row["attempts"] = attempts
+            collector._connection.execute("DELETE FROM publication_outbox")
+            collector._connection.execute(
+                "INSERT INTO publication_outbox VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(row.values()),
+            )
+            collector._connection.commit()
+            before = tuple(
+                collector._connection.execute(
+                    "SELECT * FROM publication_outbox"
+                ).fetchone()
+            )
+            try:
+                collector._flush_facts(authority)
+            except CollectorRemoteError as error:
+                assert error.code == "body_too_large" and error.status_code == 413
+            else:
+                raise AssertionError("oversized publication reached artifact delivery")
+            assert (
+                tuple(
+                    collector._connection.execute(
+                        "SELECT * FROM publication_outbox"
+                    ).fetchone()
+                )
+                == before
+            )
+        assert authority.uploads == authority.publications == authority.recoveries == 0
+        # An old v2 request may already have committed before the collector
+        # upgraded. Its receipt must settle the outbox without a v3 replay.
+        collector._connection.execute("DELETE FROM publication_outbox")
+        row = dict(publication_row)
+        row.update(state="pending", attempts=1, last_error=None)
+        collector._connection.execute(
+            "INSERT INTO publication_outbox VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tuple(row.values()),
+        )
+        collector._connection.commit()
+        recovered = ObservationReceipt(receipt_id=UUID(int=123), outcome="accepted")
+        authority.recover = lambda request: CollectorRecoveryResponse(
+            next_publication_sequence=1,
+            publication_receipt=recovered.model_dump(mode="json"),
+        )
+        assert collector._flush_facts(authority) == (1, 0)
+        assert authority.uploads == authority.publications == 0
+        assert (
+            collector._connection.execute(
+                "SELECT state FROM publication_outbox"
+            ).fetchone()[0]
+            == "accepted"
+        )
+    print(
+        "PASS exact UTF-8 RPC boundary, unchanged idempotency bytes, pre-upload durable rejection, and v2 receipt recovery without replay"
+    )
 
 
 def main():
@@ -427,6 +554,13 @@ def main():
             assert collector._connection.execute(
                 "SELECT COUNT(*) FROM publication_outbox WHERE state = 'accepted'"
             ).fetchone()[0]
+            qualify_publication_transport(
+                root,
+                checkpoint_identity,
+                collector._connection.execute(
+                    "SELECT * FROM publication_outbox LIMIT 1"
+                ).fetchone(),
+            )
 
         # A retired SQL publication must be an explicit local migration stop,
         # never silently discarded, rewritten, or sent to any remote endpoint.

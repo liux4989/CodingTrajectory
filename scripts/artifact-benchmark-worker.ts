@@ -2,6 +2,7 @@
 import worker from "../cloudflare/control-plane/src/index";
 import { Workspace as SqlInstrumentedWorkspace } from "./free-plan-benchmark-worker";
 import { initializeArtifacts } from "../cloudflare/control-plane/src/artifacts";
+import { expandManifest } from "../cloudflare/control-plane/src/artifact-manifest";
 
 type R2Metrics = {
   calls: Record<string, number>;
@@ -78,7 +79,12 @@ export class Workspace extends SqlInstrumentedWorkspace {
 
   artifactClaimProbe(value: any) {
     const sql = this.ctx.storage.sql;
-    if (value.action === "legacy") {
+    if (value.action === "legacy-manifests") {
+      for (const row of sql.exec<{ project_id: string; publication_sequence: number; manifest: string }>("SELECT project_id,publication_sequence,manifest FROM artifact_manifests").toArray()) {
+        sql.exec("UPDATE artifact_manifests SET manifest=? WHERE project_id=? AND publication_sequence=?",
+          JSON.stringify(expandManifest(JSON.parse(row.manifest))), row.project_id, row.publication_sequence);
+      }
+    } else if (value.action === "legacy") {
       sql.exec("DROP TABLE artifact_upload_claims; CREATE TABLE artifact_upload_claims(kind TEXT NOT NULL, sha256 TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(kind,sha256))");
       sql.exec("INSERT INTO artifact_upload_claims VALUES(?,?,?)", value.kind, value.sha256, 4102444800);
       initializeArtifacts((this as any).state);

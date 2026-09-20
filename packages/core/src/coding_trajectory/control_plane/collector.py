@@ -28,6 +28,7 @@ from coding_trajectory.control_plane.artifact_protocol import (
     ArtifactObjectReference,
     ArtifactPublicationRequest,
     PreparedGraphSummary,
+    compact_publication,
 )
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorRecoveryRequest,
@@ -67,6 +68,8 @@ from coding_trajectory.ingestion.models import Session
 _PARSER_VERSION = "ct-local-collector-v11"
 _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 _SNAPSHOT_STATE_VERSION = f"{_SOURCE_SCHEMA_VERSION}:{_PARSER_VERSION}"
+# Must match the deployed core RPC bound in cloudflare/control-plane/src/shared.ts.
+_MAX_RPC_BODY_BYTES = 3 * 1024 * 1024
 
 
 class CollectorRemote(Protocol):
@@ -114,6 +117,35 @@ class CollectorRemoteError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+
+
+def _collector_rpc_body(
+    name: str, request: dict[str, Any], *, idempotency_key: str | None = None
+) -> bytes:
+    envelope = {
+        "protocol": "ct.core.v1",
+        "id": None,
+        "method": name,
+        "params": request,
+        **(
+            {
+                "idempotency_key": idempotency_key,
+                "request_sha256": _sha256(canonical_json(request).encode()),
+            }
+            if idempotency_key is not None
+            else {}
+        ),
+    }
+    body = json.dumps(
+        envelope, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode()
+    if len(body) > _MAX_RPC_BODY_BYTES:
+        raise CollectorRemoteError(
+            f"collector RPC body is {len(body)} bytes; maximum is {_MAX_RPC_BODY_BYTES}",
+            code="body_too_large",
+            status_code=413,
+        )
+    return body
 
 
 class CloudflareCollectorRemote:
@@ -192,7 +224,7 @@ class CloudflareCollectorRemote:
         return ObservationReceipt.model_validate(
             self._rpc(
                 "ct_collector_publish_artifacts",
-                request.model_dump(mode="json", exclude_none=True),
+                compact_publication(request),
                 idempotency_key=idempotency_key,
             )
         )
@@ -215,28 +247,11 @@ class CloudflareCollectorRemote:
     def _rpc(
         self, name: str, request: dict[str, Any], *, idempotency_key: str | None = None
     ) -> dict[str, Any]:
-        request_sha256 = (
-            _sha256(canonical_json(request).encode())
-            if idempotency_key is not None
-            else None
-        )
+        body = _collector_rpc_body(name, request, idempotency_key=idempotency_key)
         try:
             response = self._client.post(
                 self._url,
-                json={
-                    "protocol": "ct.core.v1",
-                    "id": None,
-                    "method": name,
-                    "params": request,
-                    **(
-                        {
-                            "idempotency_key": idempotency_key,
-                            "request_sha256": request_sha256,
-                        }
-                        if idempotency_key is not None
-                        else {}
-                    ),
-                },
+                content=body,
                 timeout=self._timeout,
             )
             payload = response.json()
@@ -966,20 +981,25 @@ class LocalCollector:
             "select * from publication_outbox where state = 'pending' or (state = 'rejected' and last_error = 'conflict') order by publication_sequence, created_at"
         ).fetchall()
         for row in rows:
+            staged = json.loads(row["request_json"])
+            artifact_request = ArtifactPublicationRequest.model_validate(
+                staged["artifact_publication"]
+            )
+            _collector_rpc_body(
+                "ct_collector_publish_artifacts",
+                compact_publication(artifact_request),
+                idempotency_key=row["idempotency_key"],
+            )
             self._connection.execute(
                 "update publication_outbox set state = 'in_flight', attempts = attempts + 1 where idempotency_key = ?",
                 (row["idempotency_key"],),
             )
             self._connection.commit()
             try:
-                staged = json.loads(row["request_json"])
-                artifact_request = ArtifactPublicationRequest.model_validate(
-                    staged["artifact_publication"]
-                )
                 acknowledged = self._previous_artifact_references(
                     artifact_request.publication_sequence
                 )
-                committed = False
+                recovered_receipt = None
                 if row["attempts"] > 0:
                     recovered = remote.recover(
                         CollectorRecoveryRequest(
@@ -989,11 +1009,16 @@ class LocalCollector:
                             publication_idempotency_key=row["idempotency_key"],
                         )
                     )
-                    committed = recovered.publication_receipt is not None
+                    if recovered.publication_receipt is not None:
+                        recovered_receipt = ObservationReceipt.model_validate(
+                            recovered.publication_receipt
+                        )
+                committed = recovered_receipt is not None
                 # The authority validates new references and attests exact
                 # retained ones. Skip locally acknowledged immutable objects;
                 # after an uncommitted uncertain response, upload all. A
-                # recovered receipt needs only an exact idempotent replay.
+                # recovered receipt is authoritative: do not replay it through
+                # a newer wire encoding with a different request identity.
                 force_upload = row["attempts"] > 0 and not committed
                 for graph in artifact_request.graphs:
                     for reference in (graph.facts, graph.summary, *graph.api_objects):
@@ -1012,7 +1037,7 @@ class LocalCollector:
                             sha256=reference.sha256,
                             body=bytes(artifact["body"]),
                         )
-                receipt = remote.publish_artifacts(
+                receipt = recovered_receipt or remote.publish_artifacts(
                     artifact_request, idempotency_key=row["idempotency_key"]
                 )
             except (CollectorRemoteError, OSError, ValueError):

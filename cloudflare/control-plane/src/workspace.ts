@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { expandManifest } from "./artifact-manifest";
 import { authorityFailure, digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
 import { artifactManifests, artifactReadLocator, claimArtifactUpload, completeArtifactUpload, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
@@ -47,7 +48,7 @@ export class Workspace extends DurableObject<Env> {
 
   async rpc(method: string, envelope: Json, principal: Principal): Promise<{ status: number; body: Json }> {
     try {
-      const request = envelope.request;
+      let request = envelope.request;
       requireThat(request.workspace_id === principal.workspace_id, "workspace_denied", 403);
       if (method === "ct_workspace_replace") {
         requireThat(principal.roles.includes("owner"), "capability_required", 403);
@@ -115,6 +116,10 @@ export class Workspace extends DurableObject<Env> {
       }
       // Compute identity before schema defaults normalize the request.
       const identity = await digest(stable(request));
+      if (method === "ct_collector_publish_artifacts" && request.schema_version === "ct.artifact-manifest.v3") {
+        validate("compact_publication", request);
+        request = expandManifest(request);
+      }
       validate(method, request);
       if (method === "ct_artifact_read") {
         return { status: 200, body: artifactReadLocator(this.state, request) };

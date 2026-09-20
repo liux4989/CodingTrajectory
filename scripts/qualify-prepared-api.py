@@ -12,6 +12,10 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from coding_trajectory.contracts import service_contract
+from coding_trajectory.control_plane.artifact_protocol import (
+    compact_graph,
+    expand_graph,
+)
 from coding_trajectory.control_plane.fact_projection import build_published_fact_set
 from coding_trajectory.control_plane.graph_preparation import prepare_graph
 from coding_trajectory.control_plane.prepared_api import (
@@ -175,6 +179,40 @@ def main():
                 m.method: service_contract(m.method).version for m in api.methods
             },
         }
+        expanded_api = {
+            "api_methods": fixture["api"]["methods"],
+            "api_objects": [
+                {"kind": "api", "sha256": hash_, "bytes": len(body.encode())}
+                for hash_, body in sorted(fixture["api"]["objects"].items())
+            ],
+        }
+        fixture["compact_api"] = compact_graph(expanded_api)["api"]
+        assert expand_graph({"api": fixture["compact_api"]}) == expanded_api
+        # Distinguish object position zero from the null size-error sentinel,
+        # preserve repeated methods across scopes and non-ASCII turn IDs.
+        corner = {
+            "api_objects": expanded_api["api_objects"][:2],
+            "api_methods": [
+                {
+                    "method": "session.summary",
+                    "method_version": 3,
+                    "scope": scope,
+                    "turn_id": turn,
+                    "index": ref,
+                    "error": error,
+                }
+                for scope, turn, ref, error in [
+                    ("scope-b", "雪", expanded_api["api_objects"][0], None),
+                    ("scope-a", None, None, "remote_result_too_large"),
+                    ("scope-b", None, expanded_api["api_objects"][1], None),
+                ]
+            ],
+        }
+        fixture["compact_corner"] = {
+            "expanded": corner,
+            "compact": compact_graph(corner),
+        }
+        assert expand_graph(fixture["compact_corner"]["compact"]) == corner
         descriptor = next(m for m in api.methods if m.method == "session.overview")
         reads = []
 

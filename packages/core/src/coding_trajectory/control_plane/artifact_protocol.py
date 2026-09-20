@@ -9,12 +9,16 @@ is present.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from coding_trajectory.contracts.prepared_api import PreparedMethod, PreparedObject
+from coding_trajectory.contracts.prepared_api import (
+    MAX_API_RESPONSE_BYTES,
+    PreparedMethod,
+    PreparedObject,
+)
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorModel,
     SourceVectorEntry,
@@ -67,7 +71,7 @@ class ArtifactObjectReference(CollectorModel):
         return self
 
 
-class ArtifactGraphPublication(CollectorModel):
+class ArtifactGraphMetadata(CollectorModel):
     graph_id: UUID
     graph_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     fact_schema_version: Literal["ct.published_facts.v2"] = FACT_SET_SCHEMA_VERSION
@@ -78,6 +82,9 @@ class ArtifactGraphPublication(CollectorModel):
     observed_at: datetime
     facts: ArtifactObjectReference
     summary: ArtifactObjectReference
+
+
+class ArtifactGraphPublication(ArtifactGraphMetadata):
     api_methods: list[PreparedMethod] = Field(max_length=131_072)
     api_objects: list[PreparedObject] = Field(max_length=131_072)
 
@@ -160,6 +167,121 @@ class ArtifactManifest(CollectorModel):
     published_at: datetime
     inventory_state: Literal["complete"]
     graphs: list[ArtifactManifestGraph] = Field(max_length=MAX_ARTIFACT_GRAPHS)
+
+    @model_validator(mode="before")
+    @classmethod
+    def expand_compact(cls, value: Any) -> Any:
+        if (
+            isinstance(value, dict)
+            and value.get("schema_version") == "ct.artifact-manifest.v3"
+        ):
+            return {
+                **value,
+                "schema_version": ARTIFACT_MANIFEST_SCHEMA_VERSION,
+                "graphs": [expand_graph(graph) for graph in value["graphs"]],
+            }
+        return value
+
+
+Position = Annotated[int, Field(strict=True, ge=0, le=131_071)]
+ObjectHash = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+ObjectBytes = Annotated[int, Field(strict=True, ge=1, le=MAX_API_RESPONSE_BYTES)]
+
+
+class CompactApi(CollectorModel):
+    """Ordered tables; a null object position denotes remote_result_too_large."""
+
+    objects: list[tuple[ObjectHash, ObjectBytes]] = Field(max_length=131_072)
+    methods: list[tuple[str, int]] = Field(max_length=131_072)
+    scopes: list[str] = Field(max_length=131_072)
+    entries: list[tuple[Position, Position, str | None, Position | None]] = Field(
+        max_length=131_072
+    )
+
+    @model_validator(mode="after")
+    def validate_positions(self) -> CompactApi:
+        if len({item[0] for item in self.objects}) != len(self.objects):
+            raise ValueError("duplicate prepared API object")
+        for method, scope, _, index in self.entries:
+            if (
+                method >= len(self.methods)
+                or scope >= len(self.scopes)
+                or (index is not None and index >= len(self.objects))
+            ):
+                raise ValueError("invalid compact API table position")
+        return self
+
+
+class CompactGraphPublication(ArtifactGraphMetadata):
+    api: CompactApi
+
+
+class CompactPublicationRequest(ArtifactPublicationRequest):
+    schema_version: Literal["ct.artifact-manifest.v3"] = "ct.artifact-manifest.v3"
+    graphs: list[CompactGraphPublication] = Field(max_length=MAX_ARTIFACT_GRAPHS)
+
+
+def compact_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    objects = graph["api_objects"]
+    positions = {ref["sha256"]: i for i, ref in enumerate(objects)}
+    methods: dict[tuple[str, int], int] = {}
+    scopes: dict[str, int] = {}
+    entries = []
+    for method in graph["api_methods"]:
+        key = (method["method"], method["method_version"])
+        method_pos = methods.setdefault(key, len(methods))
+        scope_pos = scopes.setdefault(method["scope"], len(scopes))
+        ref = method.get("index")
+        if ref is not None and objects[positions[ref["sha256"]]] != ref:
+            raise ValueError("inconsistent prepared index reference")
+        entries.append(
+            (
+                method_pos,
+                scope_pos,
+                method.get("turn_id"),
+                positions[ref["sha256"]] if ref else None,
+            )
+        )
+    return {
+        **{k: v for k, v in graph.items() if k not in {"api_objects", "api_methods"}},
+        "api": {
+            "objects": [(ref["sha256"], ref["bytes"]) for ref in objects],
+            "methods": list(methods),
+            "scopes": list(scopes),
+            "entries": entries,
+        },
+    }
+
+
+def expand_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    api = CompactApi.model_validate(graph["api"])
+    objects = [
+        PreparedObject(sha256=hash_, bytes=size).model_dump()
+        for hash_, size in api.objects
+    ]
+    methods = [
+        {
+            "method": api.methods[m][0],
+            "method_version": api.methods[m][1],
+            "scope": api.scopes[s],
+            "turn_id": turn,
+            "index": objects[index] if index is not None else None,
+            "error": None if index is not None else "remote_result_too_large",
+        }
+        for m, s, turn, index in api.entries
+    ]
+    return {
+        **{k: v for k, v in graph.items() if k != "api"},
+        "api_objects": objects,
+        "api_methods": methods,
+    }
+
+
+def compact_publication(request: ArtifactPublicationRequest) -> dict[str, Any]:
+    value = request.model_dump(mode="json")
+    value["schema_version"] = "ct.artifact-manifest.v3"
+    value["graphs"] = [compact_graph(graph) for graph in value["graphs"]]
+    return CompactPublicationRequest.model_validate(value).model_dump(mode="json")
 
 
 class ArtifactManifestRequest(CollectorModel):

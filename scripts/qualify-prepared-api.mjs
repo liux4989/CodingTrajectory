@@ -9,6 +9,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(`${root}cloudflare/control-plane/package.json`);
 const { build } = require('esbuild');
 const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
+const codecBundle = await build({ entryPoints: [`${root}cloudflare/control-plane/src/artifact-manifest.ts`], bundle: true, write: false, format: 'esm', platform: 'node' });
+const { compactGraph, expandGraph } = await import(`data:text/javascript;base64,${Buffer.from(codecBundle.outputFiles[0].text).toString('base64')}`);
 const fixture = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const lastOrdinal = fixture.benchmark?.shape === 'representative' ? 2 : 96;
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -44,6 +46,7 @@ async function post(path, message, role = 'owner', expected = 200) {
   return JSON.parse(raw);
 }
 async function rpc(method, params, key) {
+  if (method === 'ct_collector_publish_artifacts') params = { ...params, schema_version: 'ct.artifact-manifest.v3', graphs: params.graphs.map(compactGraph) };
   return (await post('/v1/core', { protocol: 'ct.core.v1', method, params: { workspace_id: workspace, ...params }, ...(key ? { idempotency_key: key } : {}) })).data;
 }
 async function api(method, params = {}, role = 'owner', expected = 200, version = fixture.versions[method] ?? 5) {
@@ -168,12 +171,23 @@ async function qualifyReceiptsAfter(publication, published) {
   const replay = await rpc('ct_collector_publish_artifacts', publication, 'publication:0');
   delete replay.__benchmark; delete published.__benchmark;
   assert.deepEqual(replay, published);
+  const previous = await rpc('ct_artifact_manifest', { project_id: publication.project_id });
+  const oversized = { ...publication, publication_sequence: 1, schema_version: 'ct.artifact-manifest.v3', graphs: publication.graphs.map(compactGraph) };
+  oversized.graphs[0].vendors = ['雪'.repeat(700000)];
+  await rejectPublication(oversized, 'artifact_manifest_too_large', 413);
+  const unchanged = await rpc('ct_artifact_manifest', { project_id: publication.project_id });
+  assert.deepEqual(unchanged.manifests, previous.manifests);
+  assert.equal(unchanged.snapshot_sequence, previous.snapshot_sequence);
+  await claimProbe(ref, 'legacy-manifests');
+  assert.equal((await rpc('ct_artifact_manifest', { project_id: publication.project_id })).manifests[0].schema_version, 'ct.artifact-manifest.v2');
   const bucket = await mf.getR2Bucket('ARTIFACTS');
   let sequence = 0;
   const publish = () => rpc('ct_collector_publish_artifacts', { ...publication, publication_sequence: ++sequence });
   await claimProbe(ref, 'noise');
   await upload('summary', stable(fixture.summary));
   const bounded = await publish();
+  assert.equal((await rpc('ct_artifact_manifest', { project_id: publication.project_id })).manifests[0].schema_version, 'ct.artifact-manifest.v3');
+  console.log('PASS stored UTF-8 row guard with atomic rejection, legacy retention and v3 republication');
   const lookups = bounded.__benchmark.groups['publication claim lookups'];
   // Only summary matches; allow index-boundary reads on empty kind batches,
   // but never scan the 1000 unrelated rows per lookup.
@@ -271,6 +285,25 @@ async function main() { try {
       source_ids: [source.source_id], vendors: ['pi'], observed_at: '2026-09-19T00:00:00Z', facts, summary,
       api_methods: fixture.api.methods, api_objects: refs,
     }] };
+  const compact = compactGraph(publication.graphs[0]);
+  assert.deepEqual(expandGraph(compact), publication.graphs[0]);
+  if (fixture.compact_api) assert.deepEqual(compact.api, fixture.compact_api, 'Python/TypeScript producer parity');
+  if (fixture.compact_corner) {
+    const { expanded, compact: corner } = fixture.compact_corner;
+    assert.deepEqual(compactGraph(expanded), corner);
+    assert.deepEqual(expandGraph(corner), expanded);
+    assert.deepEqual(corner.api.entries, [[0, 0, '雪', 0], [0, 1, null, null], [0, 0, null, 1]]);
+  }
+  const compactRequest = { ...publication, schema_version: 'ct.artifact-manifest.v3', graphs: [compact] };
+  for (const [column, position, code] of [[0, compact.api.methods.length, 'invalid_prepared_reference'],
+    [1, compact.api.scopes.length, 'invalid_prepared_reference'], [3, compact.api.objects.length, 'invalid_prepared_reference'],
+    [3, -1, 'invalid_contract'], [3, 0.5, 'invalid_contract'], [3, '0', 'invalid_contract']]) {
+    const malformed = structuredClone(compactRequest); malformed.graphs[0].api.entries[0][column] = position;
+    await rejectPublication(malformed, code, 400);
+  }
+  const duplicate = structuredClone(compactRequest); duplicate.graphs[0].api.objects.push(duplicate.graphs[0].api.objects[0]);
+  await rejectPublication(duplicate, 'invalid_prepared_reference', 400);
+  console.log('PASS compact tables: exact producer parity, ordered expansion, invalid positions and duplicate objects');
   const params = { session_id: fixture.root, limit: 200 };
   assert.equal((await api('session.overview', params, 'owner', 409)).error.code, 'prepared_view_unavailable');
   if (qualifyPublication) await qualifyReceiptsBefore(publication);
@@ -292,10 +325,16 @@ async function main() { try {
     return;
   }
   const published = await rpc('ct_collector_publish_artifacts', publication, 'publication:0');
+  const publicationWallMs = performance.now() - publicationStarted;
+  const manifestReply = await rpc('ct_artifact_manifest', { project_id: project.project_id });
+  const storedManifest = manifestReply.manifests[0];
+  assert.equal(storedManifest.schema_version, 'ct.artifact-manifest.v3');
+  assert.deepEqual(storedManifest.graphs[0].api, compact.api);
+  assert.ok(Buffer.byteLength(stable(storedManifest)) < 2 * 1024 * 1024 - 4096);
   if (publicationBenchmark) {
     const report = { localOnly: true, fixtureSha256: sha(readFileSync(process.argv[2])),
       objects: refs.length + 2, indexedMethods: fixture.api.methods.filter(method => method.index).length,
-      delayMs, wallMs: performance.now() - publicationStarted, sql: published.__benchmark,
+      delayMs, wallMs: publicationWallMs, sql: published.__benchmark,
       r2: await (await mf.dispatchFetch('http://local/__benchmark/r2')).json() };
     await mf.dispatchFetch('http://local/__benchmark/r2?delay=0');
     writeFileSync(process.argv[4], JSON.stringify(report, null, 2) + '\n');

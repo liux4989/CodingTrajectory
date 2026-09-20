@@ -1,8 +1,9 @@
 import { digest, Fault, Json, receipt, requireThat, stable, State, validate } from "./shared";
 import { apiView, commitApiView, prepareInventory, pruneApi } from "./prepared-api";
+import { compactGraph, expandManifest } from "./artifact-manifest";
 
 
-const MANIFEST_SCHEMA = "ct.artifact-manifest.v2";
+const MANIFEST_SCHEMA = "ct.artifact-manifest.v3";
 const RETAINED_MANIFESTS = 3;
 const CLEANUP_PAGES_PER_PUBLICATION = 4;
 const UPLOAD_CLAIM_SECONDS = 7 * 24 * 60 * 60;
@@ -85,7 +86,7 @@ export async function prepareArtifactPublication(
   }
   const retained = new Map<string, number>();
   for (const row of state.sql.exec<{ manifest: string }>("SELECT manifest FROM artifact_manifests").toArray()) {
-    const manifest = JSON.parse(row.manifest);
+    const manifest = expandManifest(JSON.parse(row.manifest));
     for (const graph of manifest.graphs) {
       for (const object of [graph.facts, graph.summary, ...(graph.api_objects ?? [])]) {
         retained.set(`${object.kind}:${object.sha256}`, object.bytes);
@@ -192,7 +193,7 @@ export function commitArtifactPublication(
     snapshot_sequence: sequence,
     published_at: new Date().toISOString(),
     inventory_state: "complete",
-    graphs: request.graphs.map((graph: Json) => ({
+    graphs: request.graphs.map((graph: Json) => compactGraph({
       graph_id: graph.graph_id,
       fact_set_digest: graph.fact_set_digest,
       fact_count: graph.fact_count,
@@ -204,8 +205,12 @@ export function commitArtifactPublication(
       api_objects: graph.api_objects,
     })),
   };
+  const stored = stable(manifest);
+  // Leave headroom for the other columns and SQLite row encoding under 2 MiB.
+  requireThat(new TextEncoder().encode(stored).byteLength <= 2 * 1024 * 1024 - 4096,
+    "artifact_manifest_too_large", 413);
   state.sql.exec("INSERT INTO artifact_manifests VALUES(?,?,?,?,?)",
-    request.project_id, request.publication_sequence, sequence, request.agent_id, stable(manifest));
+    request.project_id, request.publication_sequence, sequence, request.agent_id, stored);
   request.graphs.forEach((graph: Json, index: number) => commitApiView(state, request.project_id, sequence, plan.views[index], graph.api_methods, plan.indexes));
   state.sql.exec("INSERT OR REPLACE INTO api_inventory_cards VALUES(?,?)", request.project_id, stable(plan.cards));
   commitApiView(state, "workspace", sequence, plan.inventory.identity, plan.inventory.methods);
@@ -292,7 +297,7 @@ export function artifactReadLocator(state: State, request: Json): Json {
 export async function cleanupArtifactObjects(state: State, env: Env, workspaceId: string) {
   const referenced = new Set<string>();
   for (const row of state.sql.exec<{ manifest: string }>("SELECT manifest FROM artifact_manifests").toArray()) {
-    const manifest = JSON.parse(row.manifest);
+    const manifest = expandManifest(JSON.parse(row.manifest));
     for (const graph of manifest.graphs) {
       referenced.add(artifactKey(workspaceId, "facts", graph.facts.sha256));
       referenced.add(artifactKey(workspaceId, "summary", graph.summary.sha256));
