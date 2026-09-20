@@ -267,7 +267,9 @@ def overview_rows(
             # Visibility, grouping, descriptions and evidence membership belong
             # to the shared projector. Bound cells, never expand them into items.
             activities = [
-                flow for flow in build_overview_flows(turn.items) if "tool" in flow
+                flow
+                for flow in build_overview_flows(turn.items, flatten_commands=True)
+                if "tool" in flow
             ]
             text_trimmed = any(
                 item.measurements

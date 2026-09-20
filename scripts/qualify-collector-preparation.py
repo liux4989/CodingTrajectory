@@ -82,7 +82,7 @@ def qualify_semantic_details(graph, root: Path) -> None:
     ]
     cache_path = root / "semantic-preparation.sqlite"
     prepared = prepare_graph(graph, cache_path=cache_path)
-    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v5"
+    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v6"
     assert prepared.summary.preparation_version == ARTIFACT_PREPARATION_VERSION
     facts = prepared.publication()
     reconstructed = session_graph_from_fact_index(
@@ -111,18 +111,18 @@ def qualify_semantic_details(graph, root: Path) -> None:
         db.execute("DELETE FROM prepared")
         old = prepared.model_dump(mode="json")
         old["rows"] = []
-        old["summary"]["preparation_version"] = "ct.graph-preparation.v4"
+        old["summary"]["preparation_version"] = "ct.graph-preparation.v5"
         db.execute(
             "INSERT INTO prepared VALUES (?, ?)",
             (
-                "ct.graph-preparation.v4:" + graph_input_digest(graph),
+                "ct.graph-preparation.v5:" + graph_input_digest(graph),
                 json.dumps(old),
             ),
         )
     assert prepare_graph(graph, cache_path=cache_path) == prepared
     assert prepare_graph(graph, cache_path=cache_path) == prepared
     print(
-        "PASS semantic detail publication/replay, credential redaction, and v4 cache invalidation"
+        "PASS semantic detail publication/replay, credential redaction, and v5 cache invalidation"
     )
     # More than eight later noise records must not displace useful activities.
     turn.items = turn.items + [
@@ -195,17 +195,17 @@ def qualify_semantic_details(graph, root: Path) -> None:
         t for s in canonical.sessions for t in s.turns if t.turn_id == turn.turn_id
     )
     expected = [
-        flow for flow in build_overview_flows(canonical_turn.items) if "tool" in flow
+        flow
+        for flow in build_overview_flows(canonical_turn.items, flatten_commands=True)
+        if "tool" in flow
     ]
     assert projected["activities"] == expected[-8:]
     assert [cell["item_ids"] for cell in projected["activities"]] == [
-        [str(item.item_id)] for item in prefix[2:]
-    ] + [[meaningful_ids[0]], meaningful_ids[1:5]] + [
-        [item_id] for item_id in meaningful_ids[5:]
+        [item_id] for item_id in meaningful_ids[1:]
     ]
-    assert projected["activities"][3]["count"] == 4
+    assert all("count" not in cell for cell in projected["activities"])
     assert projected["content_coverage"]["activities"] == {
-        "total": 10,
+        "total": 13,
         "returned": 8,
         "truncated": True,
     }
@@ -215,9 +215,17 @@ def qualify_semantic_details(graph, root: Path) -> None:
     rendered = _render_session_overview_text(overview)
     activity_lines = [line for line in rendered.splitlines() if line.startswith("- ")]
     assert len(activity_lines) == 8
-    grouped_line = next(line for line in activity_lines if "Ran 4 commands" in line)
-    assert all(item_id in grouped_line for item_id in meaningful_ids[1:5])
-    print("CLI grouped activity:", grouped_line)
+    assert "Ran 4 commands" not in rendered
+    for line, item_id in zip(activity_lines[:4], meaningful_ids[1:5], strict=True):
+        assert "RunCommand:" in line and item_id in line
+    print("CLI flattened commands:", *activity_lines[:4], sep="\n")
+    # Identical consecutive commands must not be remerged by compact projection.
+    repeated = [canonical_turn.items[5].model_copy(deep=True) for _ in range(2)]
+    repeated[1].item_id = UUID(int=3000)
+    flat = build_overview_flows(repeated, flatten_commands=True)
+    assert [cell["item_ids"] for cell in flat] == [
+        [str(item.item_id)] for item in repeated
+    ]
     # Below the cap the reported reproduction retains only the read and search.
     turn.items = noisy_items[5:7] + noisy_items[9:]
     prepared = prepare_graph(graph, cache_path=cache_path)
@@ -240,7 +248,7 @@ def qualify_semantic_details(graph, root: Path) -> None:
     assert "Codex scheduling documentation" in activity_lines[1]
     print("CLI meaningful activities:", *activity_lines, sep="\n")
     print(
-        "PASS semantic projector parity, grouped-cell cap/coverage/membership, meaningful WebFetch retained, and hidden canonical items preserved"
+        "PASS flat command projection, repeated commands, cap/coverage/membership, meaningful WebFetch retained, and hidden canonical items preserved"
     )
 
 

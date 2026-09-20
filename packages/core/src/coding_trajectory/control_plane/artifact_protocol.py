@@ -28,7 +28,7 @@ from coding_trajectory.control_plane.published_facts import (
     MAX_FACT_ROWS_PER_GRAPH,
 )
 
-ARTIFACT_PREPARATION_VERSION = "ct.graph-preparation.v5"
+ARTIFACT_PREPARATION_VERSION = "ct.graph-preparation.v6"
 ARTIFACT_SUMMARY_SCHEMA_VERSION = "ct.prepared-summary.v2"
 ARTIFACT_MANIFEST_SCHEMA_VERSION = "ct.artifact-manifest.v2"
 ARTIFACT_RETENTION = 3
@@ -63,7 +63,10 @@ class PreparedGraphSummary(CollectorModel):
 
     schema_version: Literal["ct.prepared-summary.v2"] = ARTIFACT_SUMMARY_SCHEMA_VERSION
     preparation_version: Literal[
-        "ct.graph-preparation.v3", "ct.graph-preparation.v4", "ct.graph-preparation.v5"
+        "ct.graph-preparation.v3",
+        "ct.graph-preparation.v4",
+        "ct.graph-preparation.v5",
+        "ct.graph-preparation.v6",
     ] = ARTIFACT_PREPARATION_VERSION
     graph_id: UUID
     fact_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -135,7 +138,10 @@ class ArtifactPublicationRequest(CollectorModel):
         ARTIFACT_MANIFEST_SCHEMA_VERSION
     )
     preparation_version: Literal[
-        "ct.graph-preparation.v3", "ct.graph-preparation.v4", "ct.graph-preparation.v5"
+        "ct.graph-preparation.v3",
+        "ct.graph-preparation.v4",
+        "ct.graph-preparation.v5",
+        "ct.graph-preparation.v6",
     ] = ARTIFACT_PREPARATION_VERSION
     workspace_id: UUID
     agent_id: UUID
@@ -179,7 +185,10 @@ class ArtifactManifestGraph(CollectorModel):
 class ArtifactManifest(CollectorModel):
     schema_version: Literal["ct.artifact-manifest.v2"]
     preparation_version: Literal[
-        "ct.graph-preparation.v3", "ct.graph-preparation.v4", "ct.graph-preparation.v5"
+        "ct.graph-preparation.v3",
+        "ct.graph-preparation.v4",
+        "ct.graph-preparation.v5",
+        "ct.graph-preparation.v6",
     ]
     workspace_id: UUID
     project_id: UUID

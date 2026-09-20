@@ -408,7 +408,7 @@ async function main() { try {
     item_ids: selected.activities[0].item_ids, view_manifest_sha256: hash, limit: 10 });
   assert.deepEqual(grouped.data.items.map(item => item.item_id), selected.activities[0].item_ids);
   const detail = await api('session.items', { session_id: fixture.root, turn_id: selected.turn_id,
-    item_ids: [selected.activities[1].item_ids[0], 'not-present'], view_manifest_sha256: hash, limit: 2 });
+    item_ids: [selected.activities[3].item_ids[0], 'not-present'], view_manifest_sha256: hash, limit: 2 });
   assert.equal(detail.data.items.length, 1); assert.equal(detail.data.items[0].detail.exit_code, 7);
   assert.ok(detail.data.items[0].detail.target.includes(`--ordinal ${lastOrdinal}`)); assert.deepEqual(detail.data.unresolved_ids, ['not-present']);
   const outsideTurn = first.data.turns[0].activities[0].item_ids[0];
@@ -504,7 +504,7 @@ with factory.build(token) as runtime:
     overview = runtime.call('session.overview', {'session_id': session, 'limit': 1})
     view = runtime.transport_metadata()['identity']['view_manifest_sha256']
     turn = overview['turns'][0]
-    detail = runtime.call('session.items', {'session_id': session, 'item_ids': turn['activities'][1]['item_ids'], 'view_manifest_sha256': view})
+    detail = runtime.call('session.items', {'session_id': session, 'item_ids': turn['activities'][3]['item_ids'], 'view_manifest_sha256': view})
     assert detail['items'][0]['detail']['exit_code'] == 7
     assert runtime.call('project.list', {})['returned'] == 1
 server = build_http_server(factory=factory, port=0)

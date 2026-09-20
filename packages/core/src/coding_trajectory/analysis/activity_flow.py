@@ -151,7 +151,11 @@ def build_overview_flows(
             continue
 
         compact = _compact_flow_item(item)
-        if compacted and _same_projected_tool_action(compacted[-1], compact):
+        if (
+            compacted
+            and not (flatten_commands and compact.get("tool") == RUN_COMMAND)
+            and _same_projected_tool_action(compacted[-1], compact)
+        ):
             _merge_projected_tool_actions(compacted[-1], compact)
         else:
             compacted.append(compact)
@@ -331,10 +335,10 @@ def _tool_activity_group_key(
             return ("background_terminal_wait", identity, None)
         return None
     if item.get("activity_kind") == "command":
-        # Evidence-rich Codex views have no expandable terminal transcript.
-        # Preserve both native and statically reconstructed command details.
-        if flatten_commands and item.get("activity_fidelity"):
-            return _exact_activity_group_key(item)
+        # Keep each command's description and evidence ID together. Subjectless
+        # commands still pass through the overview's low-value visibility gate.
+        if flatten_commands:
+            return None
         if item.get("activity_outcome") == "succeeded":
             return _COMMAND_CELL_KEY
         return _exact_activity_group_key(item)

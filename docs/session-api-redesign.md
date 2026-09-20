@@ -51,6 +51,12 @@ session/graph separation, and rebuildable derived projections.
    client/Worker upgrade and v5 preparation/republication; old overview artifacts
    are not silently reinterpreted. Rollout must account for the interval before
    new overview artifacts are published.
+   Preparation v6 uses the shared projector's `flatten_commands=True` policy:
+   each meaningful command retains its own description and item ID, including
+   identical repeated commands. Non-command grouping and visibility gates stay
+   in place. Flattening happens before the eight-activity limit; canonical
+   detail is unchanged. The v5 response shape remains compatible, but cached
+   views must be regenerated to adopt the new policy.
 5. **Items and events remain the detail layer.** There is no aggregate
    `session.details` payload.
 6. **Search returns references, not replacement evidence.** A match contains a

@@ -36,3 +36,13 @@ This replaces the v4 per-item projection; all four canonical items remain
 available for drill-down. Identity, turn status and session count remain at `root_session_id`,
 `turns[0].status` and `orchestration.session_count`. No usage, cost or runtime
 expected value is derived anew from command output.
+
+## Flat command overview
+
+Preparation v6 no longer groups commands in the overview. Source lines 5, 7,
+9, and 11 each contain a `bash` call with empty `arguments`: sanitization retained
+the lifecycle but no command subject. Once flattened, all four are subjectless
+singletons and the existing low-value visibility gate omits them. Therefore
+overview activity total and returned are both zero, while canonical tool counts,
+usage, cost, and runtime remain unchanged. This expectation follows the committed
+source and visibility rule, not regenerated command output.

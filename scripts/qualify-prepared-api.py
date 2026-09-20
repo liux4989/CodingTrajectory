@@ -241,7 +241,9 @@ def main():
             "facts": prepared.publication().model_dump(mode="json"),
             "overview_activities": {
                 str(turn.turn_id): [
-                    flow for flow in build_overview_flows(turn.items) if "tool" in flow
+                    flow
+                    for flow in build_overview_flows(turn.items, flatten_commands=True)
+                    if "tool" in flow
                 ][-8:]
                 for turn in session.turns
             },
@@ -459,11 +461,9 @@ def main():
             activities == fixture["overview_activities"][str(session.turns[-1].turn_id)]
         )
         assert [cell["item_ids"] for cell in activities] == [
-            [str(item.item_id) for item in session.turns[-1].items[:3]],
-            [str(session.turns[-1].items[3].item_id)],
-            [str(item.item_id) for item in session.turns[-1].items[4:]],
+            [str(item.item_id)] for item in session.turns[-1].items
         ]
-        assert activities[1]["outcome"] == "failed"
+        assert activities[3]["outcome"] == "failed"
         seen = [row["global_ordinal"] for row in page["turns"]]
         while page["page"]["next_cursor"]:
             page = read_prepared(
