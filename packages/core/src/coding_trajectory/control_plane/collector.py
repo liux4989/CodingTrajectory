@@ -19,6 +19,7 @@ from typing import Any, Protocol, Self
 from uuid import UUID, uuid4
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 from coding_trajectory.contracts import LivingChange, LivingSessionsChange
 from coding_trajectory.contracts.prepared_api import PreparedObject
@@ -117,6 +118,39 @@ class CollectorRemoteError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+
+
+class FrozenSource(BaseModel):
+    """A private, complete-line source prefix; appended bytes belong to a later run."""
+
+    model_config = ConfigDict(extra="forbid")
+    path: Path
+    vendor: str
+    bytes: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    file_identity: str
+    modified_at: datetime
+    segment_id: UUID = Field(default_factory=uuid4)
+
+
+def freeze_inventory(current_dir: Path) -> list[FrozenSource]:
+    sources = []
+    for candidate in discover_source_candidates(current_dir=current_dir):
+        stat = candidate.path.stat()
+        offset, body = _complete_prefix(candidate.path, stat.st_size)
+        sources.append(
+            FrozenSource(
+                path=candidate.path.resolve(),
+                vendor=candidate.vendor.value,
+                bytes=offset,
+                sha256=_sha256(body),
+                file_identity=f"{stat.st_dev}:{stat.st_ino}",
+                modified_at=datetime.fromtimestamp(
+                    stat.st_mtime_ns / 1_000_000_000, tz=UTC
+                ),
+            )
+        )
+    return sorted(sources, key=lambda source: str(source.path))
 
 
 def _collector_rpc_body(
@@ -339,9 +373,19 @@ class _CollectedSource:
 class LocalCollector:
     """Collect complete JSONL prefixes into a durable, retry-safe local outbox."""
 
-    def __init__(self, *, database_path: Path, identity: CollectorIdentity) -> None:
+    def __init__(
+        self,
+        *,
+        database_path: Path,
+        identity: CollectorIdentity,
+        preparation_cache_path: Path | None = None,
+        publication_preflight: Callable[[ArtifactPublicationRequest, str], None]
+        | None = None,
+    ) -> None:
         self.database_path = database_path.expanduser()
         self.identity = identity
+        self.preparation_cache_path = preparation_cache_path
+        self.publication_preflight = publication_preflight
         self.prepared_sources: list[_CollectedSource] = []
         self._recovered_sources: dict[UUID, RecoveredSource] = {}
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -377,6 +421,7 @@ class LocalCollector:
         target_session_id: UUID | None = None,
         known_fact_digests: set[str] | None = None,
         candidate_paths: set[Path] | None = None,
+        frozen_inventory: list[FrozenSource] | None = None,
     ) -> CollectorRunResult:
         """Discover, fence, publish checkpoints, and publish local graph facts."""
 
@@ -396,6 +441,20 @@ class LocalCollector:
             agent_vendor=agent_vendor,
             since_days=since_days,
         )
+        frozen = {source.path: source for source in frozen_inventory or []}
+        if frozen_inventory is not None:
+            if (
+                global_scope
+                or agent_vendor
+                or since_days
+                or target_session_id
+                or candidate_paths
+            ):
+                raise ValueError("frozen inventory requires the complete project scope")
+            if {candidate.path.resolve() for candidate in candidates} != set(frozen):
+                raise ValueError(
+                    "frozen inventory discovery changed; nothing published"
+                )
         if candidate_paths is not None:
             if remote is not None:
                 raise ValueError(
@@ -445,7 +504,17 @@ class LocalCollector:
             try:
                 source = candidate.path
                 stat = source.stat()
-                complete_offset, complete_bytes = _complete_prefix(source, stat.st_size)
+                pin = frozen.get(source.resolve())
+                complete_offset, complete_bytes = _complete_prefix(
+                    source, pin.bytes if pin else stat.st_size
+                )
+                if pin and (
+                    candidate.vendor.value != pin.vendor
+                    or f"{stat.st_dev}:{stat.st_ino}" != pin.file_identity
+                    or complete_offset != pin.bytes
+                    or _sha256(complete_bytes) != pin.sha256
+                ):
+                    raise ValueError("frozen source prefix changed")
                 if complete_offset == 0:
                     continue
                 records = [
@@ -455,6 +524,8 @@ class LocalCollector:
                 ]
                 header = candidate.adapter_cls().scan_identity_records(source, records)
                 if header is None:
+                    if pin is not None:
+                        raise ValueError("frozen source has no canonical identity")
                     continue
                 state = self._source_state(source)
                 file_identity = f"{stat.st_dev}:{stat.st_ino}"
@@ -471,10 +542,14 @@ class LocalCollector:
                         file_identity=file_identity,
                         modified_at=datetime.fromtimestamp(
                             stat.st_mtime_ns / 1_000_000_000, tz=UTC
-                        ),
+                        )
+                        if pin is None
+                        else pin.modified_at,
                         segment_id=(
                             UUID(state["segment_id"])
                             if state is not None and state["segment_id"]
+                            else pin.segment_id
+                            if pin is not None
                             else uuid4()
                         ),
                         rollover=rollover,
@@ -485,6 +560,8 @@ class LocalCollector:
                 # A changing or malformed local source is retried on the next pass.
                 failed += 1
                 continue
+        if frozen_inventory is not None and failed:
+            raise ValueError("frozen source fencing failed; nothing published")
         parent_turn_ids = _parent_started_turn_ids(fenced)
         grouped: dict[tuple[str, UUID], list[_FencedCandidate]] = {}
         for source in fenced:
@@ -825,7 +902,11 @@ class LocalCollector:
                 for source in session_sources[session.session_id][1]
             ]
             graph_input_sha256 = graph_input_digest(graph)
-            graph_preparation = prepare_graph(graph)
+            graph_preparation = (
+                prepare_graph(graph, cache_path=self.preparation_cache_path)
+                if self.preparation_cache_path is not None
+                else prepare_graph(graph)
+            )
             prepared = self._connection.execute(
                 "select * from prepared_graphs where preparation_version = ? and graph_input_sha256 = ?",
                 (ARTIFACT_PREPARATION_VERSION, graph_input_sha256),
@@ -990,6 +1071,8 @@ class LocalCollector:
                 compact_publication(artifact_request),
                 idempotency_key=row["idempotency_key"],
             )
+            if self.publication_preflight is not None:
+                self.publication_preflight(artifact_request, row["idempotency_key"])
             self._connection.execute(
                 "update publication_outbox set state = 'in_flight', attempts = attempts + 1 where idempotency_key = ?",
                 (row["idempotency_key"],),

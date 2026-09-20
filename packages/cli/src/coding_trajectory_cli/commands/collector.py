@@ -241,6 +241,35 @@ def _handle_status(args: argparse.Namespace) -> dict[str, Any]:
         return {"pending": collector.pending_count()}
 
 
+def _handle_publish(args: argparse.Namespace) -> dict[str, Any]:
+    from coding_trajectory.control_plane.publication_run import (
+        PublicationRun,
+        PublicationStopped,
+    )
+
+    try:
+        if args.publish_action == "status":
+            return PublicationRun.status(Path(args.run_dir))
+        with PublicationRun(
+            Path(args.run_dir), create=args.publish_action == "plan"
+        ) as run:
+            if args.publish_action == "plan":
+                return run.plan(
+                    source_sha=args.source_sha,
+                    worker_version=args.worker_version,
+                    credential_profile=args.credential_profile,
+                    workspace_id=args.workspace_id,
+                    project_id=args.project_id,
+                    project_name=args.project_name,
+                    project_root=Path(args.project_root),
+                )
+            if args.publish_action == "reconcile":
+                return run.reconcile()
+            return run.execute(getattr(args, "reconciliation_sha", None))
+    except PublicationStopped as exc:
+        raise ValueError(str(exc)) from None
+
+
 def _handle_credentials_configure(args: argparse.Namespace) -> dict[str, Any]:
     token = (
         None
@@ -356,6 +385,48 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     status.add_argument("--state-path", help="Private SQLite delivery state path.")
     status.set_defaults(_plugin_handler=_handle_status, _default_output="json")
+
+    publish = commands.add_parser(
+        "publish",
+        help="Plan, execute and reconcile a pinned complete-project publication.",
+        formatter_class=GhFormatter,
+    )
+    publication_actions = publish.add_subparsers(dest="publish_action", required=True)
+    for action in ("plan", "start", "status", "reconcile", "resume"):
+        operation = publication_actions.add_parser(action, formatter_class=GhFormatter)
+        operation.add_argument(
+            "--run-dir",
+            required=True,
+            help="Private directory unique to this publication.",
+        )
+        operation.set_defaults(_plugin_handler=_handle_publish, _default_output="json")
+        if action == "plan":
+            operation.add_argument(
+                "--source-sha",
+                required=True,
+                help="Full clean collector checkout commit SHA.",
+            )
+            operation.add_argument(
+                "--worker-version",
+                required=True,
+                type=_uuid_arg,
+                help="Expected deployed Cloudflare Worker version ID.",
+            )
+            operation.add_argument("--credential-profile", required=True)
+            operation.add_argument("--workspace-id", required=True, type=_uuid_arg)
+            operation.add_argument("--project-id", required=True, type=_uuid_arg)
+            operation.add_argument("--project-name", required=True)
+            operation.add_argument(
+                "--project-root",
+                required=True,
+                help="Local discovery root; no age or partial-session filter.",
+            )
+        elif action == "resume":
+            operation.add_argument(
+                "--reconciliation-sha",
+                required=True,
+                help="Fresh digest returned by read-only reconcile.",
+            )
 
     credentials = commands.add_parser(
         "credentials",

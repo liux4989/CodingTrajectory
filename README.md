@@ -79,6 +79,75 @@ Do not roll back to a pre-retirement Worker: it would recreate the old tables.
 Use `node scripts/qualify-legacy-fact-cleanup.mjs` for disposable workerd/SQLite
 qualification of table guards, target isolation, gate teardown, and retry.
 
+## Repeatable local publication
+
+Use `ct collector publish` on the machine holding the private sessions (macOS
+or Linux), from a clean, reviewed source checkout. It does not deploy the Worker
+or change credentials. Select an existing project and a collector profile with
+both read and collect access to the **same workspace**. Do not run another
+collector for that project at the same time.
+Choose a new `$RUN_DIR` outside the checkout, for example under
+`~/.coding-trajectory/publications/`; keep using that directory for recovery.
+
+```bash
+uv sync --all-packages --frozen
+uv run --frozen --no-sync ct collector publish plan \
+  --run-dir "$RUN_DIR" --source-sha "$REVIEWED_COLLECTOR_SHA" \
+  --worker-version "$DEPLOYED_WORKER_VERSION" \
+  --credential-profile "$COLLECTOR_PROFILE" --workspace-id "$WORKSPACE_ID" \
+  --project-id "$PROJECT_ID" --project-name CodingTrajectory \
+  --project-root "$LOCAL_PROJECT_ROOT"
+
+# Explicitly authorize this frozen inventory's delivery:
+uv run --frozen --no-sync ct collector publish start --run-dir "$RUN_DIR"
+
+# Safe to inspect from a separate terminal while it runs:
+uv run --frozen --no-sync ct collector publish status --run-dir "$RUN_DIR"
+```
+
+`plan` makes only authenticated read requests, checks the deployed version and
+principal, and freezes all discovered complete-line source prefixes with hashes,
+file identities and timestamps. There is no age/vendor/session subset filter.
+`start` verifies the same checkout SHA/tree and Python version. Changed source
+prefixes or changed discovery membership stop before source delivery. Appends
+after planning are intentionally left for the next run. Once staged, the exact
+publication and artifact bytes live in the run database; resuming that stage
+does not rediscover or reprepare newer data.
+
+Before the first artifact upload, preflight checks complete-inventory identity,
+zero prepared-method errors, exact 3 MiB RPC size and a conservative compact SQL
+manifest projection against the 2 MiB−4096 row guard. Source registration and
+checkpoints may already have been accepted by then. The separate 0700 run
+directory holds a 0600 database, isolated preparation cache and fsynced audit
+receipts. Audit output excludes bodies and tokens; **the database and plan still
+contain private content/paths and must not be shared**. Requests have 120-second
+transport timeouts; there is no internal resume loop or concurrency increase.
+
+After any interruption, preserve the directory and reconcile before resuming:
+
+```bash
+uv run --frozen --no-sync ct collector publish reconcile --run-dir "$RUN_DIR"
+uv run --frozen --no-sync ct collector publish resume --run-dir "$RUN_DIR" \
+  --reconciliation-sha "$DIGEST_FROM_RECONCILE"
+```
+
+Reconciliation performs only remote reads, leaving the collector database
+unchanged. Its immutable report binds to the current local database/audit hashes.
+Resume rejects a stale report, repeats authority checks immediately before
+writes, and settles already accepted checkpoints without replay. A committed
+publication must match the full expanded manifest at its receipt's snapshot;
+it is never submitted again. Version, sequence, source-watermark or manifest
+disagreements stop for review. This is manifest verification, not full API parity
+or runtime performance qualification.
+
+Uncommitted uploads are conservatively re-completed through the existing
+authenticated immutable-object path: a local successful PUT is not proof that
+its server-side claim is still retained. This may repeat HTTP bodies and take
+time; it does not silently skip claims, truncate data or rewrite existing valid
+objects. Legacy/ad-hoc run directories are not imported automatically. Keep
+their receipts and reconcile them using their original pinned tooling rather
+than starting a second publication from this command.
+
 ## Staging deployment CI
 
 `.github/workflows/deploy-staging.yml` is manual-only and deploys code, not session

@@ -8,6 +8,7 @@ import os
 import sqlite3
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 from uuid import UUID
 
 import httpx
@@ -284,6 +285,309 @@ def qualify_publication_transport(root, identity, publication_row) -> None:
         )
     print(
         "PASS exact UTF-8 RPC boundary, unchanged idempotency bytes, pre-upload durable rejection, and v2 receipt recovery without replay"
+    )
+
+
+def qualify_pinned_publication(root: Path, journal: Path) -> None:
+    """Execute the durable run against synthetic HTTP authority responses."""
+    from coding_trajectory.control_plane import publication_run as runs
+    from coding_trajectory.control_plane.artifact_protocol import (
+        ArtifactManifestGraph,
+        ArtifactPublicationRequest,
+        compact_graph,
+        expand_graph,
+    )
+    from coding_trajectory.control_plane.connections import (
+        CollectorCredentialProfile,
+        CollectorCredentials,
+    )
+
+    original = journal.read_bytes()
+    source_sha = "a" * 40
+    worker = UUID(int=55)
+    credentials = CollectorCredentials(
+        profile=CollectorCredentialProfile(
+            cloudflare_url="http://localhost",
+            workspace_id=UUID(int=1),
+            agent_id=UUID(int=2),
+            project_id=UUID(int=4),
+            token_env="SYNTHETIC_TOKEN",
+        ),
+        access_token="synthetic-token-not-for-audit",
+    )
+
+    class Authority:
+        def __init__(self, failure=None):
+            self.failure = failure
+            self.writes = []
+            self.source = None
+            self.receipt = None
+            self.publication = None
+            self.objects = {}
+            self.version = str(worker)
+            self.corrupt_manifest = False
+
+        def __call__(self, request):
+            if request.method == "PUT":
+                self.writes.append("upload")
+                self.objects[request.url.path] = request.content
+                if self.failure == "upload":
+                    self.failure = None
+                    raise httpx.ReadTimeout(
+                        "synthetic secret must not leak", request=request
+                    )
+                return httpx.Response(
+                    200, headers={"X-CT-Worker-Version": self.version}
+                )
+            envelope = json.loads(request.content)
+            method, params = envelope["method"], envelope["params"]
+            data = {}
+            if method == "ct_connection_status":
+                data = {
+                    "workspace_id": str(UUID(int=1)),
+                    "agent_id": str(UUID(int=2)),
+                    "roles": ["read", "collect"],
+                }
+            elif method == "ct_collector_recover":
+                data = {
+                    "next_publication_sequence": int(self.receipt is not None),
+                    "source": self.source if params.get("native_session_id") else None,
+                    "publication_receipt": self.receipt
+                    if params.get("publication_idempotency_key")
+                    else None,
+                }
+            elif method == "ct_collector_register_source":
+                self.writes.append("register")
+                self.source = {
+                    "source_id": str(UUID(int=101)),
+                    "source_epoch": 1,
+                    "next_source_sequence": 0,
+                    "content_sha256": None,
+                }
+                data = {"source_id": self.source["source_id"], "source_epoch": 1}
+            elif method == "ct_collector_publish_observation":
+                self.writes.append("checkpoint")
+                self.source.update(
+                    next_source_sequence=params["source_sequence"] + 1,
+                    content_sha256=params["content_sha256"],
+                )
+                data = {
+                    "receipt_id": str(UUID(int=202)),
+                    "outcome": "accepted",
+                    "committed_sequence": 2,
+                }
+                if self.failure == "checkpoint":
+                    self.failure = None
+                    raise httpx.ReadTimeout("unknown checkpoint", request=request)
+            elif method == "ct_collector_publish_artifacts":
+                self.writes.append("manifest")
+                self.publication = ArtifactPublicationRequest.model_validate(
+                    {
+                        **params,
+                        "schema_version": "ct.artifact-manifest.v2",
+                        "graphs": [expand_graph(g) for g in params["graphs"]],
+                    }
+                )
+                self.receipt = {
+                    "receipt_id": str(UUID(int=303)),
+                    "outcome": "accepted",
+                    "committed_sequence": 3,
+                    "details": {"publication_outcome": "published"},
+                }
+                data = self.receipt
+                if self.failure == "manifest":
+                    self.failure = None
+                    raise httpx.ReadTimeout("unknown manifest", request=request)
+            elif method == "ct_artifact_manifest":
+                graph_values = [
+                    {
+                        k: v
+                        for k, v in graph.model_dump(mode="json").items()
+                        if k in ArtifactManifestGraph.model_fields
+                    }
+                    for graph in self.publication.graphs
+                ]
+                if self.corrupt_manifest:
+                    graph_values[0]["fact_count"] += 1
+                data = {
+                    "workspace_id": str(UUID(int=1)),
+                    "snapshot_sequence": 3,
+                    "manifests": [
+                        {
+                            "schema_version": "ct.artifact-manifest.v3",
+                            "preparation_version": ARTIFACT_PREPARATION_VERSION,
+                            "workspace_id": str(UUID(int=1)),
+                            "project_id": str(UUID(int=4)),
+                            "publisher_agent_id": str(UUID(int=2)),
+                            "publication_sequence": 0,
+                            "snapshot_sequence": 3,
+                            "published_at": "2026-09-20T10:00:00.000Z",
+                            "inventory_state": "complete",
+                            "graphs": [compact_graph(g) for g in graph_values],
+                        }
+                    ],
+                }
+            else:
+                raise AssertionError(method)
+            return httpx.Response(
+                200,
+                headers={"X-CT-Worker-Version": self.version},
+                json={"ok": True, "data": data},
+            )
+
+    def blocked(call):
+        try:
+            call()
+        except (runs.PublicationStopped, CollectorRemoteError, ValueError):
+            return
+        raise AssertionError("unsafe operation was accepted")
+
+    blocked(lambda: runs.source_pin("0" * 40))
+    client = httpx.Client
+    for scenario in (
+        "success",
+        "checkpoint",
+        "upload",
+        "manifest",
+        "prefix",
+        "discovery",
+        "version",
+        "workspace",
+    ):
+        authority = Authority(scenario)
+        with (
+            patch.object(runs, "source_pin", return_value="b" * 40),
+            patch.object(runs, "load_profile_credentials", return_value=credentials),
+            patch.object(
+                httpx,
+                "Client",
+                side_effect=lambda authority=authority, **kw: client(
+                    transport=httpx.MockTransport(authority), **kw
+                ),
+            ),
+            runs.PublicationRun(root / f"pinned-{scenario}", create=True) as run,
+        ):
+            run.plan(
+                source_sha=source_sha,
+                worker_version=worker,
+                credential_profile="synthetic",
+                workspace_id=UUID(int=1),
+                project_id=UUID(int=4),
+                project_name="Checkpoint",
+                project_root=root,
+            )
+            assert not authority.writes
+            assert run.load().inventory[0].bytes == len(original)
+            blocked(lambda: runs.PublicationRun(run.directory).__enter__())
+            if scenario == "workspace":
+                wrong = CollectorCredentials(
+                    profile=credentials.profile.model_copy(
+                        update={"workspace_id": UUID(int=99)}
+                    ),
+                    access_token=credentials.access_token,
+                )
+                with patch.object(runs, "load_profile_credentials", return_value=wrong):
+                    blocked(run.execute)
+                assert not authority.writes
+                continue
+            if scenario == "prefix":
+                journal.write_bytes(
+                    original.replace(b"Checkpoint evidence", b"Changed checkpoint!")
+                )
+                blocked(run.execute)
+                assert not authority.writes
+                journal.write_bytes(original)
+                continue
+            if scenario == "discovery":
+                added = journal.with_name("new-source.jsonl")
+                added.write_bytes(original)
+                blocked(run.execute)
+                assert not authority.writes
+                added.unlink()
+                continue
+            if scenario == "version":
+                authority.version = str(UUID(int=99))
+                blocked(run.execute)
+                assert not authority.writes
+                continue
+            if scenario == "success":
+                # Growth after planning belongs to the next run, not this one.
+                extra = json.loads(original.splitlines()[-1])
+                extra["message"]["id"] = "future-message"
+                extra["message"]["content"][0]["text"] = (
+                    "Future content must not publish"
+                )
+                journal.write_bytes(original + json.dumps(extra).encode() + b"\n")
+                assert run.execute()["state"] == "committed"
+                assert not any(
+                    b"Future content must not publish" in body
+                    for body in authority.objects.values()
+                )
+                journal.write_bytes(original)
+            else:
+                blocked(run.execute)
+                count = len(authority.writes)
+                blocked(run.execute)
+                assert len(authority.writes) == count
+                before = run.database.read_bytes()
+                report = run.reconcile()
+                assert (
+                    run.database.read_bytes() == before
+                    and len(authority.writes) == count
+                )
+                if scenario == "manifest":
+                    assert report["state"] == "committed"
+                else:
+                    assert report["state"] == "resumable"
+                runs.record(run.directory, "qualification_state_changed")
+                blocked(
+                    lambda report=report: run.execute(report["reconciliation_sha256"])
+                )
+                assert len(authority.writes) == count
+                report = run.reconcile()
+                unchanged_database = run.database.read_bytes()
+                run.database.write_bytes(unchanged_database + b"changed-state")
+                blocked(
+                    lambda report=report: run.execute(report["reconciliation_sha256"])
+                )
+                assert len(authority.writes) == count
+                run.database.write_bytes(unchanged_database)
+                assert (
+                    run.execute(report["reconciliation_sha256"])["state"] == "committed"
+                )
+                if scenario == "manifest":
+                    assert len(authority.writes) == count
+                assert authority.writes.count("checkpoint") == 1
+                assert authority.writes.count("manifest") == 1
+            assert run.status(run.directory)["state"] == "committed"
+            before = len(authority.writes)
+            authority.corrupt_manifest = True
+            blocked(run.reconcile)
+            assert len(authority.writes) == before
+            authority.corrupt_manifest = False
+            bad = authority.publication.model_copy(deep=True)
+            bad.graphs[0].api_methods[0].index = None
+            bad.graphs[0].api_methods[0].error = "remote_result_too_large"
+            blocked(lambda bad=bad: run.preflight(run.load(), bad, "bad-method"))
+            huge = authority.publication.model_copy(deep=True)
+            huge.graphs[0].vendors = ["x" * (2 * 1024 * 1024)]
+            blocked(
+                lambda huge=huge: run.preflight(run.load(), huge, "stored-row-overflow")
+            )
+            audit = (run.directory / "audit.jsonl").read_text()
+            event_names = [row["event"] for row in runs.events(run.directory)]
+            assert event_names.index("preflight") < event_names.index("upload_started")
+            assert (
+                "synthetic-token" not in audit
+                and "synthetic secret" not in audit
+                and "Checkpoint evidence" not in audit
+            )
+            if scenario == "upload":
+                assert '"cause_type":"ReadTimeout"' in audit
+            assert run.database.stat().st_mode & 0o077 == 0
+            assert (run.directory / "prepared.sqlite").exists()
+    print(
+        "PASS pinned publication: frozen prefixes/discovery, runtime identity, private state, exclusive lock, unknown checkpoint/upload/manifest reconciliation, stale-proof rejection and exact committed manifest"
     )
 
 
@@ -646,10 +950,12 @@ def main():
             remote.publications,
         )
         qualify_semantic_details(graphs[0], root)
+        qualify_pinned_publication(root, checkpoint_journals / "checkpoint.jsonl")
         print(
             json.dumps(
                 {
                     "passed": 30,
+                    "pinned_publication_scenarios": 8,
                     "batch_resolves_once_then_refreshes": True,
                     "projection_calls_initial_replay_change": [2, 0, 1],
                     "same_name_projects_isolated": True,
