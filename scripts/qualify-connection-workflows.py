@@ -54,7 +54,9 @@ def main():
                 for key, value in os.environ.items()
                 if not key.startswith("CT_")
             }
-            env.update(CT_CONNECTION_DIR=temporary, CT_FIXTURE_TOKEN=TOKEN)
+            env.update(
+                HOME=temporary, CT_CONNECTION_DIR=temporary, CT_FIXTURE_TOKEN=TOKEN
+            )
             passed = 0
 
             def run(*args, success=True, overrides=None):

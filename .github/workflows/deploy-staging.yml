@@ -1,4 +1,4 @@
-name: Deploy control plane to staging
+name: Prepare control plane staging release
 
 on:
   workflow_dispatch:
@@ -15,7 +15,6 @@ defaults:
   run:
     shell: bash
 
-# Never cancel a deployment whose remote outcome may already be committed.
 concurrency:
   group: control-plane-staging-deploy
   cancel-in-progress: false
@@ -25,22 +24,20 @@ env:
   WRANGLER_SEND_METRICS: "false"
   CI: "true"
 
+# Build only. Account credentials cannot prove live prepared-data compatibility.
+# Activation runs on the authorized host with scoped reader profiles; see README.
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    outputs:
-      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
-      release_sha: ${{ steps.release.outputs.sha }}
     steps:
-      - name: Require a reviewed main commit and a fresh run
+      - name: Require a reviewed main commit
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$SOURCE_SHA" = "$GITHUB_SHA"
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_RUN_ATTEMPT" = 1
 
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -61,104 +58,19 @@ jobs:
           uv sync --all-packages --frozen
           npm --prefix cloudflare/control-plane ci
 
-      - name: Qualify contracts, metrics and publication locally
+      - name: Prepare immutable local release
         run: |
-          npm --prefix cloudflare/control-plane run check
-          uv run python scripts/validate-metrics-baselines.py
-          uv run python scripts/qualify-collector-preparation.py
-          uv run python scripts/qualify-connection-workflows.py
-          uv run python scripts/qualify-prepared-api.py
-          uv run python scripts/qualify-prepared-api.py --shape index-heavy --fixture-output "$RUNNER_TEMP/index-heavy.json"
-          node scripts/qualify-prepared-api.mjs "$RUNNER_TEMP/index-heavy.json" --publication "$RUNNER_TEMP/publication.json"
+          uv run python scripts/deploy-release.py prepare \
+            --source-sha "$GITHUB_SHA" --run-dir "$RUNNER_TEMP/staging-release"
+          uv run python scripts/deploy-release.py verify \
+            --run-dir "$RUNNER_TEMP/staging-release" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build staging artifact once
-        working-directory: cloudflare/control-plane
-        run: |
-          ./node_modules/.bin/wrangler deploy --env staging --dry-run --outdir ../../.artifacts/staging-release/worker
-
-      - name: Bind artifact to source, configuration and toolchain
-        id: release
-        run: |
-          test -z "$(git status --porcelain --untracked-files=no)"
-          release=.artifacts/staging-release
-          sha256sum uv.lock cloudflare/control-plane/package-lock.json cloudflare/control-plane/wrangler.jsonc > "$release/inputs.sha256"
-          jq -n --arg source "$GITHUB_SHA" --arg tree "$(git rev-parse HEAD^{tree})" \
-            --arg node "$(node --version)" --arg python "$(uv run python --version)" \
-            --arg uv "$(uv --version)" --arg wrangler "$(cloudflare/control-plane/node_modules/.bin/wrangler --version)" \
-            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{source: $source, tree: $tree, node: $node, python: $python, uv: $uv, wrangler: $wrangler, run: $run, environment: "staging"}' > "$release/provenance.json"
-          (cd "$release" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
-          digest=$(sha256sum "$release/SHA256SUMS" | cut -d ' ' -f 1)
-          echo "sha=$digest" >> "$GITHUB_OUTPUT"
-          printf 'Source: `%s`\n\nRelease SHA256: `%s`\n' "$GITHUB_SHA" "$digest" >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        id: artifact
-        with:
-          name: staging-release-${{ github.sha }}
-          path: .artifacts/staging-release/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 30
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    environment: staging
-    steps:
-      # Also guard this job: GitHub can rerun failed jobs without rerunning build.
-      - name: Reject replay of a possibly committed deployment
-        run: test "$GITHUB_RUN_ATTEMPT" = 1
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22.22.0"
-      - name: Install locked deploy tool without deployment credentials
-        run: npm --prefix cloudflare/control-plane ci
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          artifact-ids: ${{ needs.build.outputs.artifact_id }}
-          path: .artifacts/staging-release
-          merge-multiple: true
-      - name: Verify approved artifact and checkout
-        env:
-          RELEASE_SHA: ${{ needs.build.outputs.release_sha }}
-        run: |
-          echo "$RELEASE_SHA  .artifacts/staging-release/SHA256SUMS" | sha256sum -c -
-          (cd .artifacts/staging-release && sha256sum -c SHA256SUMS)
-          sha256sum -c .artifacts/staging-release/inputs.sha256
-          jq -e --arg source "$GITHUB_SHA" '.source == $source and .environment == "staging"' .artifacts/staging-release/provenance.json
-
-      - name: Deploy prebuilt Worker once and record remote status
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        working-directory: cloudflare/control-plane
-        run: |
-          test -n "$CLOUDFLARE_API_TOKEN"
-          test -n "$CLOUDFLARE_ACCOUNT_ID"
-          evidence=../../.artifacts/staging-deployment
-          mkdir -p "$evidence"
-          cp ../../.artifacts/staging-release/provenance.json "$evidence/"
-          ./node_modules/.bin/wrangler deployments status --env staging --json > "$evidence/before.json"
-          echo 'unknown: deployment invocation started; reconcile before any retry' > "$evidence/outcome.txt"
-          ./node_modules/.bin/wrangler deploy ../../.artifacts/staging-release/worker/index.js \
-            --env staging --no-bundle --strict --tag "${GITHUB_SHA:0:12}" \
-            --message "GitHub $GITHUB_REPOSITORY $GITHUB_SHA run $GITHUB_RUN_ID" 2>&1 | tee "$evidence/deploy.log"
-          ./node_modules/.bin/wrangler deployments status --env staging --json > "$evidence/after.json"
-          echo 'deploy command succeeded; remote status captured; application/data qualification is separate' > "$evidence/outcome.txt"
-          cat "$evidence/outcome.txt" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Preserve deployment evidence even on failure
+      - name: Preserve synthetic qualification and build evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: staging-deployment-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/staging-deployment/
+          name: staging-release-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-release/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30

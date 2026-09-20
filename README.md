@@ -157,45 +157,84 @@ Legacy/ad-hoc run directories are not imported automatically. Keep
 their receipts and reconcile them using their original pinned tooling rather
 than starting a second publication from this command.
 
-## Staging deployment CI
+## Durable staging release jobs
 
-`.github/workflows/deploy-staging.yml` is manual-only and deploys code, not session
-data. It checks the full supplied commit SHA against the selected `main` ref,
-installs locked dependencies with pinned actions/tool versions, runs metric and
-prepared-publication qualifications locally, and builds the staging Worker once.
-The deploy job verifies the immutable artifact's hashes and source/configuration
-identity, then uploads that same bundle with `--no-bundle --env staging --strict`.
-It records source/tree/tool versions, bundle checksums, deployment output and
-before/after remote status in run artifacts retained for 30 days. This makes the
-promoted artifact identifiable; it does not claim hermetic, bit-for-bit rebuilds
-across GitHub runner image updates or certify live application/data behavior.
+`npm --prefix cloudflare/control-plane run deploy -- <action> ...` delegates to
+`uv run python scripts/deploy-release.py`. No action deploys implicitly.
+Use a clean reviewed checkout, `uv sync --all-packages --frozen`, and
+`npm --prefix cloudflare/control-plane ci`. Keep the run directory **outside
+disposable worktrees**, private (0700), and backed up with its append-only audit.
 
-One-time repository setup (not performed by adding the workflow):
+```bash
+release="$HOME/.coding-trajectory/releases/<unique-release-name>"
+uv run python scripts/deploy-release.py prepare --run-dir "$release" --source-sha <full-reviewed-SHA>
+uv run python scripts/deploy-release.py status --run-dir "$release"
+uv run python scripts/deploy-release.py verify --run-dir "$release"
+# Only authenticated reads. Pause all publishers and other deploy owners first.
+uv run python scripts/deploy-release.py preflight --run-dir "$release" --reader-profile <profile>
+# After owner approval of the exact returned digest, with scoped account credentials:
+uv run python scripts/deploy-release.py deploy --run-dir "$release" --approve-activation <digest>
+```
 
-1. Create the GitHub Environment **`staging`**. Require a reviewer, prevent
-   self-review and restrict deployment branches to `main`. An environment name
-   in YAML alone does **not** enforce approval; configure protection before
-   adding credentials. Availability depends on the repository's GitHub plan.
-2. Add environment-only secrets `CLOUDFLARE_ACCOUNT_ID` and
-   `CLOUDFLARE_API_TOKEN`. Scope the token to the existing staging account and
-   the permissions needed to deploy/read the existing Worker and its bindings.
-   Do not add unrelated account-administration privileges or copy collector/
-   principal credentials into CI. Existing `CT_PRINCIPALS` and `CT_CURSOR_KEY`
-   stay in Cloudflare; token capabilities may be broader than this workflow.
-3. After the reviewed workflow/source reaches `main`, choose **Actions → Deploy
-   control plane to staging → Run workflow**, select `main` and supply its full
-   reviewed SHA. Inspect the build provenance and approve the environment job.
-   Do not overlap this with a manual deployment or an active collector run;
-   workflow concurrency only serializes this workflow, not external operators.
+`prepare` seals source/tree, lockfiles, Wrangler configuration and tool versions;
+runs the existing metric, collector, connection and prepared-API qualifications;
+then builds once. Completed phases verify their cached logs and output hashes
+instead of rerunning. Interrupted local phases without a sealed receipt rerun;
+failed logs remain. Damaged/unsealed evidence fails closed—preserve it rather
+than editing a receipt. `verify` also requires the original toolchain and clean
+source. This identifies exact bytes, not hermetic rebuilds across machines.
 
-Neither pushes nor pull requests deploy. Workflow reruns are rejected, including
-“rerun failed jobs”: a failed/timeout deployment may already have committed.
-Preserve the evidence and reconcile remote status read-only before approving a
-new dispatch. There is no automatic rollback; SQL changes may be roll-forward
-only. The workflow applies the reviewed staging Wrangler configuration but does
-not provision credentials, publish private sessions, replay outboxes, run remote
-benchmarks, or switch production traffic. Collector publication and bounded
-correct-workspace read-back remain separately authorized operations.
+`preflight` checks **all current project manifests in each supplied workspace**
+against candidate prepared-method versions and rejects errors/missing indexes.
+Repeat `--reader-profile` once per affected workspace. It pins manifest hashes,
+endpoint versions and the current single-version staging deployment. `deploy`
+repeats those reads and rejects drift before uploading the sealed bundle using
+`--no-bundle --strict`. Approval is a human authorization requirement; possessing
+the digest alone is not an access-control mechanism.
+
+```bash
+uv run python scripts/deploy-release.py stop --run-dir "$release"
+# Wait for the active owner/child to exit. Local preparation only:
+uv run python scripts/deploy-release.py resume --run-dir "$release" --source-sha <same-SHA>
+# After any deployment invocation, including a timeout or lost response:
+uv run python scripts/deploy-release.py reconcile --run-dir "$release"
+```
+
+Stop drains the active command and prevents the next phase; it cannot cancel a
+remote commit. Deployment intent is fsynced before invocation. That job **never
+replays deployment**, even after a nonzero exit or spawn failure. Reconciliation
+makes only reads and matches the active version's exact release message/tag.
+`receipt.json` records code activation, phase seconds and operation counts;
+it explicitly does not certify application readback. An unmatched result stays
+unknown, not “safe to retry”. If another deploy superseded it, inspect version
+history before authorizing any new job. There is no automatic rollback.
+
+**Remaining rollout gap:** manifest publication and Worker activation are not
+atomic. The descriptor check does not fetch every object, certify semantics,
+discover unlisted workspaces, or provide a remote lock. The operator must cover
+every affected workspace, pause publishers, review schema/config changes and
+perform bounded correct-workspace readback afterward. Empty/new targets fail
+closed and require separate bootstrap qualification. For an incompatible API
+version, first implement and qualify a bridge reader that supports both stored
+formats; prepare replacement data from complete retained facts, publish it with
+the existing collector's authority-readiness and idempotency protocol, then
+retire the old reader. No bridge or atomic activation is invented by this script.
+Do not use `collector publish plan` to rediscover or broaden an approved frozen
+recent-only inventory. Retained-fact migration remains separately scoped work;
+the release runner never reingests sources, uploads corpus objects, or replays an
+accepted publication. Existing collector batches, bounded parallelism, prepared
+cache and reconcile-before-resume behavior remain their source of truth.
+
+`.github/workflows/deploy-staging.yml` now performs **build-only qualification**
+using the same preparation command. Manual dispatch requires an exact `main`
+SHA; pushes and PRs do not deploy. No account or private reader credentials are
+injected. Synthetic build evidence is retained for 30 days, including on failure.
+It is not a backup for local private release evidence. A downloaded CI job can
+only be verified with its pinned toolchain; do not relabel it as a Mac build.
+Use a fresh local job when the toolchain differs. CI activation is intentionally
+disabled until it can enforce the same live-data compatibility gate without
+copying private credentials/corpus into GitHub. Phase timings measure actual
+work; reproducibility does not promise instant builds or uploads.
 
 ## Docs
 

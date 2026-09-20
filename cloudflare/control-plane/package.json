@@ -6,7 +6,7 @@
     "schemas": "PYTHONPATH=../../packages/core/src uv run python ../../scripts/generate-cloudflare-contracts.py && node scripts/compile-contracts.mjs",
     "types": "wrangler types src/env.d.ts --include-runtime=false",
     "check": "npm run schemas && tsc --noEmit",
-    "deploy": "npm run check && wrangler deploy"
+    "deploy": "uv run python ../../scripts/deploy-release.py"
   },
   "dependencies": {
     "ajv": "8.17.1",
