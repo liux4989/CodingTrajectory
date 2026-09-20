@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from coding_trajectory.analysis.activity_flow import build_overview_flows
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.control_plane.artifact_protocol import (
     compact_graph,
@@ -238,6 +239,12 @@ def main():
             "api": api.model_dump(mode="json"),
             "summary": prepared.summary.model_dump(mode="json"),
             "facts": prepared.publication().model_dump(mode="json"),
+            "overview_activities": {
+                str(turn.turn_id): [
+                    flow for flow in build_overview_flows(turn.items) if "tool" in flow
+                ][-8:]
+                for turn in session.turns
+            },
             "versions": {
                 m.method: service_contract(m.method).version for m in api.methods
             },
@@ -447,11 +454,16 @@ def main():
             return
         assert page["sessions"][0]["cwd"] == session.cwd
         assert page["turns"][-1]["global_ordinal"] == 96 and page["page"]["has_more"]
-        assert all(
-            "--ordinal 96" in activity["target"] and activity["concept"] == "RunCommand"
-            for activity in page["turns"][-1]["activities"]
+        activities = page["turns"][-1]["activities"]
+        assert (
+            activities == fixture["overview_activities"][str(session.turns[-1].turn_id)]
         )
-        assert page["turns"][-1]["activities"][3]["exit_code"] == 7
+        assert [cell["item_ids"] for cell in activities] == [
+            [str(item.item_id) for item in session.turns[-1].items[:3]],
+            [str(session.turns[-1].items[3].item_id)],
+            [str(item.item_id) for item in session.turns[-1].items[4:]],
+        ]
+        assert activities[1]["outcome"] == "failed"
         seen = [row["global_ordinal"] for row in page["turns"]]
         while page["page"]["next_cursor"]:
             page = read_prepared(

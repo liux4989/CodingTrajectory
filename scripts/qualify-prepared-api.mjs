@@ -403,11 +403,15 @@ async function main() { try {
   assert.equal(first.data.turns.at(-1).global_ordinal, lastOrdinal);
   const hash = first.meta.identity.view_manifest_sha256;
   const selected = first.data.turns.at(-1);
+  for (const turn of first.data.turns) assert.deepEqual(turn.activities, fixture.overview_activities[turn.turn_id]);
+  const grouped = await api('session.items', { session_id: fixture.root, turn_id: selected.turn_id,
+    item_ids: selected.activities[0].item_ids, view_manifest_sha256: hash, limit: 10 });
+  assert.deepEqual(grouped.data.items.map(item => item.item_id), selected.activities[0].item_ids);
   const detail = await api('session.items', { session_id: fixture.root, turn_id: selected.turn_id,
-    item_ids: [selected.activities[3].item_id, 'not-present'], view_manifest_sha256: hash, limit: 2 });
+    item_ids: [selected.activities[1].item_ids[0], 'not-present'], view_manifest_sha256: hash, limit: 2 });
   assert.equal(detail.data.items.length, 1); assert.equal(detail.data.items[0].detail.exit_code, 7);
   assert.ok(detail.data.items[0].detail.target.includes(`--ordinal ${lastOrdinal}`)); assert.deepEqual(detail.data.unresolved_ids, ['not-present']);
-  const outsideTurn = first.data.turns[0].activities[0].item_id;
+  const outsideTurn = first.data.turns[0].activities[0].item_ids[0];
   const outside = await api('session.items', { session_id: fixture.root, turn_id: selected.turn_id,
     item_ids: [outsideTurn, 'not-present'], view_manifest_sha256: hash });
   assert.deepEqual(outside.data.items, []); assert.deepEqual(outside.data.unresolved_ids, ['not-present']);
@@ -450,7 +454,7 @@ async function main() { try {
   await api('session.overview', params, 'collect', 403);
   await api('session.overview', params, 'missing', 401);
   await api('session.overview', { ...params, view_manifest_sha256: hash }, 'other', 409);
-  await api('session.overview', params, 'owner', 400, 3);
+  await api('session.overview', params, 'owner', 400, 4);
   await api('session.search', { session_id: fixture.root, query: 'x' }, 'owner', 501, 2);
   const inventory = await api('project.sessions', { limit: 1 });
   assert.equal(inventory.data.items[0].view_manifest_sha256, hash);
@@ -500,14 +504,14 @@ with factory.build(token) as runtime:
     overview = runtime.call('session.overview', {'session_id': session, 'limit': 1})
     view = runtime.transport_metadata()['identity']['view_manifest_sha256']
     turn = overview['turns'][0]
-    detail = runtime.call('session.items', {'session_id': session, 'item_ids': [turn['activities'][3]['item_id']], 'view_manifest_sha256': view})
+    detail = runtime.call('session.items', {'session_id': session, 'item_ids': turn['activities'][1]['item_ids'], 'view_manifest_sha256': view})
     assert detail['items'][0]['detail']['exit_code'] == 7
     assert runtime.call('project.list', {})['returned'] == 1
 server = build_http_server(factory=factory, port=0)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 try:
-    response = httpx.post(f'http://127.0.0.1:{server.server_port}/v1/api', headers={'Authorization': f'Bearer {token}'}, json={'protocol': 'ct.api.v1', 'id': 'proxy', 'method': 'session.overview', 'method_version': 4, 'params': {'session_id': session, 'limit': 1}})
+    response = httpx.post(f'http://127.0.0.1:{server.server_port}/v1/api', headers={'Authorization': f'Bearer {token}'}, json={'protocol': 'ct.api.v1', 'id': 'proxy', 'method': 'session.overview', 'method_version': 5, 'params': {'session_id': session, 'limit': 1}})
     assert response.status_code == 200, response.text
     assert response.json()['data']['turns'][0]['global_ordinal'] == int(last_ordinal)
     assert response.headers['cache-control'] == 'no-store'

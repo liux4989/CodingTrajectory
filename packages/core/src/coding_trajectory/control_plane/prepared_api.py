@@ -214,6 +214,7 @@ def overview_rows(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from uuid import UUID
 
+    from coding_trajectory.analysis.activity_flow import build_overview_flows
     from coding_trajectory.analysis.graph_views import _graph_orchestration_summary
     from coding_trajectory.analysis.orchestration_runs import (
         orchestration_run_for_entrypoint,
@@ -256,42 +257,18 @@ def overview_rows(
             records = [
                 _canonical_item_record(item, session_graph=graph, index=index)
                 for item in turn.items
+                if item.kind == "agent_message"
             ]
             assistants = [
                 {"item_id": row["item_id"], "preview": row["preview"]}
                 for row in records
                 if row["kind"] == "agent_message" and row["preview"]
             ]
-            activities = []
-            for row in records:
-                if row["kind"] not in {
-                    "tool_call",
-                    "command_execution",
-                    "file_change",
-                    "plan",
-                }:
-                    continue
-                detail, evidence = row["detail"] or {}, row["output_evidence"] or {}
-                activities.append(
-                    {
-                        "item_id": row["item_id"],
-                        "kind": row["kind"],
-                        **{
-                            key: detail.get(key)
-                            for key in (
-                                "tool_name",
-                                "concept",
-                                "target_kind",
-                                "target",
-                                "path",
-                                "operation",
-                                "exit_code",
-                            )
-                        },
-                        "status": row["status"],
-                        "outcome": evidence.get("outcome"),
-                    }
-                )
+            # Visibility, grouping, descriptions and evidence membership belong
+            # to the shared projector. Bound cells, never expand them into items.
+            activities = [
+                flow for flow in build_overview_flows(turn.items) if "tool" in flow
+            ]
             text_trimmed = any(
                 item.measurements
                 and (

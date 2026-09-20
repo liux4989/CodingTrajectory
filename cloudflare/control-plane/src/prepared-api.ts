@@ -2,10 +2,10 @@ import { artifactKey } from "./artifacts";
 import { decode, digest, encode, Fault, Json, requireThat, stable, State, validate } from "./shared";
 
 export const API_VERSIONS: Record<string, number> = {
-  "project.list": 5, "project.sessions": 5, "session.overview": 4, "session.summary": 3,
+  "project.list": 5, "project.sessions": 5, "session.overview": 5, "session.summary": 3,
   "session.tree": 4, "session.stats": 4, "session.usage": 4, "session.model_usage": 4,
   "session.request_usage": 5, "session.tool_usage": 5, "graph.stats": 4, "graph.usage": 4,
-  "graph.overview": 4, "session.items": 5, "session.events": 5, "living.sessions": 3,
+  "graph.overview": 5, "session.items": 5, "session.events": 5, "living.sessions": 3,
 };
 const SCHEMA = "ct.prepared-api.v1";
 const POSTING_COLUMNS = ["id", "item_id", "turn_id", "types", "status", "tool_name"];

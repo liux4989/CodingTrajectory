@@ -41,6 +41,16 @@ session/graph separation, and rebuildable derived projections.
    `project.sessions` already owns session discovery cards and counts.
 4. **`session.overview` remains sequence-first.** It shows turns and grouped
    activity without claiming to determine the session outcome.
+   Prepared `session.overview` and `graph.overview` v5 preserve the shared
+   `build_overview_flows` activity cells: `tool`, semantic descriptions, optional
+   count/outcome, and all contributing `item_ids`. Visibility and grouping run
+   before the latest-eight-cell limit; activity coverage counts cells, not items.
+   Prepared serialization and CLI rendering must not reclassify or expand cells
+   back into individual records. Omitted evidence remains in `session.items`.
+   This replaces the v4 singleton-activity shape and requires coordinated
+   client/Worker upgrade and v5 preparation/republication; old overview artifacts
+   are not silently reinterpreted. Rollout must account for the interval before
+   new overview artifacts are published.
 5. **Items and events remain the detail layer.** There is no aggregate
    `session.details` payload.
 6. **Search returns references, not replacement evidence.** A match contains a

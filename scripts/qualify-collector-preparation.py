@@ -39,16 +39,21 @@ from coding_trajectory.control_plane.graph_preparation import (
     graph_input_digest,
     prepare_graph,
 )
+from coding_trajectory.control_plane.prepared_api_reader import (
+    read_prepared,
+    save_local_view,
+)
 from coding_trajectory.control_plane.published_facts import (
     FactIndex,
     session_graph_from_fact_index,
 )
 from coding_trajectory.discovery import discover_store_from_files
 from coding_trajectory.ingestion.common import canonical_json
-from coding_trajectory.ingestion.models import CommandExecutionItem
+from coding_trajectory.ingestion.models import CommandExecutionItem, ToolCallItem
 from coding_trajectory.project_identity import local_project_id
 from coding_trajectory.runtime import ServiceRuntime
 from coding_trajectory.service.store import IndexCache
+from coding_trajectory_cli.commands.session import _render_session_overview_text
 
 
 def qualify_semantic_details(graph, root: Path) -> None:
@@ -77,7 +82,7 @@ def qualify_semantic_details(graph, root: Path) -> None:
     ]
     cache_path = root / "semantic-preparation.sqlite"
     prepared = prepare_graph(graph, cache_path=cache_path)
-    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v4"
+    assert ARTIFACT_PREPARATION_VERSION == "ct.graph-preparation.v5"
     assert prepared.summary.preparation_version == ARTIFACT_PREPARATION_VERSION
     facts = prepared.publication()
     reconstructed = session_graph_from_fact_index(
@@ -106,18 +111,136 @@ def qualify_semantic_details(graph, root: Path) -> None:
         db.execute("DELETE FROM prepared")
         old = prepared.model_dump(mode="json")
         old["rows"] = []
-        old["summary"]["preparation_version"] = "ct.graph-preparation.v1"
+        old["summary"]["preparation_version"] = "ct.graph-preparation.v4"
         db.execute(
             "INSERT INTO prepared VALUES (?, ?)",
             (
-                "ct.graph-preparation.v1:" + graph_input_digest(graph),
+                "ct.graph-preparation.v4:" + graph_input_digest(graph),
                 json.dumps(old),
             ),
         )
     assert prepare_graph(graph, cache_path=cache_path) == prepared
     assert prepare_graph(graph, cache_path=cache_path) == prepared
     print(
-        "PASS semantic detail publication/replay, credential redaction, and v1 cache invalidation"
+        "PASS semantic detail publication/replay, credential redaction, and v4 cache invalidation"
+    )
+    # More than eight later noise records must not displace useful activities.
+    turn.items = turn.items + [
+        ToolCallItem(
+            item_id=UUID(int=1000 + n),
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            sequence=5 + n,
+            started_at=turn.started_at,
+            status=status,
+            tool_name=name,
+            input=arguments,
+        )
+        for n, (name, arguments, status) in enumerate(
+            [
+                ("Read", {"file_path": "/work/openai-docs/SKILL.md"}, "completed"),
+                ("WebSearch", {"query": "Codex scheduling documentation"}, "completed"),
+                ("WebFetch", {"url": "https://example.com/docs"}, "completed"),
+                ("WebFetch", {"url": "https://example.com/failure"}, "failed"),
+                *[("exec", {}, "completed")] * 9,
+                ("WebFetch", {}, "completed"),
+                ("WebFetch", {}, "failed"),
+            ]
+        )
+    ]
+    meaningful_ids = [str(item.item_id) for item in turn.items[:9]]
+    noisy_items = turn.items
+    prefix = [
+        ToolCallItem(
+            item_id=UUID(int=2000 + n),
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            sequence=n,
+            started_at=turn.started_at,
+            tool_name="WebFetch",
+            input={"url": f"https://example.com/earlier/{n}"},
+            status="completed",
+        )
+        for n in range(4)
+    ]
+    turn.items = prefix + noisy_items
+    for sequence, item in enumerate(turn.items):
+        item.sequence = sequence
+    canonical_ids = [str(item.item_id) for item in turn.items]
+    prepared = prepare_graph(graph, cache_path=cache_path)
+    scope = str(session.session_id)
+
+    def read(method, params):
+        descriptor = next(
+            m
+            for m in prepared.api.methods
+            if m.method == method and m.scope == scope and m.turn_id is None
+        )
+        return read_prepared(
+            descriptor,
+            {"session_id": scope, **params},
+            identity=save_local_view(prepared.api, prepared.summary.fact_set_digest),
+            fetch=lambda digest: prepared.api.objects[digest].encode(),
+            signing_key=b"k" * 32,
+        )
+
+    overview = read("session.overview", {"limit": 10})
+    projected = next(
+        row for row in overview["turns"] if row["turn_id"] == str(turn.turn_id)
+    )
+    canonical = session_graph_from_fact_index(
+        FactIndex.from_rows(prepared.rows), graph.root_session_id
+    )
+    canonical_turn = next(
+        t for s in canonical.sessions for t in s.turns if t.turn_id == turn.turn_id
+    )
+    expected = [
+        flow for flow in build_overview_flows(canonical_turn.items) if "tool" in flow
+    ]
+    assert projected["activities"] == expected[-8:]
+    assert [cell["item_ids"] for cell in projected["activities"]] == [
+        [str(item.item_id)] for item in prefix[2:]
+    ] + [[meaningful_ids[0]], meaningful_ids[1:5]] + [
+        [item_id] for item_id in meaningful_ids[5:]
+    ]
+    assert projected["activities"][3]["count"] == 4
+    assert projected["content_coverage"]["activities"] == {
+        "total": 10,
+        "returned": 8,
+        "truncated": True,
+    }
+    assert projected["refs"]["item_ids"] == canonical_ids
+    detail = read("session.items", {"turn_id": str(turn.turn_id), "limit": 100})
+    assert [row["item_id"] for row in detail["items"]] == canonical_ids
+    rendered = _render_session_overview_text(overview)
+    activity_lines = [line for line in rendered.splitlines() if line.startswith("- ")]
+    assert len(activity_lines) == 8
+    grouped_line = next(line for line in activity_lines if "Ran 4 commands" in line)
+    assert all(item_id in grouped_line for item_id in meaningful_ids[1:5])
+    print("CLI grouped activity:", grouped_line)
+    # Below the cap the reported reproduction retains only the read and search.
+    turn.items = noisy_items[5:7] + noisy_items[9:]
+    prepared = prepare_graph(graph, cache_path=cache_path)
+    overview = read("session.overview", {"limit": 10})
+    projected = next(
+        row for row in overview["turns"] if row["turn_id"] == str(turn.turn_id)
+    )
+    assert [row["item_ids"] for row in projected["activities"]] == [
+        [item_id] for item_id in meaningful_ids[5:7]
+    ]
+    assert projected["content_coverage"]["activities"] == {
+        "total": 2,
+        "returned": 2,
+        "truncated": False,
+    }
+    rendered = _render_session_overview_text(overview)
+    activity_lines = [line for line in rendered.splitlines() if line.startswith("- ")]
+    assert len(activity_lines) == 2
+    assert "SKILL.md" in activity_lines[0]
+    assert "Codex scheduling documentation" in activity_lines[1]
+    print("CLI meaningful activities:", *activity_lines, sep="\n")
+    print(
+        "PASS semantic projector parity, grouped-cell cap/coverage/membership, meaningful WebFetch retained, and hidden canonical items preserved"
     )
 
 

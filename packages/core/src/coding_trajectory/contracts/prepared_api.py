@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, field_serializer
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 
@@ -117,17 +117,32 @@ class OverviewAssistant(RequestModel):
 
 
 class OverviewActivity(RequestModel):
-    item_id: str
-    kind: str
-    tool_name: str | None = Field(max_length=512)
-    concept: str | None = Field(max_length=512)
-    target_kind: str | None
-    target: str | None = Field(max_length=280)
-    path: str | None = Field(max_length=512)
-    operation: str | None = Field(max_length=512)
-    status: str | None = Field(max_length=512)
-    outcome: str | None = Field(max_length=512)
-    exit_code: int | None
+    """One semantic activity cell, not one canonical item.
+
+    Fields mirror build_overview_flows; descriptions and evidence membership
+    belong to that projector. Prepared object/response byte limits still apply.
+    """
+
+    tool: str
+    item_ids: list[str] = Field(min_length=1)
+    count: int | None = Field(default=None, ge=1)
+    status: str | None = None
+    outcome: Literal["succeeded", "failed"] | None = None
+    wrapper_status: str | None = None
+    cmd: str | None = None
+    commands: list[str] | None = None
+    path: str | None = None
+    paths: list[str] | None = None
+    path_counts: dict[str, int] | None = None
+    query: str | None = None
+    queries: list[str] | None = None
+    url: str | None = None
+    urls: list[str] | None = None
+    target: str | None = None
+    targets: list[str] | None = None
+    items: str | None = None
+    task: str | None = None
+    session: str | None = None
 
 
 class OverviewReferences(RequestModel):
@@ -151,6 +166,11 @@ class OverviewTurn(RequestModel):
     activities: list[OverviewActivity] = Field(max_length=8)
     refs: OverviewReferences
     content_coverage: TurnContentCoverage
+
+    @field_serializer("activities")
+    def serialize_activities(self, activities: list[OverviewActivity]):
+        # Preserve the projector's sparse cells rather than inventing null fields.
+        return [activity.model_dump(exclude_none=True) for activity in activities]
 
 
 class OverviewResponse(ContractModel):

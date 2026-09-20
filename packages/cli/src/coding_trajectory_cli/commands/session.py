@@ -168,7 +168,7 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
             )
         if tool == "AgentCollab" and activity.get("task"):
             return f"Agent collaboration: {one_line(activity['task'], limit=72)}{annotation}"
-        for key in ("cmd", "path", "query", "url", "items", "task", "session"):
+        for key in ("cmd", "path", "query", "url", "target", "items", "task", "session"):
             if activity.get(key):
                 return (
                     f"{tool}{suffix}: {one_line(activity[key], limit=72)}{annotation}"
@@ -222,14 +222,11 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
             for response in turn["assistant_responses"]:
                 lines.append(f"Assistant: {response['preview']}")
             for activity in turn["activities"]:
-                label = (
-                    activity.get("target")
-                    or activity.get("path")
-                    or activity.get("concept")
-                    or activity["kind"]
+                references = ", ".join(
+                    f"`{item_id}`" for item_id in activity["item_ids"]
                 )
                 lines.append(
-                    f"- {label} · {activity.get('outcome') or activity.get('status') or 'unknown'} (item `{activity['item_id']}`)"
+                    f"- {_overview_activity_label(activity)} (items {references})"
                 )
     page = payload["page"]
     lines.extend(

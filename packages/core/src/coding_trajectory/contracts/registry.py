@@ -111,7 +111,7 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.overview",
-            4,
+            5,
             SessionOverviewRequest,
             SessionOverviewResponse,
         ),
@@ -130,7 +130,7 @@ SERVICE_CONTRACTS = {
         ServiceContract("session.tree", 4, SessionTreeRequest, SessionTreeResponse),
         ServiceContract(
             "graph.overview",
-            4,
+            5,
             GraphOverviewRequest,
             GraphOverviewResponse,
         ),
