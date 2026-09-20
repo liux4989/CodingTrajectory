@@ -1,4 +1,4 @@
-import { bounded, digest, Fault, Json, receipt, requireThat, stable, State, validate } from "./shared";
+import { digest, Fault, Json, receipt, requireThat, stable, State, validate } from "./shared";
 import { apiView, commitApiView, prepareInventory, pruneApi } from "./prepared-api";
 
 
@@ -24,14 +24,31 @@ export function initializeArtifacts(state: State) {
     CREATE TABLE IF NOT EXISTS artifact_upload_claims (
       kind TEXT NOT NULL, sha256 TEXT NOT NULL, expires_at INTEGER NOT NULL,
       PRIMARY KEY(kind, sha256));`);
+  const columns = state.sql.exec<{ name: string }>("PRAGMA table_info(artifact_upload_claims)").toArray();
+  if (!columns.some(column => column.name === "token")) state.sql.exec(`
+    ALTER TABLE artifact_upload_claims ADD COLUMN token TEXT;
+    ALTER TABLE artifact_upload_claims ADD COLUMN completion TEXT;`);
 }
 
 /** Fence cleanup before an authenticated collector reads or writes an object. */
 export function claimArtifactUpload(state: State, kind: string, sha256: string) {
   const now = Math.floor(Date.now() / 1000);
-  state.sql.exec(`INSERT INTO artifact_upload_claims VALUES(?,?,?)
-    ON CONFLICT(kind,sha256) DO UPDATE SET expires_at=excluded.expires_at`,
-  kind, sha256, now + UPLOAD_CLAIM_SECONDS);
+  // A duplicate must not downgrade a completed receipt. Expired generations
+  // cannot complete a replacement claim or resurrect a claim released at commit.
+  return state.sql.exec<{ token: string }>(`INSERT INTO artifact_upload_claims(kind,sha256,expires_at,token)
+    VALUES(?,?,?,?) ON CONFLICT(kind,sha256) DO UPDATE SET
+    token=CASE WHEN expires_at<=? OR token IS NULL THEN excluded.token ELSE token END,
+    completion=CASE WHEN expires_at<=? THEN NULL ELSE completion END,
+    expires_at=excluded.expires_at RETURNING token`,
+  kind, sha256, now + UPLOAD_CLAIM_SECONDS, crypto.randomUUID(), now, now).one().token;
+}
+
+export function completeArtifactUpload(state: State, request: Json) {
+  const updated = state.sql.exec(`UPDATE artifact_upload_claims SET completion=?
+    WHERE kind=? AND sha256=? AND token=? AND expires_at>?`,
+  stable({ workspace_id: request.workspace_id, bytes: request.bytes, index: request.index }),
+  request.kind, request.sha256, request.token, Math.floor(Date.now() / 1000));
+  requireThat(updated.rowsWritten === 1, "artifact_claim_expired", 409);
 }
 
 export interface ArtifactPublicationPlan {
@@ -39,6 +56,7 @@ export interface ArtifactPublicationPlan {
   releaseClaims: Array<{ kind: string; sha256: string }>;
   views: Json[];
   cards: Json[];
+  indexes: Map<string, Json>;
   inventory: Awaited<ReturnType<typeof prepareInventory>>;
 }
 
@@ -75,6 +93,33 @@ export async function prepareArtifactPublication(
     }
   }
   const graphIds = new Set<string>();
+  const completed = new Map<string, Json>(), indexes = new Map<string, Json>();
+  // Keyed batches, never one table scan per reference or an unbounded claim dump.
+  for (const kind of ["facts", "summary", "api"]) {
+    const hashes = [...new Set<string>(request.graphs.flatMap((graph: Json) =>
+      [graph.facts, graph.summary, ...graph.api_objects].filter(ref => ref.kind === kind).map(ref => ref.sha256)))];
+    for (let offset = 0; offset < hashes.length; offset += 50) {
+      const batch = hashes.slice(offset, offset + 50), placeholders = batch.map(() => "?").join(",");
+      for (const row of state.sql.exec<{ sha256: string; completion: string }>(
+        `SELECT sha256,completion FROM artifact_upload_claims WHERE kind=? AND sha256 IN (${placeholders}) AND expires_at>? AND completion IS NOT NULL`,
+        kind, ...batch, Math.floor(Date.now() / 1000)).toArray()) {
+        const completion = JSON.parse(row.completion);
+        if (completion.workspace_id !== request.workspace_id) continue;
+        completed.set(`${kind}:${row.sha256}`, completion);
+        if (completion.index) indexes.set(row.sha256, completion.index);
+      }
+    }
+  }
+  const indexHashes = [...new Set<string>(request.graphs.flatMap((graph: Json) =>
+    graph.api_methods.filter((method: Json) => method.index && !indexes.has(method.index.sha256)).map((method: Json) => method.index.sha256)))];
+  for (let offset = 0; offset < indexHashes.length; offset += 50) {
+    const batch = indexHashes.slice(offset, offset + 50);
+    for (const row of state.sql.exec<{ descriptor: string }>(`SELECT descriptor FROM api_methods
+      WHERE json_extract(descriptor,'$.index.sha256') IN (${batch.map(() => "?").join(",")})`, ...batch).toArray()) {
+      const descriptor = JSON.parse(row.descriptor);
+      if (descriptor.publication_index) indexes.set(descriptor.index.sha256, descriptor.publication_index);
+    }
+  }
   const releaseClaims: Array<{ kind: string; sha256: string }> = [];
   const views: Json[] = [], cards: Json[] = [];
   for (const graph of request.graphs) {
@@ -87,30 +132,21 @@ export async function prepareArtifactPublication(
       const key = stable([method.method, method.scope, method.turn_id]);
       requireThat(!keys.has(key) && Boolean(method.index) !== Boolean(method.error), "invalid_prepared_method");
       keys.add(key);
-      requireThat(!method.index || graph.api_objects.some((ref: Json) => ref.sha256 === method.index.sha256 && ref.bytes === method.index.bytes), "invalid_prepared_reference");
+      requireThat(!method.index || references.get(method.index.sha256) === method.index.bytes, "invalid_prepared_reference");
       if (method.index) {
         requireThat(method.index.bytes <= 64 * 1024, "invalid_prepared_reference");
-        const stored = await env.ARTIFACTS.get(artifactKey(request.workspace_id, "api", method.index.sha256));
-        requireThat(stored && stored.size === method.index.bytes, "artifact_upload_incomplete", 409);
-        const body = await bounded(stored.body, method.index.bytes);
-        requireThat(await digest(body) === method.index.sha256, "prepared_object_corrupt", 503);
-        const index = JSON.parse(new TextDecoder().decode(body));
-        requireThat(index.schema_version === "ct.prepared-api.v1" && index.source_manifest_sha256 === graph.fact_set_digest && index.method === method.method && index.method_version === method.method_version && index.scope === method.scope && index.turn_id === method.turn_id, "invalid_prepared_reference");
-        requireThat(["exact", "page"].includes(index.mode), "invalid_prepared_reference");
-        const refs = index.mode === "exact" ? [index.result] : [index.topology, ...index.packs.map((pack: Json) => pack.object)];
-        requireThat(refs.every((ref: Json) => ref.kind === "api" && references.get(ref.sha256) === ref.bytes), "invalid_prepared_reference");
+        const index = indexes.get(method.index.sha256);
+        requireThat(index, "artifact_upload_incomplete", 409);
+        requireThat(index.source_manifest_sha256 === graph.fact_set_digest && index.method === method.method && index.method_version === method.method_version && index.scope === method.scope && index.turn_id === method.turn_id, "invalid_prepared_reference");
+        requireThat(index.references.every((ref: Json) => references.get(ref.sha256) === ref.bytes), "invalid_prepared_reference");
       }
     }
     for (const object of [graph.facts, graph.summary, ...graph.api_objects]) {
-      if (retained.get(`${object.kind}:${object.sha256}`) === object.bytes) continue;
-      const key = artifactKey(request.workspace_id, object.kind, object.sha256);
-      const head = await env.ARTIFACTS.head(key);
-      requireThat(head && head.size === object.bytes
-        && head.customMetadata?.workspace_id === request.workspace_id
-        && head.customMetadata?.kind === object.kind
-        && head.customMetadata?.sha256 === object.sha256,
+      const key = `${object.kind}:${object.sha256}`;
+      const completion = completed.get(key);
+      requireThat(retained.get(key) === object.bytes || completion?.bytes === object.bytes,
       "artifact_upload_incomplete", 409);
-      releaseClaims.push({ kind: object.kind, sha256: object.sha256 });
+      if (completion) releaseClaims.push({ kind: object.kind, sha256: object.sha256 });
     }
     const summaryObject = await env.ARTIFACTS.get(artifactKey(request.workspace_id, "summary", graph.summary.sha256));
     requireThat(summaryObject && summaryObject.size === graph.summary.bytes, "artifact_upload_incomplete", 409);
@@ -128,7 +164,7 @@ export async function prepareArtifactPublication(
     display_name: project.display_name, vendors: [...new Set(allCards.filter(card => card.project_id === project.project_id).flatMap(card => card.vendors ?? []))].sort(),
     modified: allCards.filter(card => card.project_id === project.project_id).map(card => card.modified).filter(Boolean).sort().at(-1) ?? null }));
   const inventory = await prepareInventory(env, request.workspace_id, projects, allCards);
-  return { complete: true, releaseClaims, views, cards, inventory };
+  return { complete: true, releaseClaims, views, cards, indexes, inventory };
 }
 
 /** Commit one complete inventory and retain only a bounded rollback window. */
@@ -170,7 +206,7 @@ export function commitArtifactPublication(
   };
   state.sql.exec("INSERT INTO artifact_manifests VALUES(?,?,?,?,?)",
     request.project_id, request.publication_sequence, sequence, request.agent_id, stable(manifest));
-  request.graphs.forEach((graph: Json, index: number) => commitApiView(state, request.project_id, sequence, plan.views[index], graph.api_methods));
+  request.graphs.forEach((graph: Json, index: number) => commitApiView(state, request.project_id, sequence, plan.views[index], graph.api_methods, plan.indexes));
   state.sql.exec("INSERT OR REPLACE INTO api_inventory_cards VALUES(?,?)", request.project_id, stable(plan.cards));
   commitApiView(state, "workspace", sequence, plan.inventory.identity, plan.inventory.methods);
   for (const hash of plan.inventory.objects) state.sql.exec("INSERT OR IGNORE INTO api_inventory_objects VALUES(?,?)", plan.inventory.identity.view_manifest_sha256, hash);
@@ -197,7 +233,7 @@ export function commitArtifactPublication(
       .map(claim => claim.sha256);
     for (let offset = 0; offset < hashes.length; offset += 50) {
       const batch = hashes.slice(offset, offset + 50);
-      state.sql.exec(`DELETE FROM artifact_upload_claims WHERE kind=? AND sha256 IN
+      state.sql.exec(`DELETE FROM artifact_upload_claims WHERE completion IS NOT NULL AND kind=? AND sha256 IN
         (${batch.map(() => "?").join(",")})`, kind, ...batch);
     }
   }

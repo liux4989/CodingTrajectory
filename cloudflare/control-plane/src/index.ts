@@ -1,6 +1,6 @@
 import { authorityFailure, bounded, DIGEST, digest, Fault, fields, Json, object, Principal, requireThat, text, uuid } from "./shared";
 import { artifactKey } from "./artifacts";
-import { readCursor, servePrepared, validateApi } from "./prepared-api";
+import { publicationIndex, readCursor, servePrepared, validateApi } from "./prepared-api";
 export { Workspace } from "./workspace";
 
 const COLLECT = new Set(["ct_project_register", "ct_collector_register_source", "ct_collector_recover",
@@ -46,6 +46,7 @@ export default {
           ? value.schema_version === "ct.published_facts.v2"
           : kind === "summary" ? value.schema_version === "ct.prepared-summary.v2"
           : value.schema_version === "ct.prepared-api.v1" && body.length <= 448 * 1024, "artifact_schema_mismatch");
+        const index = kind === "api" ? publicationIndex(value, body.length) : null;
         const key = artifactKey(principal.workspace_id, kind, sha256);
         const workspace = env.WORKSPACES.getByName(principal.workspace_id);
         const claim = object(JSON.parse(await workspace.invoke(
@@ -54,19 +55,29 @@ export default {
           JSON.stringify(principal),
         )));
         requireThat(claim.status === 200, "artifact_claim_failed", 503);
-        const prior = await env.ARTIFACTS.head(key);
+        const prior = await env.ARTIFACTS.get(key);
         if (prior) {
-          requireThat(prior.size === body.length && prior.customMetadata?.sha256 === sha256,
+          requireThat(prior.size === body.length && prior.customMetadata?.sha256 === sha256
+            && prior.customMetadata?.workspace_id === principal.workspace_id && prior.customMetadata?.kind === kind,
+            "artifact_identity_conflict", 409);
+          requireThat(await digest(new Uint8Array(await prior.arrayBuffer())) === sha256,
             "artifact_identity_conflict", 409);
         } else {
           await env.ARTIFACTS.put(key, body, { customMetadata: {
             workspace_id: principal.workspace_id, kind, sha256,
           }, httpMetadata: { contentType: "application/json" } });
         }
+        const completion = object(JSON.parse(await workspace.invoke(
+          "ct_internal_artifact_complete", JSON.stringify({ request: {
+            workspace_id: principal.workspace_id, kind, sha256, bytes: body.length, index, token: claim.body.token,
+          } }), JSON.stringify(principal),
+        )));
+        requireThat(completion.status === 200, completion.body?.error?.code ?? "artifact_completion_failed", completion.status);
         const result: Json = { ok: true, sha256, bytes: body.length };
         // Local benchmark subclasses may annotate the internal claim response.
         // Production Durable Objects never emit this field.
         if (claim.body?.__benchmark) result.__benchmark = claim.body.__benchmark;
+        if (completion.body?.__benchmark) result.__benchmark_completion = completion.body.__benchmark;
         return Response.json(result, { headers: responseHeaders(env) });
       }
       if (request.method === "POST" && url.pathname === "/v1/api" && url.search === "") {

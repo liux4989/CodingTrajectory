@@ -8,6 +8,45 @@ export const API_VERSIONS: Record<string, number> = {
   "graph.overview": 4, "session.items": 5, "session.events": 5, "living.sessions": 3,
 };
 const SCHEMA = "ct.prepared-api.v1";
+/** Validate index semantics once at upload; retain only publication dependencies. */
+export function publicationIndex(value: Json, length: number): Json | null {
+  if (!("mode" in value)) return null;
+  const valid = (condition: unknown) => requireThat(condition, "invalid_prepared_reference");
+  valid(length <= 64 * 1024 && value.schema_version === SCHEMA);
+  valid(Number.isSafeInteger(value.method_version) && API_VERSIONS[value.method] === value.method_version && typeof value.scope === "string"
+    && (value.turn_id === null || typeof value.turn_id === "string")
+    && typeof value.source_manifest_sha256 === "string" && /^[0-9a-f]{64}$/.test(value.source_manifest_sha256));
+  const ref = (reference: Json, bound: number) => {
+    valid(reference?.kind === "api" && typeof reference.sha256 === "string"
+      && /^[0-9a-f]{64}$/.test(reference.sha256) && Number.isSafeInteger(reference.bytes)
+      && reference.bytes > 0 && reference.bytes <= bound);
+    return { kind: "api", sha256: reference.sha256, bytes: reference.bytes };
+  };
+  let references: Json[];
+  if (value.mode === "exact") references = [ref(value.result, 440 * 1024)];
+  else {
+    valid(value.mode === "page" && ["turns", "items", "events"].includes(value.field));
+    valid(Number.isSafeInteger(value.total) && value.total >= 0 && Array.isArray(value.sizes)
+      && value.sizes.length === value.total && value.sizes.every((n: number) => Number.isSafeInteger(n) && n > 0));
+    valid(Array.isArray(value.packs));
+    references = [ref(value.topology, 128 * 1024)];
+    let end = 0;
+    for (const pack of value.packs) {
+      valid(pack && pack.start === end && Number.isSafeInteger(pack.end) && pack.end > end && pack.end <= value.total);
+      end = pack.end;
+      references.push(ref(pack.object, 256 * 1024));
+    }
+    valid(end === value.total);
+    valid(value.postings && typeof value.postings === "object" && !Array.isArray(value.postings));
+    for (const entries of Object.values(value.postings)) {
+      valid(entries && typeof entries === "object" && !Array.isArray(entries));
+      for (const positions of Object.values(entries as Json)) valid(Array.isArray(positions)
+        && positions.every((p: number, i: number) => Number.isSafeInteger(p) && p >= 0 && p < value.total && (!i || positions[i - 1] < p)));
+    }
+  }
+  return { source_manifest_sha256: value.source_manifest_sha256, method: value.method,
+    method_version: value.method_version, scope: value.scope, turn_id: value.turn_id, references };
+}
 const bytes = (value: any) => new TextEncoder().encode(stable(value));
 const projectKey = (value: string) => value.trim().replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
 const b64 = (value: Uint8Array) => encode(value).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
@@ -41,6 +80,7 @@ export function initializeApi(state: State) {
     view_hash TEXT NOT NULL, method TEXT NOT NULL, scope TEXT NOT NULL, turn_id TEXT NOT NULL,
     descriptor TEXT NOT NULL, PRIMARY KEY(view_hash,method,scope,turn_id));
     CREATE INDEX IF NOT EXISTS api_scope ON api_methods(method,scope,turn_id);
+    CREATE INDEX IF NOT EXISTS api_method_object ON api_methods(json_extract(descriptor,'$.index.sha256'));
     CREATE TABLE IF NOT EXISTS api_inventory_cards (project_id TEXT PRIMARY KEY, cards TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS api_inventory_objects (view_hash TEXT NOT NULL, hash TEXT NOT NULL,
     PRIMARY KEY(view_hash,hash));`);
@@ -51,12 +91,13 @@ export async function apiView(workspace: string, source: string, methods: Json[]
   return { workspace_id: workspace, source_manifest_sha256: source,
     view_manifest_sha256: await digest(stable(manifest)) };
 }
-export function commitApiView(state: State, project: string, sequence: number, identity: Json, methods: Json[]) {
+export function commitApiView(state: State, project: string, sequence: number, identity: Json, methods: Json[], indexes?: Map<string, Json>) {
   const hash = identity.view_manifest_sha256;
   state.sql.exec("INSERT OR REPLACE INTO api_views VALUES(?,?,?,?)", hash, project, sequence,
     stable({ ...identity, source_snapshot_sequence: sequence, view_snapshot_sequence: sequence }));
   for (const method of methods) state.sql.exec("INSERT OR REPLACE INTO api_methods VALUES(?,?,?,?,?)",
-    hash, method.method, method.scope, method.turn_id ?? "", stable(method));
+    hash, method.method, method.scope, method.turn_id ?? "", stable(indexes && method.index
+      ? { ...method, publication_index: indexes.get(method.index.sha256) } : method));
 }
 export function apiLocator(state: State, request: Json): Json {
   const params = request.params;

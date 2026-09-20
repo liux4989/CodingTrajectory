@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -20,12 +20,17 @@ const principals = Object.fromEntries(Object.entries(tokens).map(([role, token])
   workspace_id: role === 'other' ? '00000000-0000-0000-0000-000000000009' : workspace, agent_id: agent,
   roles: role === 'collect' ? ['collect'] : ['owner'],
 }]));
-const bundle = await build({ entryPoints: [`${root}cloudflare/control-plane/src/index.ts`], bundle: true, write: false,
+const publicationBenchmark = ['--publication', '--publication-timing', '--publication-baseline'].includes(process.argv[3]);
+const qualifyPublication = process.argv[3] === '--publication';
+const baseline = process.argv[3] === '--publication-baseline';
+const delayMs = Number(process.argv[5] ?? 0);
+const inputGate = process.argv[6] === '--input-gate';
+const bundle = await build({ entryPoints: [`${root}${publicationBenchmark ? 'scripts/artifact-benchmark-worker.ts' : 'cloudflare/control-plane/src/index.ts'}`], bundle: true, write: false,
   format: 'esm', platform: 'browser', external: ['cloudflare:workers'] });
 const benchmarking = process.argv[3] === '--benchmark';
 const mf = new Miniflare(convertV4MiniflareOptions({ ...(benchmarking ? { inspectorPort: 0 } : {}), workers: [{ name: 'direct-api', modules: true, script: bundle.outputFiles[0].text,
   compatibilityDate: '2026-09-10', durableObjects: { WORKSPACES: { className: 'Workspace', useSQLite: true } },
-  r2Buckets: ['ARTIFACTS'], bindings: { CT_CURSOR_KEY: 'direct-api-local-cursor-key-00000000001', CT_PRINCIPALS: JSON.stringify(principals) },
+  r2Buckets: ['ARTIFACTS'], bindings: { CT_CURSOR_KEY: 'direct-api-local-cursor-key-00000000001', CT_PRINCIPALS: JSON.stringify(principals), LOCAL_PUBLICATION_INPUT_GATE: inputGate },
 }] }));
 async function post(path, message, role = 'owner', expected = 200) {
   const response = await mf.dispatchFetch(`http://local${path}`, { method: 'POST', headers: { authorization: `Bearer ${tokens[role] ?? 'invalid'}` }, body: JSON.stringify(message) });
@@ -38,8 +43,8 @@ async function post(path, message, role = 'owner', expected = 200) {
   }
   return JSON.parse(raw);
 }
-async function rpc(method, params) {
-  return (await post('/v1/core', { protocol: 'ct.core.v1', method, params: { workspace_id: workspace, ...params } })).data;
+async function rpc(method, params, key) {
+  return (await post('/v1/core', { protocol: 'ct.core.v1', method, params: { workspace_id: workspace, ...params }, ...(key ? { idempotency_key: key } : {}) })).data;
 }
 async function api(method, params = {}, role = 'owner', expected = 200, version = fixture.versions[method] ?? 5) {
   return post('/v1/api', { protocol: 'ct.api.v1', method, method_version: version, params }, role, expected);
@@ -50,13 +55,211 @@ async function upload(kind, body) {
   assert.equal(response.status, 200, await response.text());
   return { kind, sha256: hash, bytes: Buffer.byteLength(body) };
 }
-try {
+const local = async (path, value) => (await mf.dispatchFetch(`http://local/__benchmark/${path}`, {
+  method: 'POST', body: JSON.stringify(value),
+})).json();
+const claimProbe = (ref, action, completion) => local('claim-probe', { ...ref, action, completion });
+const internal = (method, ref) => local('internal', { method: `ct_internal_artifact_${method}`, request: { workspace_id: workspace, ...ref } });
+const objectKey = ref => `workspaces/${workspace}/artifacts/${ref.kind}/${ref.sha256}`;
+async function waitGate(name) {
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    if ((await (await mf.dispatchFetch(`http://local/__benchmark/${name}`)).json()).entered) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw Error(`${name} did not enter`);
+}
+const invocationCounts = async () => (await mf.dispatchFetch('http://local/__benchmark/invocations')).json();
+async function waitInvocation(method, count) {
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    if ((await invocationCounts())[method] >= count) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw Error(`${method} did not arrive`);
+}
+async function rejectPublication(publication, code, status = 409) {
+  const response = await post('/v1/core', { protocol: 'ct.core.v1', method: 'ct_collector_publish_artifacts',
+    params: { workspace_id: workspace, ...publication } }, 'owner', status);
+  assert.equal(response.error.code, code);
+}
+async function qualifyReceiptsBefore(publication) {
+  const graph = publication.graphs[0], ref = graph.summary;
+  assert.equal((await internal('reject', ref)).rejected, true);
+  assert.equal((await internal('claim', ref)).status, 200);
+  const bucket = await mf.getR2Bucket('ARTIFACTS');
+  const body = stable(fixture.summary), key = objectKey(ref);
+  const metadata = { workspace_id: workspace, kind: ref.kind, sha256: ref.sha256 };
+  const original = (await claimProbe(ref))[0];
+  assert.ok(original.completion);
+  // An R2 object alone, or a pending/expired claim, is not readiness.
+  await claimProbe(ref, 'delete');
+  await rejectPublication(publication, 'artifact_upload_incomplete');
+  const pending = await internal('claim', ref);
+  await rejectPublication(publication, 'artifact_upload_incomplete');
+  for (const customMetadata of [{ ...metadata, workspace_id: 'other' }, { ...metadata, kind: 'facts' }, { ...metadata, sha256: 'f'.repeat(64) }]) {
+    await bucket.put(key, body, { customMetadata });
+    const response = await mf.dispatchFetch(`http://local/v1/artifacts/summary/${ref.sha256}`, {
+      method: 'PUT', headers: { authorization: `Bearer ${tokens.owner}` }, body });
+    assert.equal(response.status, 409);
+    assert.equal((await claimProbe(ref))[0].completion, null);
+  }
+  await bucket.put(key, body.replace('ct.prepared-summary', 'ct.prepared-summarX'), { customMetadata: metadata });
+  const corrupt = await mf.dispatchFetch(`http://local/v1/artifacts/summary/${ref.sha256}`, {
+    method: 'PUT', headers: { authorization: `Bearer ${tokens.owner}` }, body });
+  assert.equal(corrupt.status, 409); // Same size/metadata, different bytes.
+  await bucket.put(key, body, { customMetadata: metadata });
+  await mf.dispatchFetch('http://local/__benchmark/r2?reset');
+  await upload('summary', body);
+  assert.equal((await (await mf.dispatchFetch('http://local/__benchmark/r2')).json()).calls.put ?? 0, 0);
+  const completed = (await claimProbe(ref))[0];
+  assert.equal(completed.token, pending.body.token);
+  await internal('claim', ref);
+  assert.equal((await claimProbe(ref))[0].completion, completed.completion);
+  for (const completion of [{ ...JSON.parse(completed.completion), bytes: ref.bytes + 1 }, { ...JSON.parse(completed.completion), workspace_id: 'other' }]) {
+    await claimProbe(ref, 'completion', completion);
+    await rejectPublication(publication, 'artifact_upload_incomplete');
+  }
+  await claimProbe(ref, 'completion', JSON.parse(completed.completion));
+  await local('claim-expiry', { ...ref, expiresAt: 0 });
+  await rejectPublication(publication, 'artifact_upload_incomplete');
+  const renewed = await internal('claim', ref);
+  assert.notEqual(renewed.body.token, completed.token);
+  assert.equal((await internal('complete', { ...ref, token: completed.token, index: null })).status, 409);
+  assert.equal((await claimProbe(ref))[0].completion, null);
+  await upload('summary', body);
+  // Manifest-dependent invariants still belong at publication.
+  const changed = mutate => { const copy = structuredClone(publication); mutate(copy); return copy; };
+  await rejectPublication(changed(p => p.source_vector[0].source_sequence++), 'source_vector_requires_accepted_project_checkpoints', 400);
+  await rejectPublication(changed(p => p.graphs[0].api_methods.push(p.graphs[0].api_methods[0])), 'invalid_prepared_method', 400);
+  await rejectPublication(changed(p => p.graphs[0].api_methods.find(m => m.index).scope = 'different'), 'invalid_prepared_reference', 400);
+  await rejectPublication(changed(p => p.graphs[0].fact_set_digest = 'f'.repeat(64)), 'invalid_prepared_reference', 400);
+  const indexMethod = graph.api_methods.find(m => m.index && JSON.parse(fixture.api.objects[m.index.sha256]).mode === 'page');
+  const index = JSON.parse(fixture.api.objects[indexMethod.index.sha256]);
+  await rejectPublication(changed(p => p.graphs[0].api_objects = p.graphs[0].api_objects.filter(r => r.sha256 !== index.topology.sha256)), 'invalid_prepared_reference', 400);
+  await rejectPublication(changed(p => p.graphs[0].facts.bytes++), 'artifact_upload_incomplete');
+  for (const mutate of [i => i.mode = 'unknown', i => i.sizes.pop(), i => i.packs[0].start = 1,
+    i => i.packs.at(-1).end--, i => i.postings = { id: { bad: [i.total] } }, i => i.topology.bytes = 128 * 1024 + 1]) {
+    const malformed = structuredClone(index); mutate(malformed);
+    const bytes = stable(malformed), hash = sha(bytes);
+    const response = await mf.dispatchFetch(`http://local/v1/artifacts/api/${hash}`, {
+      method: 'PUT', headers: { authorization: `Bearer ${tokens.owner}` }, body: bytes });
+    assert.equal(response.status, 400, await response.text());
+    assert.deepEqual(await claimProbe({ kind: 'api', sha256: hash }), []);
+  }
+  // A failed PUT leaves a pending fence, never a completion.
+  const failedBody = stable({ ...fixture.facts, qualification: 'failed-put' });
+  const failedRef = { kind: 'facts', sha256: sha(failedBody), bytes: Buffer.byteLength(failedBody) };
+  await local('object-gate', { operation: 'put', key: objectKey(failedRef), fail: true });
+  const failing = mf.dispatchFetch(`http://local/v1/artifacts/facts/${failedRef.sha256}`, {
+    method: 'PUT', headers: { authorization: `Bearer ${tokens.owner}` }, body: failedBody });
+  await waitGate('object-gate');
+  await rejectPublication(changed(p => p.graphs[0].facts = failedRef), 'artifact_upload_incomplete');
+  await mf.dispatchFetch('http://local/__benchmark/object-gate', { method: 'DELETE' });
+  const failure = await failing;
+  assert.equal(failure.status, 503);
+  assert.equal((await failure.json()).error.code, 'authority_unavailable');
+  assert.equal((await claimProbe(failedRef))[0].completion, null);
+  await claimProbe(failedRef, 'delete');
+  console.log('PASS upload receipts: missing/pending/expired, existing immutable integrity and metadata, generation fencing, malformed indexes, manifest source/identity/dependency/byte checks, failed PUT');
+}
+
+async function qualifyReceiptsAfter(publication, published) {
+  const ref = publication.graphs[0].summary;
+  assert.deepEqual(await claimProbe(ref), []);
+  const replay = await rpc('ct_collector_publish_artifacts', publication, 'publication:0');
+  delete replay.__benchmark; delete published.__benchmark;
+  assert.deepEqual(replay, published);
+  const bucket = await mf.getR2Bucket('ARTIFACTS');
+  let sequence = 0;
+  const publish = () => rpc('ct_collector_publish_artifacts', { ...publication, publication_sequence: ++sequence });
+  await claimProbe(ref, 'noise');
+  await upload('summary', stable(fixture.summary));
+  const bounded = await publish();
+  const lookups = bounded.__benchmark.groups['publication claim lookups'];
+  // Only summary matches; allow index-boundary reads on empty kind batches,
+  // but never scan the 1000 unrelated rows per lookup.
+  assert.ok(lookups.rowsRead <= 2 * lookups.calls, JSON.stringify(lookups));
+  console.log('PASS indexed lookups with 1000 unrelated claims', bounded.__benchmark.groups['publication claim lookups']);
+  await claimProbe(ref, 'clear-noise');
+  // Successful PUT is stalled before completion; cleanup must preserve its pending fence.
+  const body = stable({ ...fixture.facts, qualification: 'pending-through-cleanup' });
+  const pendingRef = { kind: 'facts', sha256: sha(body), bytes: Buffer.byteLength(body) };
+  await local('object-gate', { operation: 'put', key: objectKey(pendingRef), fail: false });
+  const pendingUpload = upload('facts', body);
+  await waitGate('object-gate');
+  assert.equal((await claimProbe(pendingRef))[0].completion, null);
+  const incomplete = structuredClone(publication); incomplete.publication_sequence = sequence + 1; incomplete.graphs[0].facts = pendingRef;
+  await rejectPublication(incomplete, 'artifact_upload_incomplete');
+  await publish();
+  assert.ok(await bucket.head(objectKey(pendingRef)));
+  await mf.dispatchFetch('http://local/__benchmark/object-gate', { method: 'DELETE' });
+  await pendingUpload;
+  await publish();
+  assert.ok(await bucket.head(objectKey(pendingRef))); // Completed uncommitted claim also protected.
+  await local('claim-expiry', { ...pendingRef, expiresAt: 0 });
+  await publish();
+  assert.equal(await bucket.head(objectKey(pendingRef)), null);
+  // A duplicate claim cannot downgrade completion; late completion cannot resurrect release.
+  await upload('summary', stable(fixture.summary));
+  await local('object-gate', { operation: 'get', key: objectKey(ref), fail: false });
+  const duplicate = mf.dispatchFetch(`http://local/v1/artifacts/summary/${ref.sha256}`, {
+    method: 'PUT', headers: { authorization: `Bearer ${tokens.owner}` }, body: stable(fixture.summary) });
+  await waitGate('object-gate');
+  assert.ok((await claimProbe(ref))[0].completion);
+  await publish();
+  assert.deepEqual(await claimProbe(ref), []);
+  await mf.dispatchFetch('http://local/__benchmark/object-gate', { method: 'DELETE' });
+  assert.equal((await duplicate).status, 409);
+  assert.deepEqual(await claimProbe(ref), []);
+  await upload('summary', stable(fixture.summary)); // Retry re-verifies, no PUT.
+  // An upload starting during cleanup cannot write until its fence is established.
+  await mf.dispatchFetch('http://local/__benchmark/list-gate', { method: 'POST' });
+  const publishing = publish();
+  await waitGate('list-gate');
+  let settled = false;
+  const racing = upload('facts', body).then(() => { settled = true; });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(settled, false);
+  await mf.dispatchFetch('http://local/__benchmark/list-gate', { method: 'DELETE' });
+  await publishing; await racing;
+  assert.ok(await bucket.head(objectKey(pendingRef)));
+  await rejectPublication({ ...publication, publication_sequence: sequence + 2 }, 'publication_sequence_gap');
+  assert.equal((await rpc('ct_collector_publish_artifacts', { ...publication, publication_sequence: sequence })).outcome, 'conflict');
+  // Source writes and a second publication must remain behind an in-flight publication.
+  await local('object-gate', { operation: 'get', key: objectKey(ref), fail: false });
+  const first = publish();
+  await waitGate('object-gate');
+  const arrivals = await invocationCounts();
+  const next = publish();
+  await waitInvocation('ct_collector_publish_artifacts', arrivals.ct_collector_publish_artifacts + 1);
+  const vector = publication.source_vector[0];
+  const checkpointPayload = { kind: 'ct.source_checkpoint.v1', source_checkpoint: { segments: [2] }, session_digest: fixture.source };
+  const checkpointHash = sha(stable(checkpointPayload));
+  let checkpointSettled = false;
+  const checkpoint = rpc('ct_collector_publish_observation', { agent_id: agent, source_id: vector.source_id,
+    source_epoch: vector.source_epoch, source_sequence: 1, event_id: `checkpoint:${checkpointHash}`,
+    parser_version: 'qualification.v1', content_sha256: checkpointHash, observed_at: '2026-09-19T00:00:01Z',
+    payload: checkpointPayload }).then(result => { checkpointSettled = true; return result; });
+  await waitInvocation('ct_collector_publish_observation', arrivals.ct_collector_publish_observation + 1);
+  assert.equal(checkpointSettled, false);
+  await mf.dispatchFetch('http://local/__benchmark/object-gate', { method: 'DELETE' });
+  const firstReceipt = await first, nextReceipt = await next, checkpointReceipt = await checkpoint;
+  assert.ok(firstReceipt.committed_sequence < nextReceipt.committed_sequence);
+  assert.ok(nextReceipt.committed_sequence < checkpointReceipt.committed_sequence);
+  await rejectPublication({ ...publication, publication_sequence: sequence + 1 }, 'source_vector_requires_accepted_project_checkpoints', 400);
+  console.log('PASS receipt release/replay, retained index reuse, pending/completed cleanup protection and expiry, duplicate upload/commit race, cleanup/upload race, sequence fences');
+}
+async function main() { try {
   const project = await rpc('ct_project_register', { agent_id: agent, display_name: 'DirectApi' });
   const source = await rpc('ct_collector_register_source', { agent_id: agent, project_id: project.project_id, vendor: 'pi', native_session_id: fixture.root });
+  delete source.__benchmark;
   const payload = { kind: 'ct.source_checkpoint.v1', source_checkpoint: { segments: [1] }, session_digest: fixture.source };
   const content = sha(stable(payload));
   await rpc('ct_collector_publish_observation', { agent_id: agent, ...source, source_sequence: 0, event_id: `checkpoint:${content}`,
     parser_version: 'qualification.v1', content_sha256: content, observed_at: '2026-09-19T00:00:00Z', payload });
+  if (qualifyPublication) {
+    const legacy = await claimProbe({ kind: 'facts', sha256: sha(stable(fixture.facts)) }, 'legacy');
+    assert.equal(legacy[0].completion, null); assert.equal(legacy[0].token, null);
+  }
   const facts = await upload('facts', stable(fixture.facts)), summary = await upload('summary', stable(fixture.summary));
   const refs = [];
   for (const [hash, body] of Object.entries(fixture.api.objects)) {
@@ -70,7 +273,37 @@ try {
     }] };
   const params = { session_id: fixture.root, limit: 200 };
   assert.equal((await api('session.overview', params, 'owner', 409)).error.code, 'prepared_view_unavailable');
-  await rpc('ct_collector_publish_artifacts', publication);
+  if (qualifyPublication) await qualifyReceiptsBefore(publication);
+  if (publicationBenchmark) await mf.dispatchFetch(`http://local/__benchmark/r2?reset&delay=${delayMs}`);
+  const publicationStarted = performance.now();
+  if (inputGate) {
+    assert.ok(delayMs >= 4500, 'counterfactual must exceed 30s before commit');
+    const rejected = await post('/v1/core', { protocol: 'ct.core.v1', method: 'ct_collector_publish_artifacts',
+      params: { workspace_id: workspace, ...publication } }, 'owner', 503);
+    assert.equal(rejected.error.code, 'authority_unavailable');
+    const elapsed = performance.now() - publicationStarted;
+    await mf.dispatchFetch('http://local/__benchmark/r2?delay=0');
+    const manifest = await post('/v1/core', { protocol: 'ct.core.v1', method: 'ct_artifact_manifest',
+      params: { workspace_id: workspace, snapshot_sequence: null } }, 'owner', 404);
+    assert.equal(manifest.error.code, 'artifact_snapshot_unavailable');
+    const report = { localOnly: true, counterfactualInputGate: true, delayMs, wallMs: elapsed, committed: false };
+    writeFileSync(process.argv[4], JSON.stringify(report, null, 2) + '\n');
+    console.log('PASS expected input-gate timeout with no commit', report);
+    return;
+  }
+  const published = await rpc('ct_collector_publish_artifacts', publication, 'publication:0');
+  if (publicationBenchmark) {
+    const report = { localOnly: true, fixtureSha256: sha(readFileSync(process.argv[2])),
+      objects: refs.length + 2, indexedMethods: fixture.api.methods.filter(method => method.index).length,
+      delayMs, wallMs: performance.now() - publicationStarted, sql: published.__benchmark,
+      r2: await (await mf.dispatchFetch('http://local/__benchmark/r2')).json() };
+    await mf.dispatchFetch('http://local/__benchmark/r2?delay=0');
+    writeFileSync(process.argv[4], JSON.stringify(report, null, 2) + '\n');
+    console.log(JSON.stringify(report));
+    assert.deepEqual(report.r2.calls, { get: baseline ? report.indexedMethods + 1 : 1,
+      ...(baseline ? { head: report.objects } : {}), put: 6, list: Math.ceil((refs.length + 8) / 1000) });
+    if (qualifyPublication) await qualifyReceiptsAfter(publication, published);
+  }
   if (benchmarking) {
     const { benchmark } = await import('./benchmark-prepared-api.mjs');
     await benchmark({ mf, fixture, bundle: bundle.outputFiles[0].text,
@@ -190,4 +423,5 @@ print('PASS owned Python remote runtime and authenticated direct API proxy')
   assert.equal((await api('session.overview', params, 'owner', 503)).error.code, 'prepared_object_corrupt');
   console.log('PASS Worker publication readiness, overview -> older pages -> pinned detail, semantic arguments/outcomes, exact methods, inventory, UTF-8 response bounds, auth/isolation, versions, cursor conflicts and corrupt objects');
   }
-} finally { await mf.dispose(); }
+} finally { await mf.dispose(); } }
+await main();

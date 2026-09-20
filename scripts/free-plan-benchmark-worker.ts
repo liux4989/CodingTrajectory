@@ -16,7 +16,9 @@ export class Workspace extends BaseWorkspace {
         return (query: string, ...bindings: any[]) => {
           const cursor = target.exec(query, ...bindings);
           const key = query.trim().match(/^(?:INSERT(?: OR \w+)? INTO|DELETE FROM|UPDATE)\s+(\w+)/i);
-          const label = key ? `${query.trim().split(/\s/)[0]} ${key[1]}` : "queries";
+          const label = key ? `${query.trim().split(/\s/)[0]} ${key[1]}`
+            : query.startsWith("SELECT sha256,completion") ? "publication claim lookups"
+            : query.startsWith("SELECT descriptor FROM api_methods") ? "publication retained index lookups" : "queries";
           const group = groups[label] ??= { calls: 0, rowsRead: 0, rowsWritten: 0 };
           group.calls++;
           let read = 0, written = 0;

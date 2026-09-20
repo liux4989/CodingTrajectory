@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { authorityFailure, digest, Fault, Json, Principal, requireThat, stable, State, validate } from "./shared";
-import { artifactManifests, artifactReadLocator, claimArtifactUpload, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
+import { artifactManifests, artifactReadLocator, claimArtifactUpload, completeArtifactUpload, cleanupArtifactObjects, commitArtifactPublication, initializeArtifacts, prepareArtifactPublication, pruneArtifactReceipts } from "./artifacts";
 import { checkpoint, recovery, registerProject, registerSource } from "./collector";
 import { dropEmptyLegacyFactTables, legacyFactTables } from "./legacy-cleanup";
 import { livingRead, livingWrite } from "./living";
@@ -10,12 +10,13 @@ import { deleteWorkspaceArtifactPrefix, initializeReplacement, markWorkspaceRepl
 const REPLACEMENT_MUTATIONS = new Set([
   "ct_project_register", "ct_collector_register_source", "ct_collector_publish_observation",
   "ct_collector_publish_artifacts", "ct_collector_heartbeat", "ct_collector_publish_living_observation",
-  "ct_internal_artifact_claim",
+  "ct_internal_artifact_claim", "ct_internal_artifact_complete",
 ]);
 
 /** A workspace is the authorization, transaction and revision boundary. */
 export class Workspace extends DurableObject<Env> {
   private state: State;
+  private invocation: Promise<unknown> = Promise.resolve();
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.state = new State(ctx.storage.sql);
@@ -37,7 +38,11 @@ export class Workspace extends DurableObject<Env> {
   async invoke(method: string, envelopeJson: string, principalJson: string): Promise<string> {
     const envelope = JSON.parse(envelopeJson);
     const principal = JSON.parse(principalJson);
-    return JSON.stringify(await this.rpc(method, envelope, principal));
+    // Preserve source/claim/publication/cleanup order without holding the DO
+    // input gate across R2 awaits (blockConcurrencyWhile has a 30s deadline).
+    const result = this.invocation.then(() => this.rpc(method, envelope, principal));
+    this.invocation = result.catch(() => {});
+    return JSON.stringify(await result);
   }
 
   async rpc(method: string, envelope: Json, principal: Principal): Promise<{ status: number; body: Json }> {
@@ -94,14 +99,15 @@ export class Workspace extends DurableObject<Env> {
       const replacement = workspaceReplacement(this.state);
       requireThat(replacement?.status !== "incomplete" || !REPLACEMENT_MUTATIONS.has(method),
         "workspace_replacement_incomplete", 409);
-      if (method === "ct_internal_artifact_claim") {
+      if (method === "ct_internal_artifact_claim" || method === "ct_internal_artifact_complete") {
         requireThat(principal.roles.includes("collect") || principal.roles.includes("owner"), "capability_required", 403);
         requireThat(["facts", "summary", "api"].includes(request.kind)
           && typeof request.sha256 === "string"
           && /^[0-9a-f]{64}$/.test(request.sha256), "invalid_artifact_claim");
-        this.ctx.storage.transactionSync(() =>
-          claimArtifactUpload(this.state, request.kind, request.sha256));
-        return { status: 200, body: {} };
+        const token = this.ctx.storage.transactionSync(() => method === "ct_internal_artifact_claim"
+          ? claimArtifactUpload(this.state, request.kind, request.sha256)
+          : completeArtifactUpload(this.state, request));
+        return { status: 200, body: { token } };
       }
       if (method === "ct_internal_api_locator") {
         requireThat(principal.roles.includes("read") || principal.roles.includes("owner"), "capability_required", 403);
@@ -117,7 +123,6 @@ export class Workspace extends DurableObject<Env> {
         return { status: 200, body: await livingRead(this.state, request, this.env.CT_CURSOR_KEY) };
       }
       if (method === "ct_collector_publish_artifacts") {
-        return await this.ctx.blockConcurrencyWhile(async () => {
         const key = envelope.idempotency_key
           ? stable([principal.agent_id, method, envelope.idempotency_key])
           : null;
@@ -141,7 +146,6 @@ export class Workspace extends DurableObject<Env> {
         await cleanupArtifactObjects(this.state, this.env, request.workspace_id)
           .catch(() => console.error(JSON.stringify({ event: "artifact_cleanup_deferred" })));
         return { status: 200, body };
-        });
       }
       if (method === "ct_collector_publish_observation") {
         requireThat(request.payload.source_checkpoint?.segments?.every((offset: unknown) => Number.isSafeInteger(offset) && Number(offset) > 0), "invalid_checkpoint_offsets");
