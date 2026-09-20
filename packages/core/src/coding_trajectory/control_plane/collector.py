@@ -244,8 +244,14 @@ class CloudflareCollectorRemote:
         try:
             response = self._client.put(
                 url,
-                content=body,
-                headers={"Content-Type": "application/json"},
+                content=(
+                    body[offset : offset + 65_536]
+                    for offset in range(0, len(body), 65_536)
+                ),
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                },
                 timeout=max(self._timeout, 90),
             )
             response.raise_for_status()

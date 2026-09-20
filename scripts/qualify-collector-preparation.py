@@ -164,6 +164,43 @@ class CheckpointRemote:
         )
 
 
+def qualify_upload_transport() -> None:
+    bodies = [b"x" * size for size in (65_535, 65_536, 65_537)]
+    bodies.append(json.dumps({"text": "é🚀" * 800_000}, ensure_ascii=False).encode())
+    received = []
+
+    class UploadTransport(httpx.BaseTransport):
+        def handle_request(self, request):
+            chunks = list(request.stream)
+            assert max(map(len, chunks)) <= 65_536
+            body = b"".join(chunks)
+            assert request.method == "PUT"
+            assert request.headers["content-length"] == str(len(body))
+            assert request.headers["content-type"] == "application/json"
+            assert "transfer-encoding" not in request.headers
+            assert request.url.path.endswith(hashlib.sha256(body).hexdigest())
+            assert set(request.extensions["timeout"].values()) == {120}
+            received.append(body)
+            return httpx.Response(200, json={"ok": True})
+
+    remote = CloudflareCollectorRemote(
+        url="http://localhost", access_token="synthetic", timeout=120
+    )
+    remote._client.close()
+    remote._client = httpx.Client(transport=UploadTransport())
+    try:
+        for body in bodies:
+            remote.upload_artifact(
+                kind="facts", sha256=hashlib.sha256(body).hexdigest(), body=body
+            )
+        assert received == bodies
+    finally:
+        remote.close()
+    print(
+        "PASS bounded upload writes, exact UTF-8 bytes/hash/Content-Length, no chunked encoding, unchanged 120s operation timeouts"
+    )
+
+
 def qualify_publication_transport(root, identity, publication_row) -> None:
     bound = 3 * 1024 * 1024
     worker = (
@@ -949,6 +986,7 @@ def main():
             remote.uploads,
             remote.publications,
         )
+        qualify_upload_transport()
         qualify_semantic_details(graphs[0], root)
         qualify_pinned_publication(root, checkpoint_journals / "checkpoint.jsonl")
         print(

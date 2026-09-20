@@ -121,7 +121,10 @@ checkpoints may already have been accepted by then. The separate 0700 run
 directory holds a 0600 database, isolated preparation cache and fsynced audit
 receipts. Audit output excludes bodies and tokens; **the database and plan still
 contain private content/paths and must not be shared**. Requests have 120-second
-transport timeouts; there is no internal resume loop or concurrency increase.
+per-operation transport timeouts, not a 120-second total-transfer deadline.
+Artifact bodies stream in 64 KiB writes with their original `Content-Length`;
+bytes, hashes and JSON encoding are unchanged (no HTTP chunked encoding).
+There is no internal resume loop or concurrency increase.
 
 After any interruption, preserve the directory and reconcile before resuming:
 
