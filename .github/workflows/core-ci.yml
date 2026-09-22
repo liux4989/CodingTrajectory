@@ -18,8 +18,14 @@ jobs:
     name: Python and contracts
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      release_ready: ${{ steps.release.outputs.release_ready }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      release_target: ${{ steps.release.outputs.target }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -34,6 +40,23 @@ jobs:
 
       - name: Install locked Python workspace
         run: uv sync --all-packages --frozen
+
+      - name: Validate batch release intent
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base="$GITHUB_SHA"
+          if [ "$EVENT_NAME" = push ]; then
+            base="$PUSH_BASE"
+          elif [ "$EVENT_NAME" = pull_request ]; then
+            base="$PR_BASE"
+          fi
+          uv run python scripts/check-release.py change \
+            --base-ref "$base" --head-ref "$GITHUB_SHA" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Check Python sources
         run: |
@@ -108,3 +131,15 @@ jobs:
 
       - name: Bundle control plane without deploying
         run: uv run python scripts/build-python-worker.py --outdir .artifacts/ci/control-plane
+
+  release-candidate:
+    name: Sealed batch release candidate
+    needs: [python-contracts, cloudflare-web]
+    if: >-
+      github.event_name == 'push' &&
+      needs.python-contracts.outputs.release_ready == 'true'
+    uses: ./.github/workflows/deploy-staging.yml
+    with:
+      source_sha: ${{ github.sha }}
+      release_id: ${{ needs.python-contracts.outputs.release_id }}
+      target: ${{ needs.python-contracts.outputs.release_target }}

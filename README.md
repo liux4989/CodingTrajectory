@@ -161,6 +161,14 @@ than starting a second publication from this command.
 
 ## Durable staging release jobs
 
+[`RELEASE.md`](RELEASE.md) is the batch-release ledger. Ordinary commits and
+release-note edits run Core CI without preparing or activating a release. A
+reviewed final commit advances `release_id` by exactly one; after both Core CI
+jobs pass, that transition alone prepares a sealed candidate for the selected
+`staging` or `production` target. Decreasing or skipping IDs, changing the target
+without an ID increment, or introducing a nonzero marker without the zero
+baseline fails CI. Release `0` never deploys.
+
 `npm --prefix cloudflare/control-plane run deploy -- <action> ...` delegates to
 `uv run python scripts/deploy-release.py`. No action deploys implicitly.
 Use a clean reviewed checkout, `uv sync --all-packages --frozen`,
@@ -234,10 +242,11 @@ the release runner never reingests sources, uploads corpus objects, or replays a
 accepted publication. Existing collector batches, bounded parallelism, prepared
 cache and reconcile-before-resume behavior remain their source of truth.
 
-`.github/workflows/deploy-staging.yml` now performs **build-only qualification**
-using the same preparation command. Manual dispatch requires an exact `main`
-SHA; pushes and PRs do not deploy. No account or private reader credentials are
-injected. Synthetic build evidence is retained for 30 days, including on failure.
+`.github/workflows/deploy-staging.yml` is a reusable **build-only qualification**
+called by Core CI only after a valid `release_id` transition and successful
+validation of the exact `main` SHA. No manual workflow dispatch can bypass the
+marker. No account or private reader credentials are injected. Synthetic build
+evidence is retained for 30 days, including on failure.
 It is not a backup for local private release evidence. A downloaded CI job can
 only be verified with its pinned toolchain; do not relabel it as a Mac build.
 Use a fresh local job when the toolchain differs. CI activation is intentionally

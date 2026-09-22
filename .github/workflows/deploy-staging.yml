@@ -1,10 +1,15 @@
-name: Prepare control plane staging release
+name: Prepare sealed batch release
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       source_sha:
-        description: Full reviewed main commit SHA (must match the selected ref)
+        required: true
+        type: string
+      release_id:
+        required: true
+        type: string
+      target:
         required: true
         type: string
 
@@ -24,16 +29,19 @@ env:
   WRANGLER_SEND_METRICS: "false"
   CI: "true"
 
-# Build only. Account credentials cannot prove live prepared-data compatibility.
+# Build only. A release_id increment is the sole entry point from Core CI.
+# Account credentials cannot prove live prepared-data compatibility.
 # Activation runs on the authorized host with scoped reader profiles; see README.
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Require a reviewed main commit
+      - name: Require the reviewed batch commit
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TARGET: ${{ inputs.target }}
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$SOURCE_SHA" = "$GITHUB_SHA"
@@ -58,6 +66,14 @@ jobs:
           uv sync --all-packages --frozen
           npm --prefix cloudflare/control-plane ci
 
+      - name: Bind candidate to release marker
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TARGET: ${{ inputs.target }}
+        run: |
+          uv run python scripts/check-release.py validate --ref "$GITHUB_SHA" \
+            --expect-id "$RELEASE_ID" --expect-target "$RELEASE_TARGET"
+
       - name: Prepare immutable local release
         run: |
           uv run python scripts/deploy-release.py prepare \
@@ -69,7 +85,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: staging-release-${{ github.sha }}-${{ github.run_attempt }}
+          name: batch-release-${{ inputs.release_id }}-${{ inputs.target }}-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/staging-release/
           include-hidden-files: true
           if-no-files-found: warn
