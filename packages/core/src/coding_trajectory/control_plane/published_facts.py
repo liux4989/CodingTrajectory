@@ -27,6 +27,10 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from coding_trajectory.control_plane.fact_constants import (
+    FACT_SET_SCHEMA_VERSION,
+    MAX_FACT_ROWS_PER_GRAPH,
+)
 from coding_trajectory.control_plane.fact_projection import (
     ChronicleCoverage,
     ChronicleEdge,
@@ -60,13 +64,11 @@ _CostText = Annotated[
     ),
 ]
 
-FACT_SET_SCHEMA_VERSION = "ct.published_facts.v2"
 # The measured legitimate maximum is 10,602,862 bytes. 16 MiB provides 58%
 # headroom while keeping graph-at-a-time validation bounded.
 MAX_FACT_SET_BYTES = 16 * 1024 * 1024
 MAX_FACT_ROW_BYTES = 512 * 1024
 MAX_FACT_READ_PAGE_BYTES = 1024 * 1024
-MAX_FACT_ROWS_PER_GRAPH = 131_072
 MAX_FACT_SESSIONS = 512
 MAX_FACT_TURNS = 32_768
 MAX_FACT_ITEMS = 131_072

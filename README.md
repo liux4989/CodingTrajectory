@@ -161,8 +161,11 @@ than starting a second publication from this command.
 
 `npm --prefix cloudflare/control-plane run deploy -- <action> ...` delegates to
 `uv run python scripts/deploy-release.py`. No action deploys implicitly.
-Use a clean reviewed checkout, `uv sync --all-packages --frozen`, and
-`npm --prefix cloudflare/control-plane ci`. Keep the run directory **outside
+Use a clean reviewed checkout, `uv sync --all-packages --frozen`,
+`uv sync --project cloudflare/control-plane --frozen`, and
+`npm --prefix cloudflare/control-plane ci`. The authority is a Python Worker;
+see [its development guide](cloudflare/control-plane/README.md) for contract
+packaging and local runtime qualification. Keep the run directory **outside
 disposable worktrees**, private (0700), and backed up with its append-only audit.
 
 ```bash
@@ -178,7 +181,9 @@ uv run python scripts/deploy-release.py deploy --run-dir "$release" --approve-ac
 
 `prepare` seals source/tree, lockfiles, Wrangler configuration and tool versions;
 runs the existing metric, collector, connection and prepared-API qualifications;
-then builds once. Completed phases verify their cached logs and output hashes
+then seals the complete Python source and WebAssembly dependency tree once.
+Release plan version 2 also checks that no extra modules were added to that tree.
+Completed phases verify their cached logs and output hashes
 instead of rerunning. Interrupted local phases without a sealed receipt rerun;
 failed logs remain. Damaged/unsealed evidence fails closed—preserve it rather
 than editing a receipt. `verify` also requires the original toolchain and clean
@@ -188,8 +193,9 @@ source. This identifies exact bytes, not hermetic rebuilds across machines.
 against candidate prepared-method versions and rejects errors/missing indexes.
 Repeat `--reader-profile` once per affected workspace. It pins manifest hashes,
 endpoint versions and the current single-version staging deployment. `deploy`
-repeats those reads and rejects drift before uploading the sealed bundle using
-`--no-bundle --strict`. Approval is a human authorization requirement; possessing
+repeats those reads and rejects drift before uploading the sealed tree using
+its copied configuration and `--strict`, without resolving dependencies again.
+Approval is a human authorization requirement; possessing
 the digest alone is not an access-control mechanism.
 
 ```bash

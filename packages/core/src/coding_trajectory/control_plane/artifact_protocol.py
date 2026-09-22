@@ -23,7 +23,7 @@ from coding_trajectory.control_plane.collector_protocol import (
     CollectorModel,
     SourceVectorEntry,
 )
-from coding_trajectory.control_plane.published_facts import (
+from coding_trajectory.control_plane.fact_constants import (
     FACT_SET_SCHEMA_VERSION,
     MAX_FACT_ROWS_PER_GRAPH,
 )

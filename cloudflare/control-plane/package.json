@@ -3,18 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "schemas": "PYTHONPATH=../../packages/core/src uv run python ../../scripts/generate-cloudflare-contracts.py && node scripts/compile-contracts.mjs",
-    "types": "wrangler types src/env.d.ts --include-runtime=false",
-    "check": "npm run schemas && tsc --noEmit",
-    "deploy": "uv run python ../../scripts/deploy-release.py"
+    "contracts": "uv run --frozen python ../../scripts/bundle-worker-contracts.py",
+    "check": "npm run contracts && uv run --frozen pywrangler sync && uv run --frozen python ../../scripts/check-python-worker.py",
+    "dev": "npm run contracts && uv run --frozen pywrangler dev",
+    "deploy": "uv run --project ../.. python ../../scripts/deploy-release.py"
   },
-  "dependencies": {
-    "ajv": "8.17.1",
-    "ajv-formats": "3.0.1"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260919.1",
-    "typescript": "5.9.3",
     "wrangler": "^4.135.0"
   }
 }

@@ -54,7 +54,7 @@ export async function benchmark({ mf, fixture, bundle, output, request }) {
   }
   const report = {
     recorded_at: new Date().toISOString(), head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-    bundle_sha256: sha(bundle), fixture_sha256: sha(JSON.stringify(fixture)), shape: fixture.benchmark.shape,
+    worker_source_sha256: sha(bundle), fixture_sha256: sha(JSON.stringify(fixture)), shape: fixture.benchmark.shape,
     harness_sha256: Object.fromEntries(['qualify-prepared-api.py', 'qualify-prepared-api.mjs', 'benchmark-prepared-api.mjs']
       .map(name => [name, sha(readFileSync(new URL(name, import.meta.url)))])),
     environment: { node: process.version, workerd: require('workerd/package.json').version,
@@ -63,6 +63,7 @@ export async function benchmark({ mf, fixture, bundle, output, request }) {
       'First read is after publication/preflight in a fresh process, not a cold isolate or cold storage guarantee.',
       'Wall time includes loopback, harness JSON parsing and scheduling; process CPU includes all local runtime services, not billed Worker CPU.',
       'RSS is whole workerd process; 10ms sampling may miss peaks; HWM includes publication. Heap samples are not exact request peaks.',
+      'Inspector CPU/heap data covers the V8/Pyodide host and WebAssembly runtime; it cannot attribute Python objects or billed Worker CPU exactly.',
       'Read/byte counts are offline-reader expectations, not measured R2 platform spans.'],
     expected_reads: fixture.benchmark.expected_reads, expected_fetched_bytes: fixture.benchmark.expected_fetched_bytes,
     phases: [],

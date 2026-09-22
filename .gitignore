@@ -51,9 +51,9 @@ bun.lock
 benchmarks/results/
 /results/
 
-# Cloudflare generated contracts and local runtime state
+# Cloudflare generated shared contract sources and local runtime state
 cloudflare/**/node_modules/
 cloudflare/**/.wrangler/
 cloudflare/**/.dev.vars*
-cloudflare/control-plane/src/contracts.json
-cloudflare/control-plane/src/validators.js
+cloudflare/control-plane/src/coding_trajectory/
+.venv-workers/

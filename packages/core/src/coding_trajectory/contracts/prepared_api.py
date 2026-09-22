@@ -20,6 +20,27 @@ MAX_API_TURN_BYTES = 320 * 1024
 API_ENVELOPE_RESERVE = 8 * 1024
 MAX_API_FETCH_BYTES = 768 * 1024
 
+# Methods served by the remote authority. Versions come from SERVICE_CONTRACTS;
+# both the Worker and release preflight use this boundary.
+REMOTE_API_METHODS = (
+    "project.list",
+    "project.sessions",
+    "session.overview",
+    "session.summary",
+    "session.tree",
+    "session.stats",
+    "session.usage",
+    "session.model_usage",
+    "session.request_usage",
+    "session.tool_usage",
+    "graph.stats",
+    "graph.usage",
+    "graph.overview",
+    "session.items",
+    "session.events",
+    "living.sessions",
+)
+
 
 class ApiRequest(RequestModel):
     protocol: Literal["ct.api.v1"] = API_PROTOCOL

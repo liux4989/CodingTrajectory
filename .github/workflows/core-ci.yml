@@ -83,11 +83,19 @@ jobs:
       - name: Install locked dependencies
         run: |
           uv sync --all-packages --frozen
+          uv sync --project cloudflare/control-plane --frozen
           npm --prefix cloudflare/control-plane ci
           bun --cwd packages/plugins/loop/web ci
 
       - name: Check control plane
         run: npm --prefix cloudflare/control-plane run check
+
+      - name: Qualify Python Worker publication and reads
+        run: |
+          uv run python scripts/qualify-prepared-api.py --fixture-output .artifacts/ci/prepared-fixture.json
+          node scripts/qualify-prepared-api.mjs .artifacts/ci/prepared-fixture.json --publication .artifacts/ci/publication.json
+          uv run python scripts/qualify-deploy-release.py
+          git diff --exit-code -- cloudflare/control-plane/uv.lock cloudflare/control-plane/pylock.toml
 
       - name: Check and build Loop
         working-directory: packages/plugins/loop/web
@@ -99,5 +107,4 @@ jobs:
         run: uv run python scripts/check-loop.py
 
       - name: Bundle control plane without deploying
-        working-directory: cloudflare/control-plane
-        run: npx wrangler deploy --dry-run --env="" --outdir ../../.artifacts/ci/control-plane
+        run: uv run python scripts/build-python-worker.py --outdir .artifacts/ci/control-plane

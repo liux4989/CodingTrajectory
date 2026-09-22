@@ -1,17 +1,14 @@
 #!/usr/bin/env node
 /** Exercise the exact staging driver against disposable local Miniflare. */
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createPythonWorkerRuntime } from './python-worker-runtime.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const require = createRequire(`${root}cloudflare/control-plane/package.json`);
-const { build } = require('esbuild');
-const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]`
   : value !== null && typeof value === 'object'
@@ -25,13 +22,10 @@ const agent = '00000000-0000-4000-8000-000000009402';
 const version = '00000000-0000-4000-8000-000000009403';
 const token = 'prepared-api-staging-local-token-0000000001';
 const principals = { [sha(token)]: { workspace_id: workspace, agent_id: agent, roles: ['read', 'collect'] } };
-const bundle = await build({ entryPoints: [`${root}cloudflare/control-plane/src/index.ts`], bundle: true,
-  write: false, format: 'esm', platform: 'browser', external: ['cloudflare:workers'] });
-const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: 'prepared-api-staging-local',
-  modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-09-10',
-  durableObjects: { WORKSPACES: { className: 'Workspace', useSQLite: true } }, r2Buckets: ['ARTIFACTS'],
-  bindings: { CT_CURSOR_KEY: 'prepared-api-staging-local-cursor-key-00001',
-    CT_PRINCIPALS: JSON.stringify(principals), WORKER_VERSION: { id: version } } }] }));
+const mf = createPythonWorkerRuntime({ name: 'prepared-api-staging-local', bindings: {
+  CT_CURSOR_KEY: 'prepared-api-staging-local-cursor-key-00001',
+  CT_PRINCIPALS: JSON.stringify(principals), WORKER_VERSION: { id: version },
+} });
 const directory = mkdtempSync(join(tmpdir(), 'ct-prepared-staging-'));
 const generatedPlan = join(directory, 'plan.json');
 const representativePlan = join(directory, 'representative-plan.json');

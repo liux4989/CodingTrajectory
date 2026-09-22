@@ -475,7 +475,14 @@ def main() -> None:
             rejected = rpc(method, {"agent_id": AGENT}, status=404)
             check(rejected["error"]["code"] == "not_found", f"{method} is retired")
         source_root = Path(__file__).parents[1] / "cloudflare/control-plane/src"
-        check(not (source_root / "facts.ts").exists(), "legacy facts module is absent")
+        check(
+            not (source_root / "facts.py").exists(),
+            "retired fact-row authority is absent from the Python Worker",
+        )
+        check(
+            not (source_root / "facts.ts").exists(),
+            "retired TypeScript fact-row authority is absent",
+        )
     finally:
         remote.close()
     print(

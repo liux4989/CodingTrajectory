@@ -1,9 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "coding-trajectory-control-plane",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-09-10",
-  "compatibility_flags": ["nodejs_compat"],
+  "main": "src/index.py",
+  "compatibility_date": "2026-09-22",
+  "compatibility_flags": ["python_workers"],
   "workers_dev": true,
   "preview_urls": false,
   "durable_objects": {

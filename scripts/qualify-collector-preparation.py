@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -465,9 +466,27 @@ def qualify_upload_transport() -> None:
 def qualify_publication_transport(root, identity, publication_row) -> None:
     bound = 3 * 1024 * 1024
     worker = (
-        Path(__file__).resolve().parents[1] / "cloudflare/control-plane/src/shared.ts"
+        Path(__file__).resolve().parents[1] / "cloudflare/control-plane/src/shared.py"
     )
-    assert "MAX_BODY = 3 * 1024 * 1024;" in worker.read_text()
+    module = ast.parse(worker.read_text(), filename=str(worker))
+
+    def integer_expression(node: ast.expr) -> int:
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            return integer_expression(node.left) * integer_expression(node.right)
+        raise AssertionError("Worker MAX_BODY must be a static integer expression")
+
+    assignment = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "MAX_BODY"
+            for target in node.targets
+        )
+    )
+    assert integer_expression(assignment.value) == bound
     method = "ct_collector_publish_artifacts"
     key = "transport-boundary"
     params = {"padding": "雪"}

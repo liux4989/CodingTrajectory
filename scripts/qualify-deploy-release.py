@@ -69,7 +69,14 @@ def main():
             "workspace": str(UUID(int=3)),
             "manifest_sha256": "a" * 64,
         }
-        bundle = {"entry": "worker/index.js", "files": {"worker/index.js": "b" * 64}}
+        bundle = {
+            "entry": "worker/src/index.py",
+            "config": "worker/wrangler.jsonc",
+            "files": {
+                "worker/src/index.py": "b" * 64,
+                "worker/wrangler.jsonc": "e" * 64,
+            },
+        }
         for outcome in ("success", "lost-response", "not-committed"):
             with release.Release(root / outcome) as job:
                 job.put("plan.json", {"source": "c" * 40})

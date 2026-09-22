@@ -1,16 +1,12 @@
 // Disposable Miniflare integration. Never loads Wrangler credentials or remote bindings.
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { compactGraph, expandGraph } from './artifact-manifest-codec.mjs';
+import { createPythonWorkerRuntime, pythonWorkerSource } from './python-worker-runtime.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const require = createRequire(`${root}cloudflare/control-plane/package.json`);
-const { build } = require('esbuild');
-const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
-const codecBundle = await build({ entryPoints: [`${root}cloudflare/control-plane/src/artifact-manifest.ts`], bundle: true, write: false, format: 'esm', platform: 'node' });
-const { compactGraph, expandGraph } = await import(`data:text/javascript;base64,${Buffer.from(codecBundle.outputFiles[0].text).toString('base64')}`);
 const fixture = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const lastOrdinal = fixture.benchmark?.shape === 'representative' ? 2 : 96;
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -27,13 +23,11 @@ const qualifyPublication = process.argv[3] === '--publication';
 const baseline = process.argv[3] === '--publication-baseline';
 const delayMs = Number(process.argv[5] ?? 0);
 const inputGate = process.argv[6] === '--input-gate';
-const bundle = await build({ entryPoints: [`${root}${publicationBenchmark ? 'scripts/artifact-benchmark-worker.ts' : 'cloudflare/control-plane/src/index.ts'}`], bundle: true, write: false,
-  format: 'esm', platform: 'browser', external: ['cloudflare:workers'] });
 const benchmarking = process.argv[3] === '--benchmark';
-const mf = new Miniflare(convertV4MiniflareOptions({ ...(benchmarking ? { inspectorPort: 0 } : {}), workers: [{ name: 'direct-api', modules: true, script: bundle.outputFiles[0].text,
-  compatibilityDate: '2026-09-10', durableObjects: { WORKSPACES: { className: 'Workspace', useSQLite: true } },
-  r2Buckets: ['ARTIFACTS'], bindings: { CT_CURSOR_KEY: 'direct-api-local-cursor-key-00000000001', CT_PRINCIPALS: JSON.stringify(principals), LOCAL_PUBLICATION_INPUT_GATE: inputGate },
-}] }));
+const mf = createPythonWorkerRuntime({ name: 'direct-api', ...(benchmarking ? { inspectorPort: 0 } : {}),
+  ...(publicationBenchmark ? { entrypoint: `${root}scripts/python-worker-benchmark.py` } : {}),
+  bindings: { CT_CURSOR_KEY: 'direct-api-local-cursor-key-00000000001',
+    CT_PRINCIPALS: JSON.stringify(principals), LOCAL_PUBLICATION_INPUT_GATE: inputGate } });
 async function post(path, message, role = 'owner', expected = 200) {
   const response = await mf.dispatchFetch(`http://local${path}`, { method: 'POST', headers: { authorization: `Bearer ${tokens[role] ?? 'invalid'}` }, body: JSON.stringify(message) });
   const raw = await response.text();
@@ -87,12 +81,15 @@ async function rejectPublication(publication, code, status = 409) {
 }
 async function qualifyReceiptsBefore(publication) {
   const graph = publication.graphs[0], ref = graph.summary;
+  console.error('publication qualification: reject internal invocation');
   assert.equal((await internal('reject', ref)).rejected, true);
+  console.error('publication qualification: claim summary');
   assert.equal((await internal('claim', ref)).status, 200);
   const bucket = await mf.getR2Bucket('ARTIFACTS');
   const body = stable(fixture.summary), key = objectKey(ref);
   const metadata = { workspace_id: workspace, kind: ref.kind, sha256: ref.sha256 };
   const original = (await claimProbe(ref))[0];
+  console.error('publication qualification: readiness matrix');
   assert.ok(original.completion);
   assert.deepEqual(await readiness([ref, { ...ref, bytes: ref.bytes + 1 }, { ...ref, kind: 'facts' }]), [true, false, false]);
   assert.deepEqual((await claimProbe(ref))[0], original); // Readiness never renews a claim.
@@ -107,12 +104,14 @@ async function qualifyReceiptsBefore(publication) {
   const checked = await rpc('ct_collector_artifact_readiness', { agent_id: agent, objects: batch });
   assert.deepEqual(checked.ready, batch.map((_, n) => Boolean(n % 2)));
   assert.ok(Object.values(checked.__benchmark.groups).every(group => group.rowsWritten === 0));
+  assert.ok((checked.__benchmark.groups['publication claim lookups']?.rowsRead ?? Infinity) <= 512);
   assert.deepEqual(await (await mf.dispatchFetch('http://local/__benchmark/r2')).json(), r2Before);
   const indexRef = graph.api_methods.find(method => method.index).index;
   const indexClaim = (await claimProbe(indexRef))[0];
   await claimProbe(indexRef, 'completion', { ...JSON.parse(indexClaim.completion), index: null });
   assert.deepEqual(await readiness([indexRef, { ...indexRef, requires_index: true }]), [true, false]);
   await claimProbe(indexRef, 'completion', JSON.parse(indexClaim.completion));
+  console.error('publication qualification: pending and metadata fences');
   assert.deepEqual(await readiness([{ ...indexRef, requires_index: true }]), [true]);
   // An R2 object alone, or a pending/expired claim, is not readiness.
   await claimProbe(ref, 'delete');
@@ -121,6 +120,7 @@ async function qualifyReceiptsBefore(publication) {
   const pending = await internal('claim', ref);
   assert.deepEqual(await readiness([ref]), [false]);
   await rejectPublication(publication, 'artifact_upload_incomplete');
+  console.error('publication qualification: validate existing-object metadata');
   for (const customMetadata of [{ ...metadata, workspace_id: 'other' }, { ...metadata, kind: 'facts' }, { ...metadata, sha256: 'f'.repeat(64) }]) {
     await bucket.put(key, body, { customMetadata });
     const response = await mf.dispatchFetch(`http://local/v1/artifacts/summary/${ref.sha256}`, {
@@ -132,9 +132,11 @@ async function qualifyReceiptsBefore(publication) {
   const corrupt = await mf.dispatchFetch(`http://local/v1/artifacts/summary/${ref.sha256}`, {
     method: 'PUT', headers: { authorization: `Bearer ${tokens.owner}` }, body });
   assert.equal(corrupt.status, 409); // Same size/metadata, different bytes.
+  console.error('publication qualification: revalidate immutable object');
   await bucket.put(key, body, { customMetadata: metadata });
   await mf.dispatchFetch('http://local/__benchmark/r2?reset');
   await upload('summary', body);
+  console.error('publication qualification: validate completion metadata and expiry');
   assert.equal((await (await mf.dispatchFetch('http://local/__benchmark/r2')).json()).calls.put ?? 0, 0);
   const completed = (await claimProbe(ref))[0];
   assert.equal(completed.token, pending.body.token);
@@ -155,6 +157,7 @@ async function qualifyReceiptsBefore(publication) {
   assert.equal((await claimProbe(ref))[0].completion, null);
   await upload('summary', body);
   // Manifest-dependent invariants still belong at publication.
+  console.error('publication qualification: validate publication manifest invariants');
   const changed = mutate => { const copy = structuredClone(publication); mutate(copy); return copy; };
   await rejectPublication(changed(p => p.source_vector[0].source_sequence++), 'source_vector_requires_accepted_project_checkpoints', 400);
   await rejectPublication(changed(p => p.graphs[0].api_methods.push(p.graphs[0].api_methods[0])), 'invalid_prepared_method', 400);
@@ -188,6 +191,7 @@ async function qualifyReceiptsBefore(publication) {
     }
   }
   // A failed PUT leaves a pending fence, never a completion.
+  console.error('publication qualification: validate failed PUT fence');
   const failedBody = stable({ ...fixture.facts, qualification: 'failed-put' });
   const failedRef = { kind: 'facts', sha256: sha(failedBody), bytes: Buffer.byteLength(failedBody) };
   await local('object-gate', { operation: 'put', key: objectKey(failedRef), fail: true });
@@ -238,7 +242,7 @@ async function qualifyReceiptsAfter(publication, published) {
   // Only summary matches; allow index-boundary reads on empty kind batches,
   // but never scan the 1000 unrelated rows per lookup.
   assert.ok(lookups.rowsRead <= 2 * lookups.calls, JSON.stringify(lookups));
-  console.log('PASS indexed lookups with 1000 unrelated claims', bounded.__benchmark.groups['publication claim lookups']);
+  console.log('PASS indexed lookups with 1000 unrelated claims', lookups);
   await claimProbe(ref, 'clear-noise');
   // Successful PUT is stalled before completion; cleanup must preserve its pending fence.
   const body = stable({ ...fixture.facts, qualification: 'pending-through-cleanup' });
@@ -312,18 +316,23 @@ async function qualifyReceiptsAfter(publication, published) {
   console.log('PASS receipt release/replay, retained index reuse, pending/completed cleanup protection and expiry, duplicate upload/commit race, cleanup/upload race, sequence fences');
 }
 async function main() { try {
+  if (publicationBenchmark) console.error('publication qualification: register project');
   const project = await rpc('ct_project_register', { agent_id: agent, display_name: 'DirectApi' });
+  if (publicationBenchmark) console.error('publication qualification: register source');
   const source = await rpc('ct_collector_register_source', { agent_id: agent, project_id: project.project_id, vendor: 'pi', native_session_id: fixture.root });
   delete source.__benchmark;
   const payload = { kind: 'ct.source_checkpoint.v1', source_checkpoint: { segments: [1] }, session_digest: fixture.source };
   const content = sha(stable(payload));
+  if (publicationBenchmark) console.error('publication qualification: publish checkpoint');
   await rpc('ct_collector_publish_observation', { agent_id: agent, ...source, source_sequence: 0, event_id: `checkpoint:${content}`,
     parser_version: 'qualification.v1', content_sha256: content, observed_at: '2026-09-19T00:00:00Z', payload });
   if (qualifyPublication) {
+    console.error('publication qualification: seed legacy claim');
     const legacy = await claimProbe({ kind: 'facts', sha256: sha(stable(fixture.facts)) }, 'legacy');
     assert.equal(legacy[0].completion, null); assert.equal(legacy[0].token, null);
   }
   const facts = await upload('facts', stable(fixture.facts)), summary = await upload('summary', stable(fixture.summary));
+  if (publicationBenchmark) console.error('publication qualification: upload API objects');
   const refs = [];
   for (const [hash, body] of Object.entries(fixture.api.objects)) {
     assert.equal(sha(body), hash); refs.push(await upload('api', body));
@@ -336,7 +345,7 @@ async function main() { try {
     }] };
   const compact = compactGraph(publication.graphs[0]);
   assert.deepEqual(expandGraph(compact), publication.graphs[0]);
-  if (fixture.compact_api) assert.deepEqual(compact.api, fixture.compact_api, 'Python/TypeScript producer parity');
+  if (fixture.compact_api) assert.deepEqual(compact.api, fixture.compact_api, 'producer/wire-codec parity');
   if (fixture.compact_corner) {
     const { expanded, compact: corner } = fixture.compact_corner;
     assert.deepEqual(compactGraph(expanded), corner);
@@ -344,17 +353,19 @@ async function main() { try {
     assert.deepEqual(corner.api.entries, [[0, 0, '雪', 0], [0, 1, null, null], [0, 0, null, 1]]);
   }
   const compactRequest = { ...publication, schema_version: 'ct.artifact-manifest.v3', graphs: [compact] };
-  for (const [column, position, code] of [[0, compact.api.methods.length, 'invalid_prepared_reference'],
-    [1, compact.api.scopes.length, 'invalid_prepared_reference'], [3, compact.api.objects.length, 'invalid_prepared_reference'],
+  // Pydantic validates compact table bounds and uniqueness before expansion.
+  for (const [column, position, code] of [[0, compact.api.methods.length, 'invalid_contract'],
+    [1, compact.api.scopes.length, 'invalid_contract'], [3, compact.api.objects.length, 'invalid_contract'],
     [3, -1, 'invalid_contract'], [3, 0.5, 'invalid_contract'], [3, '0', 'invalid_contract']]) {
     const malformed = structuredClone(compactRequest); malformed.graphs[0].api.entries[0][column] = position;
     await rejectPublication(malformed, code, 400);
   }
   const duplicate = structuredClone(compactRequest); duplicate.graphs[0].api.objects.push(duplicate.graphs[0].api.objects[0]);
-  await rejectPublication(duplicate, 'invalid_prepared_reference', 400);
+  await rejectPublication(duplicate, 'invalid_contract', 400);
   console.log('PASS compact tables: exact producer parity, ordered expansion, invalid positions and duplicate objects');
   const params = { session_id: fixture.root, limit: 200 };
   assert.equal((await api('session.overview', params, 'owner', 409)).error.code, 'prepared_view_unavailable');
+  if (publicationBenchmark) console.error('publication qualification: receipts before publication');
   if (qualifyPublication) await qualifyReceiptsBefore(publication);
   if (publicationBenchmark) await mf.dispatchFetch(`http://local/__benchmark/r2?reset&delay=${delayMs}`);
   const publicationStarted = performance.now();
@@ -374,6 +385,7 @@ async function main() { try {
     return;
   }
   const published = await rpc('ct_collector_publish_artifacts', publication, 'publication:0');
+  if (publicationBenchmark) console.error('publication qualification: publication committed');
   const publicationWallMs = performance.now() - publicationStarted;
   const manifestReply = await rpc('ct_artifact_manifest', { project_id: project.project_id });
   const storedManifest = manifestReply.manifests[0];
@@ -394,7 +406,7 @@ async function main() { try {
   }
   if (benchmarking) {
     const { benchmark } = await import('./benchmark-prepared-api.mjs');
-    await benchmark({ mf, fixture, bundle: bundle.outputFiles[0].text,
+    await benchmark({ mf, fixture, bundle: readFileSync(pythonWorkerSource, 'utf8'),
       output: process.argv[4], request: () => api('session.overview', params) });
   } else {
   const first = await api('session.overview', params);

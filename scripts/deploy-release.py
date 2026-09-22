@@ -7,7 +7,6 @@ import fcntl
 import json
 import os
 import platform
-import re
 import signal
 import subprocess
 import sys
@@ -17,6 +16,8 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
+from coding_trajectory.contracts.prepared_api import REMOTE_API_METHODS
+from coding_trajectory.contracts.registry import SERVICE_CONTRACTS
 from coding_trajectory.control_plane.artifact_protocol import ArtifactManifest
 from coding_trajectory.control_plane.collector import CloudflareCollectorRemote
 from coding_trajectory.control_plane.connections import load_profile_credentials
@@ -36,12 +37,15 @@ INPUTS = (
     "uv.lock",
     "cloudflare/control-plane/package-lock.json",
     "cloudflare/control-plane/wrangler.jsonc",
+    "cloudflare/control-plane/pyproject.toml",
+    "cloudflare/control-plane/uv.lock",
+    "cloudflare/control-plane/pylock.toml",
 )
 
 
 class Plan(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     source: str = Field(pattern=r"^[0-9a-f]{40}$")
     tree: str
     environment: Literal["staging"] = "staging"
@@ -58,6 +62,17 @@ def source(source_sha):
         ["git", "status", "--porcelain", "--untracked-files=no"]
     ):
         raise ValueError("release requires the exact clean reviewed checkout")
+    if output(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "cloudflare/control-plane",
+        ]
+    ):
+        raise ValueError("release requires committed Worker sources and lockfiles")
     return output(["git", "rev-parse", "HEAD^{tree}"])
 
 
@@ -67,6 +82,12 @@ def tools():
         "node": output(["node", "--version"]),
         "uv": output(["uv", "--version"]),
         "wrangler": output([str(WRANGLER), "--version"], cwd=WORKER),
+        "python_worker": output(
+            ["uv", "run", "--frozen", "python", "--version"], cwd=WORKER
+        ),
+        "pywrangler": output(
+            ["uv", "run", "--frozen", "pywrangler", "--version"], cwd=WORKER
+        ),
     }
 
 
@@ -88,14 +109,7 @@ def check_hashes(values, base):
 
 def compatible(response):
     """Conservative descriptor gate, not a replacement for bounded readback."""
-    table = re.search(
-        r"export const API_VERSIONS: Record<string, number> = (\{.*?\});",
-        (WORKER / "src/prepared-api.ts").read_text(),
-        re.DOTALL,
-    )
-    if table is None:
-        raise ValueError("cannot identify candidate Worker version table")
-    versions = json.loads(re.sub(r",\s*}", "}", table[1]))
+    versions = {name: SERVICE_CONTRACTS[name].version for name in REMOTE_API_METHODS}
     manifests = [
         ArtifactManifest.model_validate(value) for value in response["manifests"]
     ]
@@ -212,7 +226,12 @@ class Release:
             files.extend(p for p in bundle_dir.rglob("*") if p.is_file())
         value = {"seconds": elapsed, "outputs": hashes(files, self.directory)}
         if bundle_dir:
-            value["entry"] = str((bundle_dir / "index.js").relative_to(self.directory))
+            value["entry"] = str(
+                (bundle_dir / "src/index.py").relative_to(self.directory)
+            )
+            value["config"] = str(
+                (bundle_dir / "wrangler.jsonc").relative_to(self.directory)
+            )
         self.put(receipt.name, value)
         return value
 
@@ -296,15 +315,14 @@ class Release:
             self.phase(
                 "build",
                 [
-                    str(WRANGLER),
-                    "deploy",
-                    "--env",
-                    "staging",
-                    "--dry-run",
+                    "uv",
+                    "run",
+                    "python",
+                    "scripts/build-python-worker.py",
                     "--outdir",
                     str(bundle_dir),
                 ],
-                cwd=WORKER,
+                cwd=ROOT,
                 bundle_dir=bundle_dir,
             )
         self.verify()
@@ -325,9 +343,29 @@ class Release:
         ):
             check_hashes(self.read(f"{phase}.json")["outputs"], self.directory)
         build = self.read("build.json")
-        bundle = {"entry": build["entry"], "files": build["outputs"]}
-        if bundle["entry"] not in bundle["files"]:
-            raise ValueError("bundle entry is not sealed")
+        bundle = {
+            "entry": build["entry"],
+            "config": build["config"],
+            "files": build["outputs"],
+        }
+        if any(bundle[key] not in bundle["files"] for key in ("entry", "config")):
+            raise ValueError("Python bundle entry/config is not sealed")
+        bundle_dir = (self.directory / bundle["config"]).parent
+        actual = hashes(
+            (
+                p
+                for p in bundle_dir.rglob("*")
+                if p.is_file() and ".wrangler" not in p.relative_to(bundle_dir).parts
+            ),
+            self.directory,
+        )
+        expected = {
+            name: sha
+            for name, sha in bundle["files"].items()
+            if (self.directory / name).is_relative_to(bundle_dir)
+        }
+        if actual != expected:
+            raise ValueError("Python bundle module inventory changed")
         return bundle
 
     def remote_status(self):
@@ -422,17 +460,17 @@ class Release:
             [
                 str(WRANGLER),
                 "deploy",
-                str(self.directory / bundle["entry"]),
+                "--config",
+                str(self.directory / bundle["config"]),
                 "--env",
                 "staging",
-                "--no-bundle",
                 "--strict",
                 "--tag",
                 approved[:16],
                 "--message",
                 f"ct-release:{approved}",
             ],
-            cwd=WORKER,
+            cwd=(self.directory / bundle["config"]).parent,
         )
         return self.reconcile()
 
