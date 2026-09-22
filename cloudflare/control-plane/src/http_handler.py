@@ -45,7 +45,6 @@ COLLECT = {
 }
 READ = {
     "ct_workspace_snapshot",
-    "ct_legacy_fact_cleanup_status",
     "ct_artifact_manifest",
     "ct_artifact_read",
     "ct_project_inventory_snapshot",

@@ -50,7 +50,6 @@ contract tightening, not an emulation of every former validator behavior.
 uv run python scripts/qualify-prepared-api.py
 uv run python scripts/qualify-prepared-api.py --shape index-heavy --fixture-output .artifacts/python-worker/index-heavy.json
 node scripts/qualify-prepared-api.mjs .artifacts/python-worker/index-heavy.json --publication .artifacts/python-worker/publication.json
-node scripts/qualify-legacy-fact-cleanup.mjs
 node scripts/benchmark-artifact-publication.mjs .artifacts/python-worker/timing.json --shape representative
 uv run python scripts/qualify-deploy-release.py
 uv run python scripts/validate-metrics-baselines.py
@@ -67,11 +66,15 @@ contracts, installed WebAssembly dependencies, lockfiles, and configuration,
 then asks Wrangler to dry-run that standalone tree. It does not deploy.
 
 `scripts/deploy-release.py` retains the pinned-source preparation, explicit
-staging activation, and no-retry reconciliation workflow. Release plan version 2
-seals the complete Python module inventory, not a JavaScript entrypoint. Deploy
+staging or production activation, and no-retry reconciliation workflow. Release plan versions 2 and 3
+seal the complete Python module inventory, not a JavaScript entrypoint. Deploy
 uses that copied configuration directly with the locked Wrangler executable;
 it does not resolve packages again. Version 1 release plans must be prepared anew.
 
 The Worker name, `Workspace` Durable Object class, SQLite migration, and R2
 bindings remain stable. Code rollback does not roll back SQL or R2 writes.
 No deployment or data reset is implied by a local build or passing qualification.
+
+For routine releases, run `prepare` once, then `deploy --environment <target>
+--reader-profile <profile>` using that run directory. Deploy includes preflight and
+smoke validation. Reset and legacy-table cleanup code are retired.

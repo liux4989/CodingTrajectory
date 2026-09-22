@@ -115,10 +115,6 @@ def compatible(response):
     manifests = [
         ArtifactManifest.model_validate(value) for value in response["manifests"]
     ]
-    if not manifests:
-        raise ValueError(
-            "no manifests; empty/new targets require separate qualification"
-        )
     count = 0
     for manifest in manifests:
         if str(manifest.workspace_id) != response["workspace_id"]:
@@ -133,7 +129,7 @@ def compatible(response):
                     or method.method_version != versions.get(method.method)
                 ):
                     raise ValueError(
-                        "incompatible live prepared data; deploy a bridge reader before migration"
+                        "incompatible live prepared data; resolve the data/version mismatch before activation"
                     )
                 count += 1
     return {
@@ -435,6 +431,10 @@ class Release:
         return {
             "deployment": str(UUID(value["id"])),
             "worker_version": str(UUID(versions[0]["version_id"])),
+            "release_marker": {
+                key: version.get("annotations", {}).get(key)
+                for key in ("workers/message", "workers/tag")
+            },
             "bindings_sha256": digest(
                 encode(sorted(bindings, key=lambda b: b["name"]))
             ),
@@ -495,16 +495,25 @@ class Release:
             self.put(name, plan)
         return {"activation_sha256": sha, "remote_writes": 0, "workspaces": len(live)}
 
-    def deploy(self, approved):
+    def deploy(self, approved=None, *, profiles=()):
+        if approved is None and not profiles:
+            raise ValueError("deploy requires reader profiles or an approved preflight")
         bundle = self.verify()
         if any(r["event"] == "deployment_started" for r in self.target_events()):
             raise ValueError("deployment was already invoked; reconcile, never replay")
+        if approved is not None and profiles:
+            raise ValueError(
+                "choose reader profiles or an approved preflight, not both"
+            )
+        fresh = approved is None
+        if fresh:
+            approved = self.preflight(profiles)["activation_sha256"]
         if len(approved) != 64 or any(c not in "0123456789abcdef" for c in approved):
             raise ValueError("invalid approval digest")
         plan = self.read(f"activation-{approved}.json")
-        if (
-            digest(encode(plan)) != approved
-            or self.preflight([r["profile"] for r in plan["workspaces"]])[
+        if digest(encode(plan)) != approved or (
+            not fresh
+            and self.preflight([r["profile"] for r in plan["workspaces"]])[
                 "activation_sha256"
             ]
             != approved
@@ -534,7 +543,15 @@ class Release:
             ],
             cwd=(self.directory / bundle["config"]).parent,
         )
-        return self.reconcile()
+        receipt = self.reconcile()
+        if receipt["state"] != "code_active":
+            return receipt
+        try:
+            return self.smoke(receipt)
+        except Exception as error:
+            raise ValueError(
+                "code is active but smoke validation failed; rerun smoke, not deploy"
+            ) from error
 
     def reconcile(self):
         self.verify()
@@ -545,23 +562,10 @@ class Release:
             raise ValueError("no deployment intent to reconcile")
         approved = started[0]["activation_sha256"]
         current = self.remote_status()
-        version = json.loads(
-            output(
-                [
-                    str(WRANGLER),
-                    "versions",
-                    "view",
-                    current["worker_version"],
-                    *self.env_args(),
-                    "--json",
-                ],
-                cwd=WORKER,
-            )
-        )
+        marker = current["release_marker"]
         matched = (
-            version.get("annotations", {}).get("workers/message")
-            == f"ct-release:{approved}"
-            and version.get("annotations", {}).get("workers/tag") == approved[:16]
+            marker.get("workers/message") == f"ct-release:{approved}"
+            and marker.get("workers/tag") == approved[:16]
         )
         receipt = {
             "state": "code_active" if matched else "unknown",
@@ -582,8 +586,8 @@ class Release:
             self.put(name, receipt)
         return receipt
 
-    def smoke(self):
-        receipt = self.reconcile()
+    def smoke(self, receipt=None):
+        receipt = receipt if receipt is not None else self.reconcile()
         if receipt["state"] != "code_active":
             raise ValueError("cannot smoke-check an unconfirmed activation")
         plan = self.read(f"activation-{receipt['activation_sha256']}.json")
@@ -617,7 +621,19 @@ class Release:
                 manifests = remote._rpc(
                     "ct_artifact_manifest", {"workspace_id": target["workspace"]}
                 )
+                if manifests.get("workspace_id") != target["workspace"]:
+                    raise ValueError("smoke manifest workspace differs")
                 compatible(manifests)
+                if not manifests["manifests"]:
+                    checks.append(
+                        {
+                            "workspace": target["workspace"],
+                            "method": "ct_artifact_manifest",
+                            "status": 200,
+                            "empty_workspace": True,
+                        }
+                    )
+                    continue
                 project = manifests["manifests"][0]["project_id"]
                 response = remote._client.post(
                     str(credentials.profile.cloudflare_url).rstrip("/") + "/v1/api",
@@ -658,7 +674,13 @@ class Release:
     def status(self):
         rows = self.target_events()
         if (self.directory / self.receipt_name()).exists():
-            state = self.read(self.receipt_name())["state"]
+            receipt = self.read(self.receipt_name())
+            smoke_name = f"smoke-{receipt['activation_sha256']}.json"
+            state = (
+                self.read(smoke_name)["state"]
+                if (self.directory / smoke_name).exists()
+                else receipt["state"]
+            )
         elif any(r["event"] == "deployment_started" for r in rows):
             state = "deployment_outcome_unknown"
         elif (self.directory / "build.json").exists():
@@ -757,11 +779,9 @@ def main():
             elif args.action == "preflight":
                 result = job.preflight(args.reader_profile)
             elif args.action == "deploy":
-                if not args.approve_activation:
-                    raise ValueError(
-                        "--approve-activation is required; no implicit deployment"
-                    )
-                result = job.deploy(args.approve_activation)
+                result = job.deploy(
+                    args.approve_activation, profiles=args.reader_profile
+                )
             elif args.action == "smoke":
                 result = job.smoke()
             else:

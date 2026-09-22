@@ -22,7 +22,6 @@ from artifacts import (
     prune_artifact_receipts,
 )
 from collector import checkpoint, recovery, register_project, register_source
-from legacy_cleanup import drop_empty_legacy_fact_tables, legacy_fact_tables
 from living import living_read, living_write
 from prepared_api import api_locator, initialize_api
 from shared import (
@@ -54,11 +53,6 @@ class Workspace(DurableObject):
         def initialize() -> None:
             initialize_artifacts(self.state)
             initialize_api(self.state)
-            target = getattr(self.env, "CT_LEGACY_FACT_CLEANUP_WORKSPACE_ID", None)
-            if target:
-                expected = self.env.WORKSPACES.idFromName(target).toString()
-                if self.ctx.id.toString() == expected:
-                    drop_empty_legacy_fact_tables(self.state)
 
         self.ctx.storage.transactionSync(initialize)
 
@@ -261,12 +255,6 @@ class Workspace(DurableObject):
             return {
                 "workspace_id": request["workspace_id"],
                 "snapshot_sequence": self.state.pin(request.get("snapshot_sequence")),
-            }
-        if method == "ct_legacy_fact_cleanup_status":
-            return {
-                "workspace_id": request["workspace_id"],
-                "snapshot_sequence": self.state.head(),
-                **legacy_fact_tables(self.state),
             }
         if method == "ct_artifact_manifest":
             return artifact_manifests(self.state, request)

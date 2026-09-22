@@ -50,7 +50,7 @@ The existing zero-item visibility rule is unchanged. Project IDs are attached
 at read time, so this refactor does not require resetting remote data or changing
 existing immutable facts/summaries. No publication is automatic.
 
-## Artifact-only remote history and legacy cleanup
+## Artifact-only remote history
 
 Remote historical reads and collector publication use immutable artifacts only.
 The SQL fact read/stage/publish RPCs are retired (HTTP 404); there is no automatic
@@ -59,25 +59,10 @@ readers together. Pending legacy collector publications stop delivery with an
 actionable error and remain in the local outbox; they are never silently deleted
 or republished. Historical benchmark records describe their original versions.
 
-Retirement does not drop production tables by default. Operators can inspect
-`ct_legacy_fact_cleanup_status` with a reader credential. After confirming the
-target workspace, snapshot, artifact manifest, disabled collection, zero legacy
-publication records, and empty legacy data tables, an explicitly authorized
-deployment may temporarily set `CT_LEGACY_FACT_CLEANUP_WORKSPACE_ID` to that
-workspace UUID. On the target Durable Object's next initialization, its object
-ID is checked and a synchronous transaction drops only `fact_rows`, `fact_schema`,
-`staged_fact_rows`, `staged_fact_items`, `staged_fact_generations`, and
-`validated_fact_graphs`. The only allowed nonempty table is `fact_schema`, with
-the single known marker `(id=1, version=1)`. Unexpected contents abort cleanup.
-
-This is a deployment-controlled schema migration, not a reader deletion API.
-Deploy retirement with the gate absent first; inspect before enabling it. Remove
-the gate immediately after cleanup (or on failure), then confirm the six tables
-remain absent, the snapshot and artifact reads are unchanged, and roles still
-match. Shared SQL metadata, receipts, manifests, and R2 objects are preserved.
-Do not roll back to a pre-retirement Worker: it would recreate the old tables.
-Use `node scripts/qualify-legacy-fact-cleanup.mjs` for disposable workerd/SQLite
-qualification of table guards, target isolation, gate teardown, and retry.
+The one-time legacy reset and table cleanup are complete. Their endpoints,
+deployment flags, and helper scripts are retired. Routine deployments never
+modify or delete application data. Historical qualification records are retained
+as evidence of their original versions.
 
 ## Repeatable local publication
 
@@ -181,19 +166,14 @@ disposable worktrees**, private (0700), and backed up with its append-only audit
 ```bash
 release="$HOME/.coding-trajectory/releases/<unique-release-name>"
 uv run python scripts/deploy-release.py prepare --run-dir "$release" --source-sha <full-reviewed-SHA>
-uv run python scripts/deploy-release.py status --run-dir "$release"
-uv run python scripts/deploy-release.py verify --run-dir "$release"
-# Only authenticated reads. Pause all publishers and other deploy owners first.
-uv run python scripts/deploy-release.py preflight --environment staging --run-dir "$release" --reader-profile <profile>
-# After owner approval of the exact returned digest, with scoped account credentials:
-uv run python scripts/deploy-release.py deploy --environment staging --run-dir "$release" --approve-activation <digest>
-uv run python scripts/deploy-release.py smoke --environment staging --run-dir "$release"
+# Explicit deploy performs preflight, one activation, then smoke validation.
+uv run python scripts/deploy-release.py deploy --environment staging --run-dir "$release" --reader-profile <profile>
 ```
 
 `prepare` seals source/tree, lockfiles, Wrangler configuration and tool versions;
 runs the existing metric, collector, connection and prepared-API qualifications;
 then seals the complete Python source and WebAssembly dependency tree once.
-Release plan version 2 also checks that no extra modules were added to that tree.
+Release plan versions 2 and 3 also check that no extra modules were added to that tree.
 Completed phases verify their cached logs and output hashes
 instead of rerunning. Interrupted local phases without a sealed receipt rerun;
 failed logs remain. Damaged/unsealed evidence fails closed—preserve it rather
@@ -203,7 +183,7 @@ source. This identifies exact bytes, not hermetic rebuilds across machines.
 `preflight` checks **all current project manifests in each supplied workspace**
 against candidate prepared-method versions and rejects errors/missing indexes.
 Repeat `--reader-profile` once per affected workspace. It pins manifest hashes,
-endpoint versions and the current single-version staging deployment. `deploy`
+endpoint versions and the current single-version target deployment. `deploy`
 repeats those reads and rejects drift before uploading the sealed tree using
 its copied configuration and `--strict`, without resolving dependencies again.
 Approval is a human authorization requirement; possessing
@@ -221,21 +201,19 @@ Stop drains the active command and prevents the next phase; it cannot cancel a
 remote commit. Deployment intent is fsynced before invocation. That job **never
 replays deployment**, even after a nonzero exit or spawn failure. Reconciliation
 makes only reads and matches the active version's exact release message/tag.
-`receipt.json` records code activation, phase seconds and operation counts;
-it explicitly does not certify application readback. An unmatched result stays
+The activation receipt records code activation, phase seconds and operation counts.
+Successful `deploy` also records a smoke receipt and returns `smoke_passed`.
+If readback fails after activation, rerun `smoke`; never redeploy just to retry reads.
+`status` reports the latest recorded stage, not current remote health. An unmatched result stays
 unknown, not “safe to retry”. If another deploy superseded it, inspect version
 history before authorizing any new job. There is no automatic rollback.
 
-**Remaining rollout gap:** manifest publication and Worker activation are not
-atomic. The descriptor check does not fetch every object, certify semantics,
-discover unlisted workspaces, or provide a remote lock. The operator must cover
-every affected workspace, pause publishers, review schema/config changes and
-perform bounded correct-workspace readback afterward. Empty/new targets fail
-closed and require separate bootstrap qualification. For an incompatible API
-version, first implement and qualify a bridge reader that supports both stored
-formats; prepare replacement data from complete retained facts, publish it with
-the existing collector's authority-readiness and idempotency protocol, then
-retire the old reader. No bridge or atomic activation is invented by this script.
+Deployment and data publication remain separate operations. Preflight checks the
+supplied workspaces; publishers must be paused during activation to avoid drift.
+Smoke validation checks a representative prepared read, or confirms the authenticated
+empty state when a workspace has no manifests. Empty workspaces need no data upload
+or separate bootstrap workflow. Incompatible stored data still blocks activation;
+resolve that mismatch as separately scoped work before deploying.
 Do not use `collector publish plan` to rediscover or broaden an approved frozen
 recent-only inventory. Retained-fact migration remains separately scoped work;
 the release runner never reingests sources, uploads corpus objects, or replays an
@@ -276,8 +254,8 @@ A release is prepared and qualified once. Promote the same sealed artifact using
 `--environment staging` or `--environment production` for `preflight`, `deploy`,
 `reconcile`, and `smoke`. Each environment has its own activation intent and receipt.
 Preflight checks target bindings, credentials, deployed version, and data compatibility.
-After activation run `smoke` with the same run directory and environment. It verifies
-authentication and a representative prepared read. Deploy never resets or uploads data.
+Deployment automatically checks authentication and a representative prepared read.
+The separate `smoke` action remains available for retrying those reads. Deploy never resets or uploads data.
 
 Data sync remains a separate collector operation. `collector publish plan` accepts
 `--reader-profile` when the collector credential only has collect permission; both
@@ -305,3 +283,8 @@ For a repeatable retained-object transport comparison, run
 comparison. Both runs use the same frozen object bytes; the benchmark refuses missing
 objects, never resets a workspace, and never publishes a manifest. Cold R2 insertion
 latency is not measured by this comparison.
+
+For an independently reviewed preflight, use `preflight --reader-profile <profile>`
+then `deploy --approve-activation <digest>` with the same explicit environment and
+run directory. Normal deployment accepts reader profiles directly; both paths keep
+target checks, durable activation intent, and uncertain-outcome reconciliation.

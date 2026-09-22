@@ -79,19 +79,13 @@ def main():
             },
         }
         for outcome, environment in itertools.product(
-            ("success", "lost-response", "not-committed"), ("staging", "production")
+            ("success", "smoke-failed", "lost-response", "not-committed"),
+            ("staging", "production"),
         ):
             with release.Release(root / f"{environment}-{outcome}", environment) as job:
                 job.put("plan.json", {"source": "c" * 40})
                 calls = []
                 annotations = {}
-
-                def remote_output(
-                    command, calls=calls, annotations=annotations, **kwargs
-                ):
-                    assert command[1:3] == ["versions", "view"]
-                    calls.append("read")
-                    return json.dumps({"annotations": annotations})
 
                 def deploy_phase(
                     name,
@@ -117,15 +111,31 @@ def main():
                         annotations.update(
                             {"workers/message": command[-1], "workers/tag": command[-3]}
                         )
-                    if outcome != "success":
+                    if outcome in {"lost-response", "not-committed"}:
                         raise ValueError("unknown outcome")
 
+                def smoke(receipt, calls=calls, outcome=outcome):
+                    assert (
+                        receipt["state"] == "code_active" and calls.count("write") == 1
+                    )
+                    calls.append("smoke")
+                    if outcome == "smoke-failed":
+                        raise ValueError("readback unavailable")
+                    return {**receipt, "state": "smoke_passed"}
+
                 with (
+                    patch.object(job, "smoke", side_effect=smoke),
                     patch.object(job, "verify", return_value=bundle),
-                    patch.object(job, "remote_status", return_value=remote),
+                    patch.object(
+                        job,
+                        "remote_status",
+                        side_effect=lambda annotations=annotations: {
+                            **remote,
+                            "release_marker": dict(annotations),
+                        },
+                    ),
                     patch.object(job, "live", return_value=[workspace]),
                     patch.object(job, "phase", side_effect=deploy_phase),
-                    patch.object(release, "output", side_effect=remote_output),
                 ):
                     approved = job.preflight(["synthetic"])["activation_sha256"]
                     with patch.object(
@@ -136,7 +146,10 @@ def main():
                         blocked(lambda approved=approved: job.deploy(approved))
                     assert calls == []
                     if outcome == "success":
-                        assert job.deploy(approved)["state"] == "code_active"
+                        assert (
+                            job.deploy(profiles=["synthetic"])["state"]
+                            == "smoke_passed"
+                        )
                     else:
                         blocked(lambda approved=approved: job.deploy(approved))
                     blocked(lambda approved=approved: job.deploy(approved))
@@ -145,6 +158,9 @@ def main():
                         "unknown" if outcome == "not-committed" else "code_active"
                     )
                     assert calls.count("write") == 1
+                    assert calls.count("smoke") == int(
+                        outcome in {"success", "smoke-failed"}
+                    )
                     assert (
                         result["publication_attempts"] == result["remote_writes"] == 0
                     )
@@ -198,7 +214,11 @@ def main():
         blocked(lambda: release.compatible(old))
         wrong = {**response, "workspace_id": str(UUID(int=9))}
         blocked(lambda: release.compatible(wrong))
-        blocked(lambda: release.compatible({**response, "manifests": []}))
+        assert release.compatible({**response, "manifests": []}) == {
+            "projects": 0,
+            "graphs": 0,
+            "methods": 0,
+        }
         credentials = CollectorCredentials(
             profile=CollectorCredentialProfile(
                 cloudflare_url="http://localhost",
@@ -214,13 +234,21 @@ def main():
 
         def authority(request):
             envelope = json.loads(request.content)
-            assert envelope["method"] == "ct_artifact_manifest"
+            assert envelope["method"] in {
+                "ct_artifact_manifest",
+                "ct_connection_status",
+            }
             assert envelope["params"] == {"workspace_id": str(UUID(int=3))}
             requests.append(envelope["method"])
             return httpx.Response(
                 200,
                 headers={"X-CT-Worker-Version": observed_version},
-                json={"ok": True, "data": response},
+                json={
+                    "ok": True,
+                    "data": response
+                    if envelope["method"] == "ct_artifact_manifest"
+                    else {"workspace_id": str(UUID(int=3)), "roles": ["read"]},
+                },
             )
 
         client = httpx.Client
@@ -240,8 +268,36 @@ def main():
             blocked(lambda: job.live(["synthetic"], expected_version))
             assert requests == ["ct_artifact_manifest", "ct_artifact_manifest"]
             assert not (job.directory / "audit.jsonl").exists()
+            observed_version = expected_version
+            response = {"workspace_id": str(UUID(int=3)), "manifests": []}
+            assert job.live(["synthetic"], expected_version)[0]["projects"] == 0
+            activation = "a" * 64
+            receipt = {
+                "state": "code_active",
+                "worker_version": expected_version,
+                "activation_sha256": activation,
+                "bindings_sha256": "b" * 64,
+            }
+            job.put(
+                f"activation-{activation}.json",
+                {
+                    "before": {"bindings_sha256": "b" * 64},
+                    "workspaces": [
+                        {"profile": "synthetic", "workspace": str(UUID(int=3))}
+                    ],
+                },
+            )
+            job.put(job.receipt_name(), receipt)
+            smoke = job.smoke(receipt)
+            assert (
+                smoke["state"] == "smoke_passed"
+                and smoke["checks"][0]["empty_workspace"]
+            )
+            assert job.status()["state"] == "smoke_passed"
+            response = {"workspace_id": str(UUID(int=99)), "manifests": []}
+            blocked(lambda: job.smoke(receipt))
     print(
-        "PASS release: exclusive owner, drained stop, cached resume, artifact/receipt tampering, stale approval, lost response reconciliation, no deploy replay, v4 rejection/v5 acceptance, workspace isolation"
+        "PASS release: exclusive owner, drained stop, cached resume, artifact/receipt tampering, stale approval, lost response reconciliation, no deploy replay, v4 rejection/v5 acceptance, authenticated empty workspace, integrated smoke and read-only retry, workspace isolation"
     )
 
 
