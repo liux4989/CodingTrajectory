@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
 from urllib.parse import urlsplit
 
 from artifacts import artifact_key
+from coding_trajectory.control_plane.artifact_transport import (
+    BATCH_CONTENT_TYPE,
+    BATCH_WIRE_BYTES,
+    decode_batch,
+)
 from js import Object
 from prepared_api import publication_index, read_cursor, serve_prepared, validate_api
 from pyodide.ffi import to_js
 from shared import (
-    DIGEST,
     Fault,
     authority_failure,
     bounded,
@@ -46,7 +51,6 @@ READ = {
     "ct_project_inventory_snapshot",
     "ct_remote_living",
 }
-REPLACE = "ct_workspace_replace"
 PROTOCOL = "ct.core.v1"
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 
@@ -158,6 +162,111 @@ class HttpHandler:
     def __init__(self, env: Any) -> None:
         self.env = env
 
+    async def upload_object(
+        self, principal: Json, kind: str, sha256: str, body: bytes
+    ) -> Json:
+        require_that(await digest(body) == sha256, "artifact_digest_mismatch")
+        try:
+            value = object_value(_json_loads(body))
+        except Exception as error:
+            if isinstance(error, Fault):
+                raise
+            raise Fault(400, "invalid_artifact_json") from error
+        require_that(
+            value.get("schema_version") == "ct.published_facts.v2"
+            if kind == "facts"
+            else value.get("schema_version") == "ct.prepared-summary.v2"
+            if kind == "summary"
+            else value.get("schema_version") == "ct.prepared-api.v1"
+            and len(body) <= 448 * 1024,
+            "artifact_schema_mismatch",
+        )
+        index = publication_index(value, len(body)) if kind == "api" else None
+        key = artifact_key(principal["workspace_id"], kind, sha256)
+        workspace = self.env.WORKSPACES.getByName(principal["workspace_id"])
+        claim = object_value(
+            _json_loads(
+                await workspace.invoke(
+                    "ct_internal_artifact_claim",
+                    _json_dumps(
+                        {
+                            "request": {
+                                "workspace_id": principal["workspace_id"],
+                                "kind": kind,
+                                "sha256": sha256,
+                            }
+                        }
+                    ),
+                    _json_dumps(principal),
+                )
+            )
+        )
+        require_that(claim.get("status") == 200, "artifact_claim_failed", 503)
+        prior = await self.env.ARTIFACTS.get(key)
+        if prior:
+            metadata = js_get(prior, "customMetadata")
+            require_that(
+                js_get(prior, "size") == len(body)
+                and js_get(metadata, "sha256") == sha256
+                and js_get(metadata, "workspace_id") == principal["workspace_id"]
+                and js_get(metadata, "kind") == kind,
+                "artifact_identity_conflict",
+                409,
+            )
+            require_that(
+                await digest(bytes_from_buffer(await prior.arrayBuffer())) == sha256,
+                "artifact_identity_conflict",
+                409,
+            )
+        else:
+            await self.env.ARTIFACTS.put(
+                key,
+                body,
+                _js_options(
+                    {
+                        "customMetadata": {
+                            "workspace_id": principal["workspace_id"],
+                            "kind": kind,
+                            "sha256": sha256,
+                        },
+                        "httpMetadata": {"contentType": "application/json"},
+                    }
+                ),
+            )
+        completion = object_value(
+            _json_loads(
+                await workspace.invoke(
+                    "ct_internal_artifact_complete",
+                    _json_dumps(
+                        {
+                            "request": {
+                                "workspace_id": principal["workspace_id"],
+                                "kind": kind,
+                                "sha256": sha256,
+                                "bytes": len(body),
+                                "index": index,
+                                "token": claim["body"]["token"],
+                            }
+                        }
+                    ),
+                    _json_dumps(principal),
+                )
+            )
+        )
+        require_that(
+            completion.get("status") == 200,
+            _response_error_code(completion.get("body", {}))
+            if completion.get("body")
+            else "artifact_completion_failed",
+            completion.get("status", 503),
+        )
+        result: Json = {"ok": True, "sha256": sha256, "bytes": len(body)}
+        if claim.get("body", {}).get("__benchmark"):
+            result["__benchmark"] = claim["body"]["__benchmark"]
+        if completion.get("body", {}).get("__benchmark"):
+            result["__benchmark_completion"] = completion["body"]["__benchmark"]
+        return result
+
     async def fetch(self, request: Any) -> Response:
         request_id: Any = None
         method: Any = None
@@ -169,6 +278,52 @@ class HttpHandler:
             parsed_url = urlsplit(request.url)
             if parsed_url.path == "/v1/api":
                 protocol = "ct.api.v1"
+            if (
+                request.method == "POST"
+                and parsed_url.path == "/v1/artifacts/batch"
+                and not parsed_url.query
+            ):
+                require_that(
+                    "collect" in principal["roles"] or "owner" in principal["roles"],
+                    "capability_required",
+                    403,
+                )
+                require_that(
+                    request.headers.get("content-type") == BATCH_CONTENT_TYPE,
+                    "invalid_batch_content_type",
+                    415,
+                )
+                try:
+                    objects = decode_batch(
+                        await bounded(request.body, BATCH_WIRE_BYTES)
+                    )
+                except Fault:
+                    raise
+                except (ValueError, TypeError):
+                    raise Fault(400, "invalid_artifact_batch") from None
+                slots = asyncio.Semaphore(4)
+
+                async def upload(item):
+                    kind, sha256, body = item
+                    async with slots:
+                        try:
+                            result = await self.upload_object(
+                                principal, kind, sha256, body
+                            )
+                            return {"kind": kind, **result}
+                        except Exception as error:  # noqa: BLE001 -- each object reports a sanitized outcome
+                            failure = authority_failure(error, "artifact_batch")
+                            return {
+                                "kind": kind,
+                                "sha256": sha256,
+                                "bytes": len(body),
+                                "ok": False,
+                                "error": {"code": failure.code},
+                                "status": failure.status,
+                            }
+
+                results = await asyncio.gather(*(upload(item) for item in objects))
+                return _json_response({"results": results}, self.env)
             artifact_upload = re.fullmatch(
                 r"/v1/artifacts/(facts|summary|api)/([0-9a-f]{64})", parsed_url.path
             )
@@ -180,108 +335,7 @@ class HttpHandler:
                 )
                 kind, sha256 = artifact_upload.groups()
                 body = await bounded(request.body, MAX_ARTIFACT_BYTES)
-                require_that(await digest(body) == sha256, "artifact_digest_mismatch")
-                try:
-                    value = object_value(_json_loads(body))
-                except Exception as error:
-                    if isinstance(error, Fault):
-                        raise
-                    raise Fault(400, "invalid_artifact_json") from error
-                require_that(
-                    value.get("schema_version") == "ct.published_facts.v2"
-                    if kind == "facts"
-                    else value.get("schema_version") == "ct.prepared-summary.v2"
-                    if kind == "summary"
-                    else value.get("schema_version") == "ct.prepared-api.v1"
-                    and len(body) <= 448 * 1024,
-                    "artifact_schema_mismatch",
-                )
-                index = publication_index(value, len(body)) if kind == "api" else None
-                key = artifact_key(principal["workspace_id"], kind, sha256)
-                workspace = self.env.WORKSPACES.getByName(principal["workspace_id"])
-                claim = object_value(
-                    _json_loads(
-                        await workspace.invoke(
-                            "ct_internal_artifact_claim",
-                            _json_dumps(
-                                {
-                                    "request": {
-                                        "workspace_id": principal["workspace_id"],
-                                        "kind": kind,
-                                        "sha256": sha256,
-                                    }
-                                }
-                            ),
-                            _json_dumps(principal),
-                        )
-                    )
-                )
-                require_that(claim.get("status") == 200, "artifact_claim_failed", 503)
-                prior = await self.env.ARTIFACTS.get(key)
-                if prior:
-                    metadata = js_get(prior, "customMetadata")
-                    require_that(
-                        js_get(prior, "size") == len(body)
-                        and js_get(metadata, "sha256") == sha256
-                        and js_get(metadata, "workspace_id")
-                        == principal["workspace_id"]
-                        and js_get(metadata, "kind") == kind,
-                        "artifact_identity_conflict",
-                        409,
-                    )
-                    require_that(
-                        await digest(bytes_from_buffer(await prior.arrayBuffer()))
-                        == sha256,
-                        "artifact_identity_conflict",
-                        409,
-                    )
-                else:
-                    await self.env.ARTIFACTS.put(
-                        key,
-                        body,
-                        _js_options(
-                            {
-                                "customMetadata": {
-                                    "workspace_id": principal["workspace_id"],
-                                    "kind": kind,
-                                    "sha256": sha256,
-                                },
-                                "httpMetadata": {"contentType": "application/json"},
-                            }
-                        ),
-                    )
-                completion = object_value(
-                    _json_loads(
-                        await workspace.invoke(
-                            "ct_internal_artifact_complete",
-                            _json_dumps(
-                                {
-                                    "request": {
-                                        "workspace_id": principal["workspace_id"],
-                                        "kind": kind,
-                                        "sha256": sha256,
-                                        "bytes": len(body),
-                                        "index": index,
-                                        "token": claim["body"]["token"],
-                                    }
-                                }
-                            ),
-                            _json_dumps(principal),
-                        )
-                    )
-                )
-                require_that(
-                    completion.get("status") == 200,
-                    _response_error_code(completion.get("body", {}))
-                    if completion.get("body")
-                    else "artifact_completion_failed",
-                    completion.get("status", 503),
-                )
-                result: Json = {"ok": True, "sha256": sha256, "bytes": len(body)}
-                if claim.get("body", {}).get("__benchmark"):
-                    result["__benchmark"] = claim["body"]["__benchmark"]
-                if completion.get("body", {}).get("__benchmark"):
-                    result["__benchmark_completion"] = completion["body"]["__benchmark"]
+                result = await self.upload_object(principal, kind, sha256, body)
                 return _json_response(result, self.env)
 
             if (
@@ -449,8 +503,6 @@ class HttpHandler:
             role = (
                 "authenticated"
                 if method_name == "ct_connection_status"
-                else "owner"
-                if method_name == REPLACE
                 else "collect"
                 if method_name in COLLECT
                 else "read"
@@ -471,49 +523,6 @@ class HttpHandler:
                 "workspace_denied",
                 403,
             )
-            if method_name == REPLACE:
-                replacement_workspace_value = getattr(
-                    self.env, "CT_REPLACEMENT_WORKSPACE_ID", None
-                )
-                replacement_export = getattr(
-                    self.env, "CT_REPLACEMENT_EXPORT_SHA256", None
-                )
-                require_that(
-                    replacement_workspace_value and replacement_export,
-                    "workspace_replacement_unavailable",
-                    503,
-                )
-                replacement_workspace = uuid(replacement_workspace_value)
-                require_that(
-                    DIGEST.fullmatch(replacement_export),
-                    "workspace_replacement_invalid",
-                    503,
-                )
-                fields(
-                    body,
-                    ["workspace_id", "mode", "expected_export_sha256", "confirmation"],
-                    ["workspace_id", "mode", "expected_export_sha256", "confirmation"],
-                )
-                require_that(
-                    body["workspace_id"] == replacement_workspace,
-                    "workspace_replacement_target_denied",
-                    403,
-                )
-                require_that(
-                    body["expected_export_sha256"] == replacement_export,
-                    "workspace_replacement_export_denied",
-                    403,
-                )
-                require_that(
-                    body["mode"] in {"preview", "execute"},
-                    "workspace_replacement_mode_invalid",
-                )
-                require_that(
-                    body["confirmation"]
-                    == f"{body['mode']}:{replacement_workspace}:{replacement_export}",
-                    "workspace_replacement_confirmation_required",
-                    403,
-                )
             if method_name == "ct_connection_status":
                 fields(body, ["workspace_id"], ["workspace_id"])
                 return _json_response(

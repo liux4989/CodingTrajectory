@@ -12,7 +12,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +34,11 @@ from coding_trajectory.control_plane.artifact_protocol import (
     ArtifactReadinessResponse,
     PreparedGraphSummary,
     compact_publication,
+)
+from coding_trajectory.control_plane.artifact_transport import (
+    BATCH_CONTENT_TYPE,
+    encode_batch,
+    upload_groups,
 )
 from coding_trajectory.control_plane.collector_protocol import (
     CollectorRecoveryRequest,
@@ -277,6 +282,32 @@ class CloudflareCollectorRemote:
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise CollectorRemoteError("collector artifact upload unavailable") from exc
+
+    def upload_artifact_batch(self, objects: list[tuple[str, str, bytes]]) -> None:
+        wire = encode_batch(objects)
+        url = self._url.removesuffix("/v1/core") + "/v1/artifacts/batch"
+        try:
+            response = self._client.post(
+                url,
+                content=wire,
+                headers={"Content-Type": BATCH_CONTENT_TYPE},
+                timeout=max(self._timeout, 90),
+            )
+            response.raise_for_status()
+            results = response.json()["results"]
+            if len(results) != len(objects):
+                raise ValueError("batch result count mismatch")
+            for result, (kind, sha256, body) in zip(results, objects, strict=True):
+                if (result.get("kind"), result.get("sha256"), result.get("bytes")) != (
+                    kind,
+                    sha256,
+                    len(body),
+                ) or result.get("ok") is not True:
+                    raise ValueError("batch object was not completed")
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise CollectorRemoteError(
+                "artifact batch incomplete; check readiness before resuming"
+            ) from exc
 
     def publish_artifacts(
         self, request: ArtifactPublicationRequest, *, idempotency_key: str
@@ -1095,25 +1126,49 @@ class LocalCollector:
                     for ref, ready in zip(batch, readiness.ready, strict=True)
                     if not ready
                 ]
-                for start in range(0, len(missing), 4):
-                    uploads = []
-                    for ref in missing[start : start + 4]:
+
+                def submit(group):
+                    payload = []
+                    for ref in group:
                         artifact = self._connection.execute(
                             "select body from artifact_objects where sha256 = ? and kind = ?",
                             (ref.sha256, ref.kind),
                         ).fetchone()
                         if artifact is None:
                             raise ValueError("prepared artifact is unavailable")
-                        uploads.append(
-                            workers.submit(
-                                remote.upload_artifact,
-                                kind=ref.kind,
-                                sha256=ref.sha256,
-                                body=bytes(artifact["body"]),
-                            )
-                        )
-                    for upload in uploads:
-                        upload.result()
+                        payload.append((ref.kind, ref.sha256, bytes(artifact["body"])))
+                    if len(payload) > 1:
+                        return workers.submit(remote.upload_artifact_batch, payload)
+                    kind, sha256, body = payload[0]
+                    return workers.submit(
+                        remote.upload_artifact, kind=kind, sha256=sha256, body=body
+                    )
+
+                pending = set()
+                queue = iter(
+                    upload_groups(
+                        missing,
+                        enabled=callable(
+                            getattr(remote, "upload_artifact_batch", None)
+                        ),
+                    )
+                )
+                for _ in range(4):
+                    group = next(queue, None)
+                    if group:
+                        pending.add(submit(group))
+                while pending:
+                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                    # Inspect every finished upload before scheduling more work.
+                    for completed in done:
+                        completed.result()
+                    for _ in done:
+                        group = next(queue, None)
+                        if group:
+                            pending.add(submit(group))
+                progress = getattr(remote, "flush_upload_telemetry", None)
+                if progress:
+                    progress()
 
     def _flush_facts(self, remote: CollectorRemote) -> tuple[int, int]:
         self._reject_pending_legacy_publications()

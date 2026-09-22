@@ -258,6 +258,7 @@ def _handle_publish(args: argparse.Namespace) -> dict[str, Any]:
                     source_sha=args.source_sha,
                     worker_version=args.worker_version,
                     credential_profile=args.credential_profile,
+                    reader_profile=args.reader_profile,
                     workspace_id=args.workspace_id,
                     project_id=args.project_id,
                     project_name=args.project_name,
@@ -413,6 +414,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
                 help="Expected deployed Cloudflare Worker version ID.",
             )
             operation.add_argument("--credential-profile", required=True)
+            operation.add_argument("--reader-profile", help="Separate read credential for the same workspace")
             operation.add_argument("--workspace-id", required=True, type=_uuid_arg)
             operation.add_argument("--project-id", required=True, type=_uuid_arg)
             operation.add_argument("--project-name", required=True)

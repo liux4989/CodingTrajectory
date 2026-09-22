@@ -315,7 +315,40 @@ async function qualifyReceiptsAfter(publication, published) {
   await rejectPublication({ ...publication, publication_sequence: sequence + 1 }, 'source_vector_requires_accepted_project_checkpoints', 400);
   console.log('PASS receipt release/replay, retained index reuse, pending/completed cleanup protection and expiry, duplicate upload/commit race, cleanup/upload race, sequence fences');
 }
+async function qualifyBatchTransport() {
+  const entries = Object.entries(fixture.api.objects).filter(([, body]) => Buffer.byteLength(body) <= 64 * 1024).slice(0, 2);
+  assert.equal(entries.length, 2);
+  const objects = entries.map(([hash, text]) => ({ kind: 'api', sha256: hash, body: Buffer.from(text) }));
+  function frame(items) {
+    const header = Buffer.from(JSON.stringify({version: 1, objects: items.map(o => ({kind:o.kind, sha256:o.sha256, bytes:o.body.length}))}));
+    const length = Buffer.alloc(4); length.writeUInt32BE(header.length);
+    return Buffer.concat([length, header, ...items.map(o => o.body)]);
+  }
+  async function batch(body, status = 200, role = 'owner') {
+    const r = await mf.dispatchFetch('http://local/v1/artifacts/batch', {method:'POST', headers:{authorization:`Bearer ${tokens[role]}`, 'content-type':'application/vnd.ct.artifact-batch.v1'}, body});
+    const value = await r.json(); assert.equal(r.status, status, JSON.stringify(value)); return value;
+  }
+  await batch(frame(objects), 403, 'read');
+  await batch(frame([objects[0], objects[0]]), 400);
+  await batch(frame(Array.from({length:33}, (_,i) => ({...objects[0], sha256:i.toString(16).padStart(64,'0')}))), 400);
+  await batch(frame([{...objects[0], body:Buffer.alloc(65537)}]), 400);
+  await batch(frame(Array.from({length:9}, (_,i) => ({...objects[0], sha256:i.toString(16).padStart(64,'0'), body:Buffer.alloc(i === 8 ? 1 : 65536)}))), 400);
+  const invalid = Buffer.from('{"schema_version":"invalid"}');
+  const schemaFailure = await batch(frame([{kind:'api', sha256:sha(invalid), body:invalid}]));
+  assert.equal(schemaFailure.results[0].error.code, 'artifact_schema_mismatch');
+  await batch(Buffer.concat([frame(objects), Buffer.from('extra')]), 400);
+  const mixed = await batch(frame([objects[0], {...objects[1], sha256:'0'.repeat(64)}]));
+  assert.equal(mixed.results[0].ok, true); assert.equal(mixed.results[1].ok, false);
+  const refs = objects.map(o => ({kind:o.kind, sha256:o.sha256, bytes:o.body.length}));
+  assert.deepEqual(await readiness(refs), [true, false]);
+  const retry = await batch(frame([objects[1]])); assert.equal(retry.results[0].ok, true);
+  assert.deepEqual(await readiness(refs), [true, true]);
+  const bucket = await mf.getR2Bucket('ARTIFACTS');
+  for (const o of objects) assert.deepEqual(Buffer.from(await (await bucket.get(objectKey(o))).arrayBuffer()), o.body);
+  console.error('PASS batch bytes, per-object outcomes, partial readiness/retry, duplicate and framing bounds, read-only denial');
+}
 async function main() { try {
+  await qualifyBatchTransport();
   if (publicationBenchmark) console.error('publication qualification: register project');
   const project = await rpc('ct_project_register', { agent_id: agent, display_name: 'DirectApi' });
   if (publicationBenchmark) console.error('publication qualification: register source');

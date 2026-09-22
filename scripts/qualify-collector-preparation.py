@@ -350,7 +350,8 @@ def qualify_upload_scheduling(collector) -> None:
                 self.active += 1
                 self.maximum = max(self.maximum, self.active)
             try:
-                self.barrier.wait()
+                if not self.fail:
+                    self.barrier.wait()
                 if self.fail and sha256 == extra[0].sha256:
                     raise CollectorRemoteError("synthetic uncertain upload")
                 with self.lock:
@@ -390,7 +391,10 @@ def qualify_upload_scheduling(collector) -> None:
     else:
         raise AssertionError("upload failure swallowed")
     assert (
-        len(failing.calls) == 4 and len(failing.completed) == 3 and failing.active == 0
+        len(failing.calls) <= 8
+        and len(failing.completed) == len(failing.calls) - 1
+        and failing.maximum <= 4
+        and failing.active == 0
     )
     # Old Workers and malformed readiness responses must stop before any PUT.
     remote = CloudflareCollectorRemote(url="http://localhost", access_token="synthetic")
@@ -645,6 +649,28 @@ def qualify_pinned_publication(root: Path, journal: Path) -> None:
             self.corrupt_manifest = False
 
         def __call__(self, request):
+            if request.url.path == "/v1/artifacts/batch":
+                from coding_trajectory.control_plane.artifact_transport import (
+                    decode_batch,
+                )
+
+                results = []
+                for kind, sha256, body in decode_batch(request.content):
+                    self.writes.append("upload")
+                    self.objects[f"/v1/artifacts/{kind}/{sha256}"] = body
+                    if self.failure == "upload":
+                        self.failure = None
+                        raise httpx.ReadTimeout(
+                            "interrupted after one batch object", request=request
+                        )
+                    results.append(
+                        {"kind": kind, "sha256": sha256, "bytes": len(body), "ok": True}
+                    )
+                return httpx.Response(
+                    200,
+                    headers={"X-CT-Worker-Version": self.version},
+                    json={"results": results},
+                )
             if request.method == "PUT":
                 self.writes.append("upload")
                 self.objects[request.url.path] = request.content
@@ -658,12 +684,17 @@ def qualify_pinned_publication(root: Path, journal: Path) -> None:
                 )
             envelope = json.loads(request.content)
             method, params = envelope["method"], envelope["params"]
+            reader = (
+                request.headers.get("authorization") == "Bearer separate-reader-token"
+            )
+            if method == "ct_artifact_manifest":
+                assert reader, "manifest must use separate reader credential"
             data = {}
             if method == "ct_connection_status":
                 data = {
                     "workspace_id": str(UUID(int=1)),
-                    "agent_id": str(UUID(int=2)),
-                    "roles": ["read", "collect"],
+                    "agent_id": str(UUID(int=88 if reader else 2)),
+                    "roles": ["read"] if reader else ["collect"],
                 }
             elif method == "ct_collector_recover":
                 data = {
@@ -781,7 +812,20 @@ def qualify_pinned_publication(root: Path, journal: Path) -> None:
         authority = Authority(scenario)
         with (
             patch.object(runs, "source_pin", return_value="b" * 40),
-            patch.object(runs, "load_profile_credentials", return_value=credentials),
+            patch.object(
+                runs,
+                "load_profile_credentials",
+                side_effect=lambda name: (
+                    CollectorCredentials(
+                        profile=credentials.profile.model_copy(
+                            update={"agent_id": UUID(int=88), "role": "reader"}
+                        ),
+                        access_token="separate-reader-token",
+                    )
+                    if name == "reader"
+                    else credentials
+                ),
+            ),
             patch.object(
                 httpx,
                 "Client",
@@ -795,6 +839,7 @@ def qualify_pinned_publication(root: Path, journal: Path) -> None:
                 source_sha=source_sha,
                 worker_version=worker,
                 credential_profile="synthetic",
+                reader_profile="reader",
                 workspace_id=UUID(int=1),
                 project_id=UUID(int=4),
                 project_name="Checkpoint",
@@ -900,7 +945,11 @@ def qualify_pinned_publication(root: Path, journal: Path) -> None:
             )
             audit = (run.directory / "audit.jsonl").read_text()
             event_names = [row["event"] for row in runs.events(run.directory)]
-            assert event_names.index("preflight") < event_names.index("upload_started")
+            assert event_names.index("preflight") < min(
+                i
+                for i, name in enumerate(event_names)
+                if name in {"upload_progress", "upload_batch_started"}
+            )
             assert (
                 "synthetic-token" not in audit
                 and "synthetic secret" not in audit

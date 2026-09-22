@@ -1,4 +1,4 @@
-"""Pinned staging release jobs. Local preparation is resumable; deployment is not retried."""
+"""Tested release promotion, independent of data sync and destructive resets. Local preparation is resumable; deployment is not retried."""
 
 from __future__ import annotations
 
@@ -45,10 +45,12 @@ INPUTS = (
 
 class Plan(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    version: Literal[2] = 2
+    version: Literal[2, 3] = 3
     source: str = Field(pattern=r"^[0-9a-f]{40}$")
     tree: str
-    environment: Literal["staging"] = "staging"
+    environment: Literal["staging"] | None = (
+        None  # Legacy plans pinned preparation to staging.
+    )
     inputs: dict[str, str]
     tools: dict[str, str]
 
@@ -142,8 +144,28 @@ def compatible(response):
 
 
 class Release:
-    def __init__(self, directory):
+    def __init__(self, directory, environment="staging"):
+        if environment not in {"staging", "production"}:
+            raise ValueError("unsupported target environment")
+        self.environment = environment
         self.directory = Path(directory).expanduser().resolve()
+
+    def target_events(self):
+        return [
+            r
+            for r in events(self.directory)
+            if r.get("environment", "staging") == self.environment
+        ]
+
+    def env_args(self):
+        return ["--env", "staging"] if self.environment == "staging" else []
+
+    def receipt_name(self):
+        return (
+            "receipt.json"
+            if self.environment == "staging"
+            else "receipt-production.json"
+        )
 
     def __enter__(self):
         self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -371,16 +393,51 @@ class Release:
     def remote_status(self):
         value = json.loads(
             output(
-                [str(WRANGLER), "deployments", "status", "--env", "staging", "--json"],
+                [str(WRANGLER), "deployments", "status", *self.env_args(), "--json"],
                 cwd=WORKER,
             )
         )
         versions = value["versions"]
         if len(versions) != 1 or versions[0]["percentage"] != 100:
-            raise ValueError("only single-version staging activation is supported")
+            raise ValueError("only single-version activation is supported")
+        version = json.loads(
+            output(
+                [
+                    str(WRANGLER),
+                    "versions",
+                    "view",
+                    versions[0]["version_id"],
+                    *self.env_args(),
+                    "--json",
+                ],
+                cwd=WORKER,
+            )
+        )
+        bindings = version["resources"]["bindings"]
+        names = {b["name"]: b for b in bindings}
+        expected_bucket = "coding-trajectory-artifacts" + (
+            "-staging" if self.environment == "staging" else ""
+        )
+        if (
+            names.get("ARTIFACTS", {}).get("bucket_name") != expected_bucket
+            or names.get("WORKSPACES", {}).get("class_name") != "Workspace"
+            or any(
+                names.get(name, {}).get("type") != "secret_text"
+                for name in ("CT_PRINCIPALS", "CT_CURSOR_KEY")
+            )
+            or any(
+                name.startswith(("CT_MAINTENANCE", "CT_REPLACEMENT")) for name in names
+            )
+        ):
+            raise ValueError(
+                "target bindings, required credentials, or maintenance state differ"
+            )
         return {
             "deployment": str(UUID(value["id"])),
             "worker_version": str(UUID(versions[0]["version_id"])),
+            "bindings_sha256": digest(
+                encode(sorted(bindings, key=lambda b: b["name"]))
+            ),
         }
 
     def live(self, profiles, version):
@@ -398,7 +455,7 @@ class Release:
                 def check_version(response):
                     if response.headers.get("X-CT-Worker-Version") != version:
                         raise ValueError(
-                            "reader endpoint differs from pinned staging version"
+                            "reader endpoint differs from pinned target version"
                         )
 
                 remote._client.event_hooks["response"].append(check_version)
@@ -426,6 +483,7 @@ class Release:
         before = self.remote_status()
         live = self.live(profiles, before["worker_version"])
         plan = {
+            "environment": self.environment,
             "source_plan_sha256": digest(encode(self.read("plan.json"))),
             "release_sha256": digest(encode(bundle)),
             "before": before,
@@ -439,7 +497,7 @@ class Release:
 
     def deploy(self, approved):
         bundle = self.verify()
-        if any(r["event"] == "deployment_started" for r in events(self.directory)):
+        if any(r["event"] == "deployment_started" for r in self.target_events()):
             raise ValueError("deployment was already invoked; reconcile, never replay")
         if len(approved) != 64 or any(c not in "0123456789abcdef" for c in approved):
             raise ValueError("invalid approval digest")
@@ -453,17 +511,21 @@ class Release:
         ):
             raise ValueError("activation evidence changed; obtain a fresh approval")
         self.stopped()
-        record(self.directory, "deployment_started", activation_sha256=approved)
+        record(
+            self.directory,
+            "deployment_started",
+            environment=self.environment,
+            activation_sha256=approved,
+        )
         # Persist intent BEFORE the first write. Even spawn failure is reconciled, not retried.
         self.phase(
-            "deployment",
+            "deployment" if self.environment == "staging" else "deployment-production",
             [
                 str(WRANGLER),
                 "deploy",
                 "--config",
                 str(self.directory / bundle["config"]),
-                "--env",
-                "staging",
+                *self.env_args(),
                 "--strict",
                 "--tag",
                 approved[:16],
@@ -477,7 +539,7 @@ class Release:
     def reconcile(self):
         self.verify()
         started = [
-            r for r in events(self.directory) if r["event"] == "deployment_started"
+            r for r in self.target_events() if r["event"] == "deployment_started"
         ]
         if not started:
             raise ValueError("no deployment intent to reconcile")
@@ -490,8 +552,7 @@ class Release:
                     "versions",
                     "view",
                     current["worker_version"],
-                    "--env",
-                    "staging",
+                    *self.env_args(),
                     "--json",
                 ],
                 cwd=WORKER,
@@ -516,15 +577,88 @@ class Release:
             },
             "readback": "not performed; application qualification remains separate",
         }
-        name = "receipt.json" if matched else f"reconciliation-{uuid4().hex}.json"
+        name = self.receipt_name() if matched else f"reconciliation-{uuid4().hex}.json"
         if not (self.directory / name).exists():
             self.put(name, receipt)
         return receipt
 
+    def smoke(self):
+        receipt = self.reconcile()
+        if receipt["state"] != "code_active":
+            raise ValueError("cannot smoke-check an unconfirmed activation")
+        plan = self.read(f"activation-{receipt['activation_sha256']}.json")
+        if receipt.get("bindings_sha256") != plan["before"].get("bindings_sha256"):
+            raise ValueError("activation changed target bindings")
+        checks = []
+        for target in plan["workspaces"]:
+            credentials = load_profile_credentials(target["profile"])
+            with closing(
+                CloudflareCollectorRemote(
+                    url=str(credentials.profile.cloudflare_url),
+                    access_token=credentials.access_token,
+                )
+            ) as remote:
+
+                def pin(response):
+                    if (
+                        response.headers.get("X-CT-Worker-Version")
+                        != receipt["worker_version"]
+                    ):
+                        raise ValueError("smoke target version changed")
+
+                remote._client.event_hooks["response"].append(pin)
+                status = remote._rpc(
+                    "ct_connection_status", {"workspace_id": target["workspace"]}
+                )
+                if status["workspace_id"] != target["workspace"] or not (
+                    {"read", "owner"} & set(status["roles"])
+                ):
+                    raise ValueError("smoke reader identity differs")
+                manifests = remote._rpc(
+                    "ct_artifact_manifest", {"workspace_id": target["workspace"]}
+                )
+                compatible(manifests)
+                project = manifests["manifests"][0]["project_id"]
+                response = remote._client.post(
+                    str(credentials.profile.cloudflare_url).rstrip("/") + "/v1/api",
+                    json={
+                        "protocol": "ct.api.v1",
+                        "method": "project.sessions",
+                        "method_version": SERVICE_CONTRACTS["project.sessions"].version,
+                        "params": {"project_id": project, "limit": 1},
+                    },
+                )
+                response.raise_for_status()
+                value = response.json()
+                if (
+                    not value.get("ok")
+                    or value.get("availability", {}).get("state") != "complete"
+                ):
+                    raise ValueError("smoke read unavailable")
+                SERVICE_CONTRACTS["project.sessions"].validate_response(value["data"])
+                checks.append(
+                    {
+                        "workspace": target["workspace"],
+                        "method": "project.sessions",
+                        "status": 200,
+                    }
+                )
+        result = {
+            "state": "smoke_passed",
+            "environment": self.environment,
+            "worker_version": receipt["worker_version"],
+            "checks": checks,
+            "remote_writes": 0,
+        }
+        name = f"smoke-{receipt['activation_sha256']}.json"
+        if not (self.directory / name).exists():
+            self.put(name, result)
+        return result
+
     def status(self):
-        rows = events(self.directory)
-        if (self.directory / "receipt.json").exists():
-            state = self.read("receipt.json")["state"]
+        rows = self.target_events()
+        if (self.directory / self.receipt_name()).exists():
+            state = self.read(self.receipt_name())["state"]
         elif any(r["event"] == "deployment_started" for r in rows):
             state = "deployment_outcome_unknown"
         elif (self.directory / "build.json").exists():
@@ -539,7 +673,7 @@ class Release:
                 for r in rows
                 if r["event"] == "phase_finished" and r["exit_code"] == 0
             ],
-            "receipt_available": (self.directory / "receipt.json").exists(),
+            "receipt_available": (self.directory / self.receipt_name()).exists(),
             "note": "Local evidence only; use reconcile for remote outcome. No automatic deploy retry.",
         }
 
@@ -557,6 +691,7 @@ def main():
             "preflight",
             "deploy",
             "reconcile",
+            "smoke",
         ),
     )
     parser.add_argument(
@@ -566,6 +701,11 @@ def main():
         help="Durable private directory outside disposable worktrees",
     )
     parser.add_argument("--source-sha")
+    parser.add_argument(
+        "--environment",
+        choices=("staging", "production"),
+        help="Explicit activation target; preparation is shared",
+    )
     parser.add_argument(
         "--reader-profile",
         action="append",
@@ -579,7 +719,12 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     os.environ.update(UV_FROZEN="true", WRANGLER_SEND_METRICS="false", CI="true")
-    job = Release(args.run_dir)
+    if (
+        args.action in {"preflight", "deploy", "reconcile", "smoke"}
+        and not args.environment
+    ):
+        raise ValueError("--environment is required for remote operations")
+    job = Release(args.run_dir, args.environment or "staging")
     if args.action == "status":
         result = job.status()
     elif args.action == "stop":
@@ -617,6 +762,8 @@ def main():
                         "--approve-activation is required; no implicit deployment"
                     )
                 result = job.deploy(args.approve_activation)
+            elif args.action == "smoke":
+                result = job.smoke()
             else:
                 result = job.reconcile()
     print(json.dumps(result, indent=2))

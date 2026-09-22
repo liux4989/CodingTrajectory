@@ -26,6 +26,7 @@ MODULES = (
     "contracts/session.py",
     "control_plane/collector_protocol.py",
     "control_plane/artifact_protocol.py",
+    "control_plane/artifact_transport.py",
     "control_plane/fact_constants.py",
     "ingestion/common.py",
 )

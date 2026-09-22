@@ -9,6 +9,7 @@ import os
 import platform
 import sqlite3
 import subprocess
+import time
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +58,7 @@ class PublicationPlan(BaseModel):
     python_version: str
     worker_version: UUID
     credential_profile: str
+    reader_profile: str | None = None
     url: str
     workspace_id: UUID
     agent_id: UUID
@@ -153,6 +155,25 @@ class PinnedRemote(CloudflareCollectorRemote):
         )
         self.plan, self.audit = plan, audit
         self._audit_lock = Lock()
+        self._upload_counts = {"started": 0, "completed": 0, "bytes": 0}
+        self._reader = None
+        self._reader_agent = plan.agent_id
+        reader_name = getattr(plan, "reader_profile", None)
+        if reader_name:
+            reader = load_profile_credentials(reader_name)
+            if (
+                reader.profile.workspace_id != plan.workspace_id
+                or str(reader.profile.cloudflare_url) != plan.url
+                or reader.profile.project_id not in (None, plan.project_id)
+            ):
+                raise PublicationStopped(
+                    "reader profile differs from publication target"
+                )
+            self._reader_agent = reader.profile.agent_id
+            self._reader = CloudflareCollectorRemote(
+                url=plan.url, access_token=reader.access_token, timeout=120
+            )
+            self._reader._client.event_hooks["response"].append(self._check_version)
         self._client.event_hooks["response"].append(self._check_version)
 
     def _check_version(self, response):
@@ -164,7 +185,32 @@ class PinnedRemote(CloudflareCollectorRemote):
     def _event(self, event, **values):
         if self.audit:
             with self._audit_lock:
-                record(self.audit, event, **values)
+                if event in {"upload_started", "upload_completed"}:
+                    self._upload_counts[
+                        "started" if event == "upload_started" else "completed"
+                    ] += 1
+                    if event == "upload_completed":
+                        self._upload_counts["bytes"] += values["bytes"]
+                    if self._upload_counts["completed"] >= 32:
+                        self._flush_upload_counts()
+                else:
+                    self._flush_upload_counts()
+                    record(self.audit, event, **values)
+
+    def _flush_upload_counts(self):
+        if self.audit and any(self._upload_counts.values()):
+            record(self.audit, "upload_progress", **self._upload_counts)
+            self._upload_counts = {"started": 0, "completed": 0, "bytes": 0}
+
+    def flush_upload_telemetry(self):
+        with self._audit_lock:
+            self._flush_upload_counts()
+
+    def close(self):
+        self.flush_upload_telemetry()
+        if self._reader:
+            self._reader.close()
+        super().close()
 
     def _rpc(self, name, request, *, idempotency_key=None):
         body = _collector_rpc_body(name, request, idempotency_key=idempotency_key)
@@ -176,7 +222,18 @@ class PinnedRemote(CloudflareCollectorRemote):
         }
         self._event("rpc_started", **meta)
         try:
-            result = super()._rpc(name, request, idempotency_key=idempotency_key)
+            endpoint = (
+                self._reader
+                if self._reader
+                and name
+                in {
+                    "ct_artifact_manifest",
+                    "ct_workspace_snapshot",
+                    "ct_project_inventory_snapshot",
+                }
+                else super()
+            )
+            result = endpoint._rpc(name, request, idempotency_key=idempotency_key)
             if name == "ct_collector_register_source":
                 SourceRegistrationResponse.model_validate(result)
             elif name in {
@@ -239,6 +296,32 @@ class PinnedRemote(CloudflareCollectorRemote):
             ) from None
         self._event("upload_completed", **meta)
 
+    def upload_artifact_batch(self, objects):
+        from coding_trajectory.control_plane.artifact_transport import encode_batch
+
+        if any(digest(body) != sha256 for _, sha256, body in objects):
+            raise PublicationStopped("local batch artifact hash mismatch")
+        meta = {
+            "objects": len(objects),
+            "bytes": sum(len(b) for _, _, b in objects),
+            "request_sha256": digest(encode_batch(objects)),
+        }
+        self._event("upload_batch_started", **meta)
+        start = time.monotonic()
+        try:
+            super().upload_artifact_batch(objects)
+        except (CollectorRemoteError, PublicationStopped, ValueError, OSError) as exc:
+            self._event(
+                "upload_batch_stopped",
+                **meta,
+                error_type=type(exc).__name__,
+                cause_type=type(exc.__cause__).__name__ if exc.__cause__ else None,
+            )
+            raise PublicationStopped(
+                "batch incomplete or outcome unknown; reconcile readiness before resuming"
+            ) from None
+        self._event("upload_batch_completed", **meta, seconds=time.monotonic() - start)
+
     def check_target(self):
         result = self._rpc(
             "ct_connection_status", {"workspace_id": str(self.plan.workspace_id)}
@@ -247,10 +330,23 @@ class PinnedRemote(CloudflareCollectorRemote):
         if (
             result.get("workspace_id") != str(self.plan.workspace_id)
             or result.get("agent_id") != str(self.plan.agent_id)
-            or not ({"read", "collect"} <= roles or "owner" in roles)
+            or not ({"collect"} <= roles or "owner" in roles)
         ):
             raise PublicationStopped(
-                "publication requires matching read+collect workspace and agent"
+                "publication requires matching collector workspace and agent"
+            )
+        reader_status = (
+            self._reader._rpc(
+                "ct_connection_status", {"workspace_id": str(self.plan.workspace_id)}
+            )
+            if self._reader
+            else result
+        )
+        if reader_status.get("workspace_id") != str(self.plan.workspace_id) or not (
+            {"read", "owner"} & set(reader_status.get("roles", []))
+        ):
+            raise PublicationStopped(
+                "publication requires a reader profile for this workspace"
             )
 
 
@@ -288,6 +384,7 @@ class PublicationRun:
         project_id,
         project_name,
         project_root,
+        reader_profile=None,
     ):
         tree = source_pin(source_sha)
         if not project_root.expanduser().is_dir():
@@ -301,6 +398,7 @@ class PublicationRun:
             python_version=platform.python_version(),
             worker_version=worker_version,
             credential_profile=credential_profile,
+            reader_profile=reader_profile,
             url=str(profile.cloudflare_url),
             workspace_id=workspace_id,
             agent_id=profile.agent_id,
@@ -698,10 +796,24 @@ class PublicationRun:
         return {
             "state": rows[-1]["event"] if rows else "unplanned",
             "upload_requests_started": sum(
-                r["event"] == "upload_started" for r in rows
+                (
+                    1
+                    if r["event"] in {"upload_started", "upload_batch_started"}
+                    else r.get("started", 0)
+                    if r["event"] == "upload_progress"
+                    else 0
+                )
+                for r in rows
             ),
             "upload_requests_completed": sum(
-                r["event"] == "upload_completed" for r in rows
+                (
+                    1
+                    if r["event"] in {"upload_completed", "upload_batch_completed"}
+                    else r.get("completed", 0)
+                    if r["event"] == "upload_progress"
+                    else 0
+                )
+                for r in rows
             ),
             "preflight": next(
                 (r for r in reversed(rows) if r["event"] == "preflight"), None

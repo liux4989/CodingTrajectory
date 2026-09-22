@@ -84,7 +84,8 @@ qualification of table guards, target isolation, gate teardown, and retry.
 Use `ct collector publish` on the machine holding the private sessions (macOS
 or Linux), from a clean, reviewed source checkout. It does not deploy the Worker
 or change credentials. Select an existing project and a collector profile with
-both read and collect access to the **same workspace**. Do not run another
+collect access and a reader profile with read access to the **same workspace**.
+A combined read+collect profile can serve both roles. Do not run another
 collector for that project at the same time.
 Choose a new `$RUN_DIR` outside the checkout, for example under
 `~/.coding-trajectory/publications/`; keep using that directory for recovery.
@@ -94,7 +95,8 @@ uv sync --all-packages --frozen
 uv run --frozen --no-sync ct collector publish plan \
   --run-dir "$RUN_DIR" --source-sha "$REVIEWED_COLLECTOR_SHA" \
   --worker-version "$DEPLOYED_WORKER_VERSION" \
-  --credential-profile "$COLLECTOR_PROFILE" --workspace-id "$WORKSPACE_ID" \
+  --credential-profile "$COLLECTOR_PROFILE" --reader-profile "$READER_PROFILE" \
+  --workspace-id "$WORKSPACE_ID" \
   --project-id "$PROJECT_ID" --project-name CodingTrajectory \
   --project-root "$LOCAL_PROJECT_ROOT"
 
@@ -174,9 +176,10 @@ uv run python scripts/deploy-release.py prepare --run-dir "$release" --source-sh
 uv run python scripts/deploy-release.py status --run-dir "$release"
 uv run python scripts/deploy-release.py verify --run-dir "$release"
 # Only authenticated reads. Pause all publishers and other deploy owners first.
-uv run python scripts/deploy-release.py preflight --run-dir "$release" --reader-profile <profile>
+uv run python scripts/deploy-release.py preflight --environment staging --run-dir "$release" --reader-profile <profile>
 # After owner approval of the exact returned digest, with scoped account credentials:
-uv run python scripts/deploy-release.py deploy --run-dir "$release" --approve-activation <digest>
+uv run python scripts/deploy-release.py deploy --environment staging --run-dir "$release" --approve-activation <digest>
+uv run python scripts/deploy-release.py smoke --environment staging --run-dir "$release"
 ```
 
 `prepare` seals source/tree, lockfiles, Wrangler configuration and tool versions;
@@ -203,7 +206,7 @@ uv run python scripts/deploy-release.py stop --run-dir "$release"
 # Wait for the active owner/child to exit. Local preparation only:
 uv run python scripts/deploy-release.py resume --run-dir "$release" --source-sha <same-SHA>
 # After any deployment invocation, including a timeout or lost response:
-uv run python scripts/deploy-release.py reconcile --run-dir "$release"
+uv run python scripts/deploy-release.py reconcile --environment staging --run-dir "$release"
 ```
 
 Stop drains the active command and prevents the next phase; it cannot cancel a
@@ -257,3 +260,39 @@ work; reproducibility does not promise instant builds or uploads.
 - `bun run --cwd packages/plugins/loop/web check` for generated Core consumer types and TypeScript
 - `uv run python scripts/check-loop.py` for offline local HTTP integration
 - `uv run python scripts/check-core-protocol.py` for the frozen Core boundary
+
+### Deploy and sync independently
+
+A release is prepared and qualified once. Promote the same sealed artifact using
+`--environment staging` or `--environment production` for `preflight`, `deploy`,
+`reconcile`, and `smoke`. Each environment has its own activation intent and receipt.
+Preflight checks target bindings, credentials, deployed version, and data compatibility.
+After activation run `smoke` with the same run directory and environment. It verifies
+authentication and a representative prepared read. Deploy never resets or uploads data.
+
+Data sync remains a separate collector operation. `collector publish plan` accepts
+`--reader-profile` when the collector credential only has collect permission; both
+profiles must target the same workspace and endpoint. Existing registrations and
+unchanged checkpoints are reused by the collector.
+
+Artifact uploads group up to 32 objects of at most 64 KiB each, with at most 512 KiB
+of object bytes per request. A bounded binary header precedes the exact original
+bytes. Larger objects use the single-object path. Four rolling transfer slots feed
+the Worker, which performs at most four storage operations concurrently per batch.
+Every object retains its hash, schema, claim, completion check, and storage key.
+Mixed outcomes stop publication; reconcile and check readiness before resending
+missing objects. Uploaded objects become visible only through an accepted manifest.
+
+Ordinary single-object telemetry is buffered and flushed every 32 completions or
+readiness page. Batches persist request-level evidence. Publication intent, failures,
+and recovery information remain durable; telemetry is never retention authority.
+
+The completed legacy reset tooling is retired. See [reset retirement](docs/artifact-replacement-workflow.md).
+
+For a repeatable retained-object transport comparison, run
+`scripts/benchmark-artifact-upload.py --database <accepted-collector.sqlite>
+--output <private-report.json>` to inspect grouping. Add `--execute --profile <collector>
+--worker-version <UUID> --transport single|batch --limit 512` for a bounded warm
+comparison. Both runs use the same frozen object bytes; the benchmark refuses missing
+objects, never resets a workspace, and never publishes a manifest. Cold R2 insertion
+latency is not measured by this comparison.

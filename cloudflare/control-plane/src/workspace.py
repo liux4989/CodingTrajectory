@@ -25,14 +25,6 @@ from collector import checkpoint, recovery, register_project, register_source
 from legacy_cleanup import drop_empty_legacy_fact_tables, legacy_fact_tables
 from living import living_read, living_write
 from prepared_api import api_locator, initialize_api
-from replacement import (
-    delete_workspace_artifact_prefix,
-    initialize_replacement,
-    mark_workspace_replacement,
-    preview_workspace_replacement,
-    replacement_prefix,
-    workspace_replacement,
-)
 from shared import (
     Fault,
     State,
@@ -49,16 +41,6 @@ from workers import DurableObject
 
 Json = dict[str, Any]
 Principal = dict[str, Any]
-REPLACEMENT_MUTATIONS = {
-    "ct_project_register",
-    "ct_collector_register_source",
-    "ct_collector_publish_observation",
-    "ct_collector_publish_artifacts",
-    "ct_collector_heartbeat",
-    "ct_collector_publish_living_observation",
-    "ct_internal_artifact_claim",
-    "ct_internal_artifact_complete",
-}
 
 
 class Workspace(DurableObject):
@@ -72,7 +54,6 @@ class Workspace(DurableObject):
         def initialize() -> None:
             initialize_artifacts(self.state)
             initialize_api(self.state)
-            initialize_replacement(self.state)
             target = getattr(self.env, "CT_LEGACY_FACT_CLEANUP_WORKSPACE_ID", None)
             if target:
                 expected = self.env.WORKSPACES.idFromName(target).toString()
@@ -95,55 +76,6 @@ class Workspace(DurableObject):
             result = await self.rpc(method, envelope, principal)
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
-    async def _execute_replacement(self, request: Json) -> Json:
-        prior = workspace_replacement(self.state)
-        same = bool(
-            prior
-            and prior["workspace_id"] == request["workspace_id"]
-            and prior["export_sha256"] == request["expected_export_sha256"]
-        )
-        if prior and same and prior["status"] == "complete":
-            return {
-                "status": 200,
-                "body": {
-                    "workspace_id": request["workspace_id"],
-                    "sql_reset": False,
-                    "prefix": replacement_prefix(request["workspace_id"]),
-                    "deleted": 0,
-                    "complete": True,
-                    "already_complete": True,
-                },
-            }
-        reset_sql = not same
-        if not same:
-            await self.ctx.storage.deleteAll()
-            self.state = State(self.ctx.storage.sql)
-            self._initialize()
-            mark_workspace_replacement(
-                self.state,
-                request["workspace_id"],
-                request["expected_export_sha256"],
-                "incomplete",
-            )
-        deletion = await delete_workspace_artifact_prefix(
-            self.env, request["workspace_id"]
-        )
-        mark_workspace_replacement(
-            self.state,
-            request["workspace_id"],
-            request["expected_export_sha256"],
-            "complete" if deletion["complete"] else "incomplete",
-        )
-        return {
-            "status": 200,
-            "body": {
-                "workspace_id": request["workspace_id"],
-                "sql_reset": reset_sql,
-                **deletion,
-                "already_complete": False,
-            },
-        }
-
     async def rpc(self, method: str, envelope: Json, principal: Principal) -> Json:
         try:
             request = envelope["request"]
@@ -151,66 +83,6 @@ class Workspace(DurableObject):
                 request["workspace_id"] == principal["workspace_id"],
                 "workspace_denied",
                 403,
-            )
-            if method == "ct_workspace_replace":
-                require_that("owner" in principal["roles"], "capability_required", 403)
-                replacement_workspace = getattr(
-                    self.env, "CT_REPLACEMENT_WORKSPACE_ID", None
-                )
-                replacement_export = getattr(
-                    self.env, "CT_REPLACEMENT_EXPORT_SHA256", None
-                )
-                require_that(
-                    replacement_workspace
-                    and request["workspace_id"] == replacement_workspace,
-                    "workspace_replacement_target_denied",
-                    403,
-                )
-                require_that(
-                    replacement_export
-                    and request["expected_export_sha256"] == replacement_export,
-                    "workspace_replacement_export_denied",
-                    403,
-                )
-                require_that(
-                    request.get("confirmation")
-                    == f"{request.get('mode')}:{request['workspace_id']}:{request['expected_export_sha256']}",
-                    "workspace_replacement_confirmation_required",
-                    403,
-                )
-                expected_object = self.env.WORKSPACES.idFromName(
-                    request["workspace_id"]
-                ).toString()
-                require_that(
-                    self.ctx.id.toString() == expected_object,
-                    "workspace_replacement_target_denied",
-                    403,
-                )
-                if request.get("mode") == "preview":
-                    return {
-                        "status": 200,
-                        "body": await preview_workspace_replacement(
-                            self.state,
-                            self.env,
-                            request["workspace_id"],
-                            request["expected_export_sha256"],
-                        ),
-                    }
-                require_that(
-                    request.get("mode") == "execute",
-                    "workspace_replacement_mode_invalid",
-                )
-                return await self.ctx.blockConcurrencyWhile(
-                    lambda: self._execute_replacement(request)
-                )
-
-            replacement = workspace_replacement(self.state)
-            require_that(
-                not replacement
-                or replacement["status"] != "incomplete"
-                or method not in REPLACEMENT_MUTATIONS,
-                "workspace_replacement_incomplete",
-                409,
             )
             if method in {
                 "ct_internal_artifact_claim",

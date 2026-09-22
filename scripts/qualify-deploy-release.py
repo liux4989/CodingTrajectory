@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import itertools
 import json
 import os
 import sys
@@ -77,8 +78,10 @@ def main():
                 "worker/wrangler.jsonc": "e" * 64,
             },
         }
-        for outcome in ("success", "lost-response", "not-committed"):
-            with release.Release(root / outcome) as job:
+        for outcome, environment in itertools.product(
+            ("success", "lost-response", "not-committed"), ("staging", "production")
+        ):
+            with release.Release(root / f"{environment}-{outcome}", environment) as job:
                 job.put("plan.json", {"source": "c" * 40})
                 calls = []
                 annotations = {}
@@ -96,9 +99,15 @@ def main():
                     calls=calls,
                     annotations=annotations,
                     outcome=outcome,
+                    environment=environment,
                     **kwargs,
                 ):
-                    assert name == "deployment"
+                    assert name == (
+                        "deployment"
+                        if environment == "staging"
+                        else "deployment-production"
+                    )
+                    assert ("--env" in command) == (environment == "staging")
                     assert (
                         release.events(job.directory)[-1]["event"]
                         == "deployment_started"
@@ -140,9 +149,11 @@ def main():
                         result["publication_attempts"] == result["remote_writes"] == 0
                     )
                     if outcome != "not-committed":
-                        receipt = (job.directory / "receipt.json").read_bytes()
+                        receipt = (job.directory / job.receipt_name()).read_bytes()
                         job.reconcile()
-                        assert (job.directory / "receipt.json").read_bytes() == receipt
+                        assert (
+                            job.directory / job.receipt_name()
+                        ).read_bytes() == receipt
 
         ref = {"kind": "api", "sha256": "a" * 64, "bytes": 23}
         manifest = {
