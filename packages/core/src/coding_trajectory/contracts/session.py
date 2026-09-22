@@ -493,6 +493,20 @@ class CanonicalItemRecord(ContractModel):
     ]
     operation: str | None = None
     status: str | None = None
+    projection_parent_item_id: str | None = Field(
+        default=None,
+        description="Reconstructed wrapper parent; null means unknown.",
+    )
+    nested_index: int | None = Field(
+        default=None,
+        ge=0,
+        description="Reconstructed child position within the wrapper.",
+    )
+    projection_only: bool | None = Field(
+        default=None,
+        description="Whether the item is a semantic projection, not content custody.",
+    )
+    projection_provenance: CanonicalProvenance | None = None
     provenance: CanonicalProvenance
     coverage: CanonicalResourceCoverage
     type: str | None = None
@@ -572,6 +586,20 @@ class CliCanonicalItemRecord(ContractModel):
     kind: str
     operation: str | None = None
     status: str | None = None
+    projection_parent_item_id: str | None = Field(
+        default=None,
+        description="Reconstructed wrapper parent; null means unknown.",
+    )
+    nested_index: int | None = Field(
+        default=None,
+        ge=0,
+        description="Reconstructed child position within the wrapper.",
+    )
+    projection_only: bool | None = Field(
+        default=None,
+        description="Whether the item is a semantic projection, not content custody.",
+    )
+    projection_provenance: CanonicalProvenance | None = None
     source_sequence: int = Field(ge=0)
     source_order_key: str
     started_at: datetime

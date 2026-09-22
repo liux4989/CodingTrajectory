@@ -514,6 +514,17 @@ class SessionUsageCompactFlat(BaseModel):
         return data
 
 
+class ConsumptionLinkAttributionFlat(BaseModel):
+    """Evidence boundary for request-to-tool-result associations."""
+
+    basis: Literal["tool_completed_at_between_usage_observations"] = (
+        "tool_completed_at_between_usage_observations"
+    )
+    semantics: Literal["temporal_association"] = "temporal_association"
+    causal_evidence: Literal[False] = False
+    request_input_membership: Literal["unknown"] = "unknown"
+
+
 class RequestUsageFlat(BaseModel):
     usage_event_id: UUID | None = None
     session_id: UUID
@@ -531,6 +542,7 @@ class RequestUsageFlat(BaseModel):
     invokes_tool_call_ids: list[str] = Field(default_factory=list)
     consumes_tool_item_ids: list[UUID] = Field(default_factory=list)
     consumes_tool_call_ids: list[str] = Field(default_factory=list)
+    consumption_link_attribution: ConsumptionLinkAttributionFlat | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -545,6 +557,7 @@ class RequestUsageFlat(BaseModel):
             "context_window_tokens",
             "context_growth_tokens",
             "estimated_cost",
+            "consumption_link_attribution",
         ):
             if data.get(key) is None:
                 data.pop(key, None)

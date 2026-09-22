@@ -118,6 +118,12 @@ epoch preserves wait-streak boundaries after compact retention drops text.
 Each reconstructed wrapper child also retains a body-free `projection_only`
 measurement bit. Activity projections may show that semantic child, while
 context composition counts only the original provider-visible wrapper content.
+`session.items` exposes that bit together with `projection_parent_item_id` and
+`nested_index`. A `projection_provenance` value marks the relationship as
+medium-confidence reconstruction evidence; an absent parent remains unknown.
+These links describe record projection and content custody. They do not prove
+causal model-input membership, repeated delivery, or permission to deduplicate
+matching outputs.
 Runtime activity counts use the same semantic projection as overview: hidden
 transport wrappers and empty terminal polling are not counted as tool actions.
 The runtime item count retains semantic polling evidence but excludes wrappers;
@@ -134,6 +140,36 @@ primary-command description over a lossy family head such as `src`, so distinct
 commands do not become identical labels. The row carries no displayed outcome
 when only static evidence exists. Exact native command repeats may use a counted
 row; otherwise native successful commands keep the same flat presentation.
+
+## Wrapper evidence protocol and rollout
+
+`session.items` version 6 exposes the existing reconstructed parent, nested
+position, projection-only flag, and relationship provenance to API consumers.
+Missing relationships remain unknown. `session.request_usage` version 6 adds
+explicit temporal-attribution metadata to consumption links; those links do
+not establish provider-request input membership. These are additive response
+changes, with method versions and the frozen Core baseline updated together.
+The envelope and published-fact schema remain unchanged: the existing fact
+representation already retains wrapper relationships and request measurements.
+
+The bounded evidence behind this change is session
+`01a0c788-0c40-73d0-a57e-8c0fb5f35832`, turn
+`e03971d4-245a-57f3-bf33-eac33e52d795`: literal
+`text(await tools.exec_command(...))` children match native commands and decoded
+wrapper output, but no native parent ID or model-delivery identity is present.
+The narrower recognizer changes projection custody and allocated composition,
+not provider accounting. Replay preserves 15 requests, 951,580 processed tokens,
+and the existing $2.02029 estimate. No metric baseline values are changed.
+
+Collector provenance advances to `ct-local-collector-v12`. The existing
+snapshot-state version comparison rolls registered sources into a new epoch
+when the updated collector next processes them, so unchanged source files are
+not mistaken for already-current reconstruction. Historical remote facts need
+an explicitly scoped collection/publication pass to acquire new relationships;
+updating reader code alone does not enrich old facts. API/CLI consumers need
+the updated reader to expose the fields. No remote database migration or
+automatic publication accompanies this code change. Deployment and bounded
+historical republication remain separate operations.
 
 ## Physical session segments
 

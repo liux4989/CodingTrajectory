@@ -70,7 +70,7 @@ from coding_trajectory.ingestion.common import canonical_json, last_complete_lin
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.models import Session
 
-_PARSER_VERSION = "ct-local-collector-v11"
+_PARSER_VERSION = "ct-local-collector-v12"
 _SOURCE_SCHEMA_VERSION = "ct.source_checkpoint.v1"
 _SNAPSHOT_STATE_VERSION = f"{_SOURCE_SCHEMA_VERSION}:{_PARSER_VERSION}"
 # Must match the deployed core RPC bound in cloudflare/control-plane/src/shared.ts.

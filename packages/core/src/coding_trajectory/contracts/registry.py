@@ -158,7 +158,7 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.request_usage",
-            5,
+            6,
             SessionRequestUsageRequest,
             SessionRequestUsageResponse,
         ),
@@ -173,7 +173,7 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.items",
-            5,
+            6,
             SessionItemsRequest,
             SessionItemsResponse,
         ),

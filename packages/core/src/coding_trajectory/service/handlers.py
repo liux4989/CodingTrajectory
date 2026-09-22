@@ -747,6 +747,7 @@ def _canonical_item_record(
     index: Any,
 ) -> dict[str, Any]:
     from coding_trajectory.analysis.item_details import _classify_item
+    from coding_trajectory.analysis.measurements import is_projection_only_item
 
     source_session = index.sessions_by_id[item.session_id]
     source_turn = index.turns_by_id[item.turn_id]
@@ -760,6 +761,14 @@ def _canonical_item_record(
     evidence = _item_output_evidence(item)
     measurements = item.measurements
     preview = _item_preview(item, evidence)
+    projection_parent_item_id, nested_index, projection_method = (
+        _item_projection_origin(item, index=index)
+    )
+    projection_only = (
+        bool(measurements.projection_only)
+        if measurements is not None
+        else is_projection_only_item(item)
+    )
     return {
         "item_id": str(item.item_id),
         "session_id": str(item.session_id),
@@ -772,6 +781,18 @@ def _canonical_item_record(
         "kind": item.kind,
         "operation": operations[0] if operations else None,
         "status": _normalized_value(item.status),
+        "projection_parent_item_id": projection_parent_item_id,
+        "nested_index": nested_index,
+        "projection_only": projection_only,
+        "projection_provenance": (
+            {
+                "source": "reconstructed_evidence",
+                "method": projection_method,
+                "confidence": "medium",
+            }
+            if projection_parent_item_id is not None
+            else None
+        ),
         "provenance": {
             "source": "published_facts",
             "method": "published_item_record.v1",
@@ -796,6 +817,60 @@ def _canonical_item_record(
         ),
         "output_evidence": evidence,
     }
+
+
+def _item_projection_origin(
+    item: Any, *, index: Any
+) -> tuple[str | None, int | None, str | None]:
+    """Return retained reconstruction evidence without inventing a parent."""
+
+    vendor_data = getattr(item, "vendor_data", None)
+    projection = (
+        vendor_data.get("chronicle_projection")
+        if isinstance(vendor_data, dict)
+        and isinstance(vendor_data.get("chronicle_projection"), dict)
+        else {}
+    )
+    parent_item_id = projection.get("parent_item_id")
+    nested_index = projection.get("nested_index")
+    method: str | None = None
+    if parent_item_id is not None:
+        method = "chronicle_projection.v1"
+    else:
+        activity = (
+            vendor_data.get("activity")
+            if isinstance(vendor_data, dict)
+            and isinstance(vendor_data.get("activity"), dict)
+            else {}
+        )
+        provenance = (
+            activity.get("provenance")
+            if isinstance(activity.get("provenance"), dict)
+            else {}
+        )
+        parent_tool_call_id = provenance.get("parent_tool_call_id")
+        if isinstance(parent_tool_call_id, str):
+            parent = index.items_by_tool_call_id.get(parent_tool_call_id)
+            if parent is not None:
+                parent_item_id = parent.item_id
+                nested_index = provenance.get("nested_index")
+                extractor = provenance.get("extractor")
+                basis = provenance.get("relationship_basis")
+                method = (
+                    ".".join(
+                        str(value)
+                        for value in (extractor, basis)
+                        if isinstance(value, str) and value
+                    )
+                    or "canonical_projection.v1"
+                )
+    return (
+        str(parent_item_id) if parent_item_id is not None else None,
+        nested_index
+        if isinstance(nested_index, int) and not isinstance(nested_index, bool)
+        else None,
+        method,
+    )
 
 
 def _item_operations(item: Any, *, concept: Any) -> list[str] | None:

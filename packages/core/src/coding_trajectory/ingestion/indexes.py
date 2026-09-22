@@ -30,6 +30,7 @@ class SessionGraphIndex:
     sessions_by_id: dict[UUID, Session]
     turns_by_id: dict[UUID, Turn]
     items_by_id: dict[UUID, Item]
+    items_by_tool_call_id: dict[str, Item]
     events_by_id: dict[UUID, Event]
     items_by_event_id: dict[UUID, Item]
     session_by_turn_id: dict[UUID, UUID]
@@ -46,6 +47,7 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
     sessions_by_id: dict[UUID, Session] = {}
     turns_by_id: dict[UUID, Turn] = {}
     items_by_id: dict[UUID, Item] = {}
+    items_by_tool_call_id: dict[str, Item] = {}
     events_by_id: dict[UUID, Event] = {}
     items_by_event_id: dict[UUID, Item] = {}
     session_by_turn_id: dict[UUID, UUID] = {}
@@ -58,6 +60,9 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
             session_by_turn_id[turn.turn_id] = session.session_id
             for item in turn.items:
                 items_by_id[item.item_id] = item
+                tool_call_id = getattr(item, "tool_call_id", None)
+                if isinstance(tool_call_id, str) and tool_call_id:
+                    items_by_tool_call_id[tool_call_id] = item
                 session_by_item_id[item.item_id] = session.session_id
         for event_id, (_turn, item) in index_event_owners(session.turns).items():
             if item is not None:
@@ -105,6 +110,7 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
         sessions_by_id=sessions_by_id,
         turns_by_id=turns_by_id,
         items_by_id=items_by_id,
+        items_by_tool_call_id=items_by_tool_call_id,
         events_by_id=events_by_id,
         items_by_event_id=items_by_event_id,
         session_by_turn_id=session_by_turn_id,

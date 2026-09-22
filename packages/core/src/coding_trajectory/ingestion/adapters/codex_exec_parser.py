@@ -9,7 +9,7 @@ closed. Extracted from the Codex adapter, which consumes only
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -66,6 +66,7 @@ class StaticExecInvocation(BaseModel):
     command: str | None = None
     cwd: str | None = None
     source_offset: int
+    relationship_basis: Literal["literal_text_await"] | None = None
 
 
 def _is_js_identifier_start(value: str) -> bool:
@@ -536,11 +537,11 @@ def _has_possible_tool_reference(source: str, offset: int) -> bool:
 
 
 def _is_safe_text_await(source: str, tokens: list[tuple[str, int, int]]) -> bool:
-    """Recognize only ``text(await tools.apply_patch(...))`` containment.
+    """Recognize literal ``text(await tools.<allowed>(...))`` containment.
 
-    Codex commonly displays a patch result through ``text``.  This is not a
-    general expression parser: accepting arbitrary parenthesized awaits would
-    allow a wrapper's control flow to be mistaken for a direct nested call.
+    Codex commonly displays a literal patch or command result through ``text``.
+    This is not a general expression parser: accepting arbitrary parenthesized
+    awaits would allow wrapper control flow to be mistaken for a direct call.
     """
 
     if len(tokens) < 3 or tokens[-3][0] != "text" or tokens[-2][0] != "await":
@@ -553,7 +554,9 @@ def extract_static_exec_invocations(value: Any) -> list[StaticExecInvocation] | 
     """Extract statically proven nested calls from a historical ``exec`` cell.
 
     This is intentionally a recognizer, not a JavaScript evaluator. It accepts
-    direct awaited calls and a literal ``await Promise.all([...])`` list. Inputs
+    direct awaited calls, literal ``text(await tools.apply_patch(...))`` and
+    ``text(await tools.exec_command(...))`` calls, and a literal
+    ``await Promise.all([...])`` list. Inputs
     must be static literals except an opaque local variable passed to
     ``apply_patch``. Control flow, callbacks, aliases, unknown tools, and any
     unrecognized call form fail closed. An opaque display tail after the last
@@ -635,10 +638,15 @@ def extract_static_exec_invocations(value: Any) -> list[StaticExecInvocation] | 
         if parsed is None:
             return None
         invocation, offset = parsed
-        # A parenthesized await is safe only in the narrow patch-result form
-        # above.  Keep all other nested expression forms fail closed.
-        if text_await and invocation.method != "apply_patch":
+        # A parenthesized await is safe only for literal result-display calls
+        # whose arguments are already parsed fail-closed above. Keep all other
+        # nested expression forms fail closed.
+        if text_await and invocation.method not in {"apply_patch", "exec_command"}:
             return None
+        if text_await:
+            invocation = invocation.model_copy(
+                update={"relationship_basis": "literal_text_await"}
+            )
         invocations.append(invocation)
 
     return invocations or None

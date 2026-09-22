@@ -313,9 +313,10 @@ def build_session_graph_request_usage(
 ) -> dict[str, Any]:
     """Return the exact provider-request usage ledger.
 
-    Causal tool links and request-context diagnostics are independently
-    projectable payload details. Usage, pricing, ordering, and request identity
-    are unaffected. Defaults preserve the legacy response shape.
+    Tool links are temporal associations between consecutive usage-observation
+    timestamps, not evidence of provider-request input membership. Tool links
+    and request-context diagnostics are independently projectable payload
+    details. Usage, pricing, ordering, and request identity are unaffected.
     """
     full = _build_full_metrics(session_graph)
     requests: list[RequestUsageFlat] = []
@@ -424,6 +425,18 @@ def build_session_graph_request_usage(
                             for item in consumed
                             if getattr(item, "tool_call_id", None)
                         ],
+                        consumption_link_attribution=(
+                            {
+                                "basis": (
+                                    "tool_completed_at_between_usage_observations"
+                                ),
+                                "semantics": "temporal_association",
+                                "causal_evidence": False,
+                                "request_input_membership": "unknown",
+                            }
+                            if consumed
+                            else None
+                        ),
                     )
                 )
                 previous_timestamp = observation.timestamp

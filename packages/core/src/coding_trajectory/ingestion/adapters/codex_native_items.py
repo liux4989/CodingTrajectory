@@ -267,6 +267,11 @@ def static_activity_input(invocation: StaticExecInvocation) -> Any:
     return {"patch_reference": "literal"}
 
 
+def _relationship_basis(wrapper: _PendingExecWrapper, index: int) -> dict[str, str]:
+    basis = wrapper.invocations[index].relationship_basis
+    return {"relationship_basis": basis} if basis is not None else {}
+
+
 def _background_terminal_identity(
     invocation: StaticExecInvocation,
 ) -> tuple[str, str | int] | None:
@@ -362,6 +367,7 @@ def append_derived_exec_activities(
             "nested_index": index,
             "source_offset": invocation.source_offset,
             "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+            **_relationship_basis(wrapper, index),
             **({"wrapper_result_observed": True} if invocation_observed_result else {}),
         }
         if terminal_identity is not None:
@@ -571,6 +577,7 @@ def handle_native_command_execution(
                     "nested_index": index,
                     "native_command_id": command_id,
                     "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+                    **_relationship_basis(wrapper, index),
                     **timing,
                 },
             )
@@ -612,6 +619,7 @@ def handle_native_command_execution(
             "parent_tool_name": "exec",
             "nested_index": index,
             "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+            **_relationship_basis(wrapper, index),
         }
 
     command_input: dict[str, Any] = {}
@@ -734,6 +742,7 @@ def resolve_derived_exec_activity(
             "native_item_id": native_id,
             "native_item_type": native_type,
             "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+            **_relationship_basis(wrapper, index),
             **(provenance or {}),
         },
     )
@@ -847,6 +856,7 @@ def record_native_activity(
             "parent_tool_name": "exec",
             "nested_index": index,
             "extractor": _CODEX_EXEC_STATIC_EXTRACTOR,
+            **_relationship_basis(wrapper, index),
         }
 
     activity = activity_data(

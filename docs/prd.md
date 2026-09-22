@@ -141,7 +141,10 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
   corresponding explicit graph aggregate and per-session sections.
 - `session.model_usage` owns provider/model grouping and throughput.
 - `session.request_usage` owns the provider-request usage ledger and native
-  request-level context observations.
+  request-level context observations. Its tool-result consumption links are
+  timestamp-window associations between usage observations. Their explicit
+  attribution reports request-input membership as unknown; they are not causal
+  evidence that the provider request received the linked result.
 - `session.tool_usage` owns tool counts, status, duration, and input/output size
   measurements.
 - Construction displays do not embed these metric responses. Consumers compose
