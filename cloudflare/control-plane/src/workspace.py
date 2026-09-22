@@ -81,6 +81,11 @@ class Workspace(DurableObject):
 
         self.ctx.storage.transactionSync(initialize)
 
+    async def fetch(self, request: Any):
+        from http_handler import HttpHandler
+
+        return await HttpHandler(_HttpEnvironment(self)).fetch(request)
+
     async def invoke(self, method: str, envelope_json: str, principal_json: str) -> str:
         envelope = json.loads(envelope_json)
         principal = json.loads(principal_json)
@@ -453,3 +458,26 @@ class Workspace(DurableObject):
                 "projects": projects,
             }
         raise Fault(404, "not_found")
+
+
+class _LocalWorkspaceNamespace:
+    """Resolve HTTP operations to this object without a second RPC hop."""
+
+    def __init__(self, workspace: Workspace) -> None:
+        self.workspace = workspace
+
+    def getByName(self, name: str) -> Workspace:
+        expected = self.workspace.env.WORKSPACES.idFromName(name).toString()
+        require_that(
+            expected == self.workspace.ctx.id.toString(), "workspace_denied", 403
+        )
+        return self.workspace
+
+
+class _HttpEnvironment:
+    def __init__(self, workspace: Workspace) -> None:
+        self._env = workspace.env
+        self.WORKSPACES = _LocalWorkspaceNamespace(workspace)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._env, name)

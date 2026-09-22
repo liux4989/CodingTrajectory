@@ -5,6 +5,14 @@ per workspace and immutable artifacts in R2. The collector still computes facts
 and prepared API responses locally. The Worker validates, publishes, and serves
 them; switching the runtime does not move ingestion to Cloudflare.
 
+The stateless entrypoint authenticates and forwards the request stream to its
+workspace. `http_handler.py` runs body validation, hashing, artifact I/O, and
+response construction inside that Durable Object. This keeps data-dependent
+work out of the Workers Free 10 ms CPU budget. Internal workspace operations
+reuse the same invocation lock without another RPC hop; upload claim and
+completion fences still surround R2 awaits. The Durable Object reauthenticates
+the request and rejects a workspace lookup that does not match its own ID.
+
 ## Local development
 
 From the repository root:
@@ -48,15 +56,6 @@ uv run python scripts/qualify-deploy-release.py
 uv run python scripts/validate-metrics-baselines.py
 uv run python scripts/build-python-worker.py --outdir .artifacts/python-worker-build
 ```
-
-The older `qualify-artifact-publication.py` also exercises the retired fact-reader
-adapter; its local `project.sessions` fixture currently lacks the required
-`total`/`returned` response fields. Use the prepared-API publication qualifier for
-the current Worker path, and do not treat that older adapter failure as Worker
-runtime evidence.
-The historical `prepare-free-plan-benchmark.py` corpus generator also has
-pre-existing fixture drift (`KeyError: raw_rows`). The current publication
-benchmark below uses `qualify-prepared-api.py` instead.
 
 The publication benchmark now uses the current prepared-artifact fixture. Its
 `--shape` option replaces the retired v1 graph/orphan-count arguments; results

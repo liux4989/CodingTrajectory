@@ -1,5 +1,7 @@
 # Immutable artifact publication rollout, 2026-09-17
 
+> Historical record: the retired fact-reader qualifier and free-plan benchmark scripts mentioned below were removed with the Python Worker replacement. Use the [current Worker validation commands](../cloudflare/control-plane/README.md#validation-and-releases).
+
 Status: implemented and locally qualified; **not deployed**. This is an
 approval-ready internal rollout plan, not authorization to change Cloudflare or
 upload private data.

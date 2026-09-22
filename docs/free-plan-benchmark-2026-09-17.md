@@ -1,5 +1,7 @@
 # Remaining Free-plan risks: disposable local benchmarks, 2026-09-17
 
+> Historical record: the retired fact-reader qualifier and free-plan benchmark scripts mentioned below were removed with the Python Worker replacement. Use the [current Worker validation commands](../cloudflare/control-plane/README.md#validation-and-releases).
+
 **Write amplification and unbounded living history are the immediate constraints.**
 This is benchmark evidence, not an optimization, deployment, billing attribution,
 or maximum-capacity qualification. No production requests, credentials, private
