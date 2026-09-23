@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Session breakdown · CodingTrajectory</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <span class="mark">ct<span class="mark-dot">.</span></span
+      ><span class="brand">CodingTrajectory</span
+      ><span class="mast-right">LOCAL SESSION ANALYTICS</span>
+    </header>
+    <main>
+      <div class="intro">
+        <div>
+          <h1>Session breakdown<span class="period">.</span></h1>
+          <p>Where the context went, and which tools did the work.</p>
+        </div>
+        <span class="read-only">● READ ONLY</span>
+      </div>
+      <div id="status" role="status">Loading session evidence…</div>
+      <div id="report" hidden>
+        <section class="identity">
+          <div>
+            <span class="caption">SESSION</span
+            ><strong id="session-id"></strong>
+          </div>
+          <div>
+            <span class="caption">MODEL</span><strong id="model"></strong>
+          </div>
+          <div>
+            <span class="caption">TOOL CALLS</span><strong id="calls"></strong>
+          </div>
+          <div>
+            <span class="caption">EXECUTION</span
+            ><strong id="duration"></strong>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>Tool activity</h2>
+              <p>
+                Calls grouped by native tool identity; select a group to inspect
+                its sequence.
+              </p>
+            </div>
+            <span class="section-index">01 / ACTIVITY</span>
+          </div>
+          <div id="categories" class="categories"></div>
+          <div class="sequence-head">
+            <h3>Call sequence</h3>
+            <span id="sequence-count"></span>
+          </div>
+          <div id="sequence" class="sequence"></div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>Observed context</h2>
+              <p>
+                Observed context composition by semantic category from
+                <code>session.stats</code>. Not a second billed-token total.
+              </p>
+            </div>
+            <span class="section-index">02 / COMPOSITION</span>
+          </div>
+          <div id="composition" class="composition"></div>
+        </section>
+        <footer>
+          <span>SOURCE · PUBLIC CORE SESSION CONTRACTS</span
+          ><span
+            >Tool token estimates and allocated billed usage are different
+            measurements.</span
+          >
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>

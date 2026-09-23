@@ -1,0 +1,11 @@
+name = "breakdown"
+description = "Inspect one session's tool sequence and context breakdown."
+entry = "breakdown_plugin/main.py"
+
+[requires]
+"session.stats" = 4
+"session.tool_usage" = 5
+
+[[tools]]
+name = "web"
+summary = "Serve a local, read-only session breakdown."
