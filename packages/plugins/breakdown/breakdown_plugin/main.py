@@ -6,7 +6,7 @@ import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 from coding_trajectory.runtime import ServiceRuntime
@@ -15,8 +15,10 @@ WEB = Path(__file__).resolve().parents[1] / "web"
 
 
 class BreakdownServer(ThreadingHTTPServer):
-    def __init__(self, address, *, session_id: str, allowed_hosts: set[str]):
-        self.session_id = session_id
+    def __init__(
+        self, address, *, initial_session_id: str | None, allowed_hosts: set[str]
+    ):
+        self.initial_session_id = initial_session_id
         self.allowed_hosts = allowed_hosts
         super().__init__(address, Handler)
 
@@ -59,31 +61,96 @@ class Handler(BaseHTTPRequestHandler):
         ) == "cross-site":
             self.reply(403, b"Cross-origin request denied", "text/plain; charset=utf-8")
             return
-        path = urlsplit(self.path).path
-        if path == "/api/breakdown":
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+        if path == "/api/config":
+            self.reply(
+                200,
+                json.dumps(
+                    {"initial_session_id": self.server.initial_session_id}
+                ).encode(),
+                "application/json",
+            )
+            return
+        if path == "/api/sessions":
+            cursor = query.get("cursor", [None])[0]
+            if cursor is not None and not (0 < len(cursor) <= 4096):
+                self.reply(400, b'{"error":"Invalid cursor"}', "application/json")
+                return
             try:
                 with ServiceRuntime(global_scope=True, current_dir=Path.cwd()) as core:
-                    stats = core.call(
-                        "session.stats", {"session_id": self.server.session_id}
-                    )
+                    params = {"limit": 100}
+                    if cursor:
+                        params["cursor"] = cursor
+                    page = core.call("project.sessions", params)
+                self.reply(200, json.dumps(page).encode(), "application/json")
+            except (OSError, ValueError, RuntimeError, KeyError) as exc:
+                self.reply(
+                    500, json.dumps({"error": str(exc)}).encode(), "application/json"
+                )
+            return
+        if path == "/api/breakdown":
+            raw_id = query.get("session_id", [self.server.initial_session_id])[0]
+            try:
+                session_id = str(UUID(raw_id))
+            except (ValueError, TypeError, AttributeError):
+                self.reply(400, b'{"error":"Invalid session ID"}', "application/json")
+                return
+            try:
+                with ServiceRuntime(global_scope=True, current_dir=Path.cwd()) as core:
+                    params = {"session_id": session_id}
+                    stats = core.call("session.stats", params)
+                    usage = core.call("session.usage", params)
+                    requests = core.call("session.request_usage", params)
                     tools = core.call(
                         "session.tool_usage",
-                        {"session_id": self.server.session_id, "limit": 1000},
+                        {**params, "limit": 1000},
                     )
                     items = list(tools["tool_items"])
                     cursor = tools.get("next_cursor")
                     while cursor:
                         page = core.call(
                             "session.tool_usage",
-                            {
-                                "session_id": self.server.session_id,
-                                "limit": 1000,
-                                "cursor": cursor,
-                            },
+                            {**params, "limit": 1000, "cursor": cursor},
                         )
                         items.extend(page["tool_items"])
                         cursor = page.get("next_cursor")
-                body = json.dumps({"stats": stats, "tools": items}).encode()
+                    item_details = {}
+                    item_ids = [item["item_id"] for item in items]
+                    for start in range(0, len(item_ids), 100):
+                        page = core.call(
+                            "session.items",
+                            {**params, "item_ids": item_ids[start : start + 100]},
+                        )
+                        for item in page["items"]:
+                            detail = item.get("detail") or {}
+                            evidence = item.get("output_evidence") or {}
+                            item_details[item["item_id"]] = {
+                                "target": detail.get("target") or detail.get("path"),
+                                "duration_ms": evidence.get("duration_ms"),
+                            }
+                    overview = core.call("session.overview", {**params, "limit": 200})
+                    turns = list(overview["turns"])
+                    cursor = overview["page"]["next_cursor"]
+                    while cursor:
+                        page = core.call(
+                            "session.overview",
+                            {**params, "limit": 200, "cursor": cursor},
+                        )
+                        turns.extend(page["turns"])
+                        cursor = page["page"]["next_cursor"]
+                body = json.dumps(
+                    {
+                        "stats": stats,
+                        "usage": usage,
+                        "requests": requests["request_count"],
+                        "tools": items,
+                        "item_details": item_details,
+                        "turns": turns,
+                        "sessions": overview["sessions"],
+                    }
+                ).encode()
                 self.reply(200, body, "application/json")
             except (OSError, ValueError, RuntimeError, KeyError) as exc:
                 self.reply(
@@ -107,7 +174,9 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description="Read-only local session breakdown")
     parser.add_argument("command", choices=["web"])
-    parser.add_argument("session_id", help="Session UUID to inspect")
+    parser.add_argument(
+        "session_id", nargs="?", help="Optional initially selected session UUID"
+    )
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument(
         "--allow-host",
@@ -116,13 +185,15 @@ def main():
         help="Additional hostname (or .domain suffix) for a trusted authenticated proxy",
     )
     args = parser.parse_args()
-    try:
-        session_id = str(UUID(args.session_id))
-    except ValueError:
-        parser.error("session_id must be a UUID")
+    session_id = None
+    if args.session_id:
+        try:
+            session_id = str(UUID(args.session_id))
+        except ValueError:
+            parser.error("session_id must be a UUID")
     with BreakdownServer(
         ("127.0.0.1", args.port),
-        session_id=session_id,
+        initial_session_id=session_id,
         allowed_hosts={"localhost", "127.0.0.1", *args.allow_host},
     ) as server:
         print(

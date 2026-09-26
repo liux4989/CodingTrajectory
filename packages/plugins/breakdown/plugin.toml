@@ -1,11 +1,16 @@
 name = "breakdown"
-description = "Inspect one session's tool sequence and context breakdown."
+description = "Browse local sessions and compare tool and context breakdowns."
 entry = "breakdown_plugin/main.py"
 
 [requires]
+"project.sessions" = 5
+"session.overview" = 5
+"session.items" = 6
 "session.stats" = 4
+"session.usage" = 4
+"session.request_usage" = 6
 "session.tool_usage" = 5
 
 [[tools]]
 name = "web"
-summary = "Serve a local, read-only session breakdown."
+summary = "Browse local sessions and compare their tool and token breakdowns."
