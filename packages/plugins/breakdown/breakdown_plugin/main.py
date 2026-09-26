@@ -55,14 +55,15 @@ class Handler(BaseHTTPRequestHandler):
         ):
             self.reply(403, b"Host not allowed", "text/plain; charset=utf-8")
             return
-        origin = self.headers.get("Origin")
-        if (origin and urlsplit(origin).netloc != host) or self.headers.get(
-            "Sec-Fetch-Site"
-        ) == "cross-site":
-            self.reply(403, b"Cross-origin request denied", "text/plain; charset=utf-8")
-            return
         parsed = urlsplit(self.path)
         path = parsed.path
+        origin = self.headers.get("Origin")
+        if path.startswith("/api/") and (
+            (origin and urlsplit(origin).netloc != host)
+            or self.headers.get("Sec-Fetch-Site") == "cross-site"
+        ):
+            self.reply(403, b"Cross-origin request denied", "text/plain; charset=utf-8")
+            return
         query = parse_qs(parsed.query)
         if path == "/api/config":
             self.reply(
