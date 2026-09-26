@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -457,3 +458,65 @@ def project_list_metadata(
         if not params.get("project_id") or key == params["project_id"]
     }
     return {"items": items}
+
+
+def session_browser_metadata(
+    *,
+    current_dir: Path,
+    project_id: str,
+    cancelled: Callable[[], bool] | None = None,
+) -> list[dict[str, Any]]:
+    """Browse local session headers without ingesting canonical graphs.
+
+    These are session entry points, not prepared graph summaries. A caller must
+    resolve the selected session through Core before showing canonical evidence.
+    """
+    from datetime import UTC, datetime
+
+    from coding_trajectory.discovery import discover_source_candidates
+
+    projects = project_list_metadata(
+        {"project_id": project_id}, global_scope=True, current_dir=current_dir
+    )["items"]
+    project = projects.get(project_id)
+    if project is None:
+        return []
+    project_path = Path(project["path"]) if project["path"] else current_dir
+    cards: dict[str, dict[str, Any]] = {}
+    for candidate in discover_source_candidates(
+        current_dir=project_path,
+        global_scope=True,
+        project_name=project["display_name"],
+    ):
+        if cancelled is not None and cancelled():
+            raise InterruptedError("Session browser request was abandoned")
+        try:
+            header = candidate.adapter_cls().scan_header(candidate.path)
+            modified = datetime.fromtimestamp(candidate.path.stat().st_mtime, tz=UTC)
+        except (OSError, ValueError):
+            continue
+        if header is None or not header.cwd:
+            continue
+        if (
+            local_project_id(Path(header.cwd), fallback=project["display_name"])
+            != project_id
+        ):
+            continue
+        session_id = str(header.session_id)
+        previous = cards.get(session_id)
+        if previous is not None and previous["modified"] > modified:
+            continue
+        cards[session_id] = {
+            "root_session_id": session_id,
+            "project_id": project_id,
+            "project": project["display_name"],
+            "title": header.title or (previous or {}).get("title"),
+            "vendors": [header.vendor.value],
+            "session_ids": [session_id],
+            "modified": modified,
+        }
+    return sorted(
+        cards.values(),
+        key=lambda item: (item["modified"], item["root_session_id"]),
+        reverse=True,
+    )

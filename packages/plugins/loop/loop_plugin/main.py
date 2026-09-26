@@ -5,23 +5,36 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import select
+import socket
 import sqlite3
+import subprocess
+import sys
 from contextlib import closing
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid4
 
 from coding_trajectory.contracts import SERVICE_CONTRACTS
-from coding_trajectory.runtime import ServiceRuntime
+from coding_trajectory.control_plane.prepared_api import prepare_inventory_api
+from coding_trajectory.control_plane.prepared_api_reader import (
+    decode_cursor,
+    load_local_view,
+    local_signing_key,
+    read_prepared,
+    save_local_view,
+)
+from coding_trajectory.service.store import session_browser_metadata
 from pydantic import ValidationError
 
 from loop_plugin.models import PROTOCOL, CoreQuery, Investigation
 from loop_plugin.monitor.models import (
     FindingStatusEvent,
     FindingStatusRequest,
+    MonitorRun,
     RunRequest,
     Watch,
     WatchCreateRequest,
@@ -112,7 +125,9 @@ class LoopServer(ThreadingHTTPServer):
         self.allowed_hosts = allowed_hosts
         self.state = state
         self.monitor = MonitorStore(monitor_state)
+        self.monitor.interrupt_running_runs()
         self.core_lock = Lock()
+        self.run_lock = Lock()
         state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with closing(sqlite3.connect(state)) as db, db:
             db.execute(
@@ -120,6 +135,57 @@ class LoopServer(ThreadingHTTPServer):
             )
         state.chmod(0o600)
         super().__init__(address, Handler)
+
+    def start_run(
+        self, watch: Watch, kind: str, max_sessions: int, *, resumed_from=None
+    ) -> MonitorRun | None:
+        with self.run_lock:
+            if resumed_from is not None:
+                existing = self.monitor.resumed_run(resumed_from, watch.watch_id)
+                if existing is not None:
+                    return existing
+            if self.monitor.running_run(watch.watch_id) is not None:
+                return None
+            current = self.monitor.get_watch(watch.watch_id)
+            if current is None or current.config_revision != watch.config_revision:
+                return None
+            if kind == "refresh" and not current.enabled:
+                return None
+            watch = current
+            now = datetime.now(UTC)
+            run = MonitorRun(
+                run_id=uuid4(),
+                watch_id=watch.watch_id,
+                kind=kind,
+                state="running",
+                config_revision=watch.config_revision,
+                max_sessions=max_sessions,
+                started_at=now,
+                updated_at=now,
+                resumed_from=resumed_from,
+            )
+            self.monitor.save_run(run)
+            Thread(target=self.execute_run, args=(run, watch), daemon=True).start()
+            return run
+
+    def execute_run(self, run: MonitorRun, watch: Watch) -> None:
+        try:
+            result = (
+                dry_run(self.monitor, watch, max_sessions=run.max_sessions)
+                if run.kind == "dry_run"
+                else refresh(self.monitor, watch, max_sessions=run.max_sessions)
+            )
+            run.result = result.model_dump(mode="json")
+            run.state = "completed"
+        except Exception as exc:  # noqa: BLE001 - durable operation boundary
+            run.error = (
+                str(exc)[:512]
+                if isinstance(exc, MonitorCoreError)
+                else "Local Monitor run failed; review partial results before resuming."
+            )
+            run.state = "failed"
+        run.updated_at = datetime.now(UTC)
+        self.monitor.save_run(run)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -134,18 +200,70 @@ class Handler(BaseHTTPRequestHandler):
         body = (
             json.dumps(value).encode() if content_type == "application/json" else value
         )
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
-        )
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
+            )
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # A read may finish just as its browser leaves the page.
+            pass
+
+    def disconnected(self) -> bool:
+        try:
+            if not select.select([self.connection], [], [], 0)[0]:
+                return False
+            return not self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
+        except (BlockingIOError, ConnectionResetError, OSError):
+            return True
+
+    def core_read(self, query: CoreQuery):
+        while not self.server.core_lock.acquire(timeout=0.1):
+            if self.disconnected():
+                return None
+        try:
+            if self.disconnected():
+                return None
+            worker = subprocess.Popen(
+                [sys.executable, "-m", "loop_plugin.core_worker"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                cwd=Path.cwd(),
+            )
+            payload = query.model_dump_json().encode()
+            pending = payload
+            try:
+                while True:
+                    try:
+                        output, _ = worker.communicate(input=pending, timeout=0.1)
+                        if worker.returncode != 0:
+                            raise RuntimeError("Core read failed")
+                        return json.loads(output)
+                    except subprocess.TimeoutExpired:
+                        pending = None
+                        if self.disconnected():
+                            worker.terminate()
+                            try:
+                                worker.communicate(timeout=1)
+                            except subprocess.TimeoutExpired:
+                                worker.kill()
+                                worker.communicate()
+                            return None
+            finally:
+                if worker.poll() is None:
+                    worker.kill()
+                    worker.communicate()
+        finally:
+            self.server.core_lock.release()
 
     def fail(self, status, message):
         self.reply(status, {"protocol": PROTOCOL, "error": message})
@@ -209,6 +327,28 @@ class Handler(BaseHTTPRequestHandler):
                     "items": [watch.model_dump(mode="json") for watch in watches],
                 },
             )
+        elif path == "/api/monitor/runs":
+            watch_id = _query_uuid(query, "watch_id")
+            if watch_id is None:
+                self.fail(400, "watch_id is required")
+                return
+            self.reply(
+                200,
+                {
+                    "protocol": PROTOCOL,
+                    "items": [
+                        run.model_dump(mode="json")
+                        for run in self.server.monitor.list_runs(watch_id)
+                    ],
+                },
+            )
+        elif path.startswith("/api/monitor/runs/"):
+            run_id = _path_uuid(path, "/api/monitor/runs/")
+            run = run_id and self.server.monitor.get_run(run_id)
+            if run is None:
+                self.fail(404, "Unknown run")
+                return
+            self.reply(200, {"protocol": PROTOCOL, "run": run.model_dump(mode="json")})
         elif path.startswith("/api/monitor/watches/"):
             watch_id = _path_uuid(path, "/api/monitor/watches/")
             watch = watch_id and self.server.monitor.get_watch(watch_id)
@@ -279,17 +419,38 @@ class Handler(BaseHTTPRequestHandler):
                 if query.method not in SERVICE_CONTRACTS:
                     self.fail(400, "Unknown Core method")
                     return
-                # Core validates parameters, resolves evidence, and owns provenance.
-                # Per-request lifetime avoids freezing mutable local evidence in a
-                # long-lived runtime cache. There is no remote fallback factory.
-                with (
-                    self.server.core_lock,
-                    ServiceRuntime(
-                        global_scope=True,
+                result = self.core_read(query)
+                if result is not None:
+                    self.reply(200, result)
+            elif path == "/api/session-browser":
+                from coding_trajectory.contracts import service_contract
+
+                if not isinstance(body, dict) or not body.get("project_id"):
+                    raise ValueError("project_id is required")
+                params = service_contract("project.sessions").validate_request(body)
+                signing_key = local_signing_key()
+                if params.get("cursor"):
+                    cursor = decode_cursor(params["cursor"], signing_key)
+                    api, identity = load_local_view(cursor["view_manifest_sha256"])
+                else:
+                    cards = session_browser_metadata(
                         current_dir=Path.cwd(),
-                    ) as core,
-                ):
-                    self.reply(200, core.execute(query.model_dump()))
+                        project_id=params["project_id"],
+                        cancelled=self.disconnected,
+                    )
+                    api, source = prepare_inventory_api([], cards)
+                    identity = save_local_view(api, source)
+                descriptor = next(
+                    item for item in api.methods if item.method == "project.sessions"
+                )
+                result = read_prepared(
+                    descriptor,
+                    params,
+                    identity=identity,
+                    fetch=lambda digest: api.objects[digest].encode(),
+                    signing_key=signing_key,
+                )
+                self.reply(200, {"protocol": PROTOCOL, "result": result})
             elif path == "/api/investigations":
                 investigation = Investigation.model_validate(body)
                 with closing(sqlite3.connect(self.server.state)) as db, db:
@@ -309,12 +470,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"protocol": PROTOCOL, "watch": created})
             elif path.startswith("/api/monitor/watches/"):
                 self._watch_command(path, body)
+            elif path.startswith("/api/monitor/runs/"):
+                self._resume_run(path, body)
             elif path.startswith("/api/monitor/findings/"):
                 self._finding_command(path, body)
             else:
                 self.fail(404, "Unknown Loop route")
         except (ValueError, ValidationError) as exc:
             self.fail(400, str(exc))
+        except InterruptedError:
+            return
         except MonitorCoreError as exc:
             self.fail(400, str(exc))
         except (OSError, sqlite3.Error, RuntimeError):
@@ -360,17 +525,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         if len(parts) == 1:
             update = WatchUpdateRequest.model_validate(body)
-            watch = _apply_watch_update(watch, update)
-            self.server.monitor.save_watch(watch)
+            with self.server.run_lock:
+                if self.server.monitor.running_run(watch.watch_id):
+                    self.fail(409, "Wait for the active run before changing this watch")
+                    return
+                watch = self.server.monitor.get_watch(watch.watch_id) or watch
+                watch = _apply_watch_update(watch, update)
+                self.server.monitor.save_watch(watch)
             self.reply(
                 200, {"protocol": PROTOCOL, "watch": watch.model_dump(mode="json")}
             )
         elif parts[1] == "dry-run":
-            run = RunRequest.model_validate(body)
-            result = dry_run(self.server.monitor, watch, max_sessions=run.max_sessions)
-            self.reply(
-                200, {"protocol": PROTOCOL, "run": result.model_dump(mode="json")}
-            )
+            request = RunRequest.model_validate(body)
+            run = self.server.start_run(watch, "dry_run", request.max_sessions)
+            if run is None:
+                self.fail(409, "A run is already active for this watch")
+                return
+            self.reply(202, {"protocol": PROTOCOL, "run": run.model_dump(mode="json")})
         elif parts[1] == "refresh":
             if not watch.enabled:
                 self.fail(
@@ -379,13 +550,42 @@ class Handler(BaseHTTPRequestHandler):
                     "use dry-run for a historical preview.",
                 )
                 return
-            run = RunRequest.model_validate(body)
-            result = refresh(self.server.monitor, watch, max_sessions=run.max_sessions)
-            self.reply(
-                200, {"protocol": PROTOCOL, "run": result.model_dump(mode="json")}
-            )
+            request = RunRequest.model_validate(body)
+            run = self.server.start_run(watch, "refresh", request.max_sessions)
+            if run is None:
+                self.fail(409, "A run is already active for this watch")
+                return
+            self.reply(202, {"protocol": PROTOCOL, "run": run.model_dump(mode="json")})
         else:
             self.fail(404, "Unknown Loop route")
+
+    def _resume_run(self, path, body):
+        parts = path.removeprefix("/api/monitor/runs/").split("/")
+        run_id = _parse_uuid(parts[0])
+        previous = run_id and self.server.monitor.get_run(run_id)
+        if len(parts) != 2 or parts[1] != "resume" or previous is None:
+            self.fail(404, "Unknown run")
+            return
+        if body:
+            self.fail(400, "Resume uses the original run parameters")
+            return
+        if previous.state not in {"interrupted", "failed"}:
+            self.fail(409, "Only interrupted or failed runs can resume")
+            return
+        watch = self.server.monitor.get_watch(previous.watch_id)
+        if watch is None or watch.config_revision != previous.config_revision:
+            self.fail(409, "Watch configuration changed; start a new run")
+            return
+        if previous.kind == "refresh" and not watch.enabled:
+            self.fail(409, "Enable the watch before resuming refresh")
+            return
+        run = self.server.start_run(
+            watch, previous.kind, previous.max_sessions, resumed_from=previous.run_id
+        )
+        if run is None:
+            self.fail(409, "A run is already active for this watch")
+            return
+        self.reply(202, {"protocol": PROTOCOL, "run": run.model_dump(mode="json")})
 
     def _finding_command(self, path, body):
         rest = path.removeprefix("/api/monitor/findings/")

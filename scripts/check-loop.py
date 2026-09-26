@@ -119,6 +119,11 @@ def main():
                 if value["display_name"] == "amp-example"
             )
             assert any(value["project_id"] == project_id for value in projects["items"])
+            browser = call("/api/session-browser", {"project_id": project_id})["result"]
+            assert (
+                browser["items"]
+                and browser["items"][0].get("view_manifest_sha256") is None
+            )
             sessions = core("project.sessions", {"project_id": project_id})["items"]
             assert (
                 sessions
@@ -225,6 +230,21 @@ def main():
 
 def monitor(call, core, monitor_state: Path, home: Path) -> None:
     """Qualify the deterministic turn-token-budget Monitor slice."""
+    raw_call = call
+
+    def call(path, data=None, headers=None):
+        response = raw_call(path, data, headers)
+        if data is not None and path.endswith(("/dry-run", "/refresh")):
+            run_id = response["run"]["run_id"]
+            for _ in range(600):
+                record = raw_call(f"/api/monitor/runs/{run_id}")["run"]
+                if record["state"] == "completed":
+                    return {"run": record["result"]}
+                assert record["state"] == "running", record
+                time.sleep(0.05)
+            raise AssertionError(f"Monitor run did not complete: {run_id}")
+        return response
+
     strategies = call("/api/monitor/strategies")["items"]
     assert [item["strategy_id"] for item in strategies] == ["turn-token-budget"]
     manifest = strategies[0]
@@ -453,7 +473,17 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
             "config": {"measure": "processed_tokens", "threshold_tokens": 50000},
         },
     )["watch"]
-    expect_error(f"/api/monitor/watches/{missing_watch['watch_id']}/dry-run", {}, 400)
+    failed_id = raw_call(
+        f"/api/monitor/watches/{missing_watch['watch_id']}/dry-run", {}
+    )["run"]["run_id"]
+    for _ in range(100):
+        failed = raw_call(f"/api/monitor/runs/{failed_id}")["run"]
+        if failed["state"] == "failed":
+            break
+        time.sleep(0.05)
+    assert failed["state"] == "failed" and failed["result"] is None
+    resumed = raw_call(f"/api/monitor/runs/{failed_id}/resume", {})["run"]
+    assert resumed["resumed_from"] == failed_id
 
     # A configuration change creates a new revision and re-observes the scope.
     revised = call(

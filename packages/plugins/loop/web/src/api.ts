@@ -29,9 +29,10 @@ export function useCore<T>(
   method: string,
   params: Record<string, unknown>,
   enabled = true,
+  endpoint = "/api/core",
 ) {
   const key = JSON.stringify(params);
-  const requestKey = `${method}:${key}:${enabled}`;
+  const requestKey = `${endpoint}:${method}:${key}:${enabled}`;
   const [state, setState] = useState<{
     requestKey: string;
     data?: CoreResult<T>;
@@ -43,8 +44,8 @@ export function useCore<T>(
     setState({ loading: enabled, requestKey });
     if (enabled)
       request<CoreResult<T>>(
-        "/api/core",
-        { method, params: JSON.parse(key) },
+        endpoint,
+        endpoint === "/api/core" ? { method, params: JSON.parse(key) } : JSON.parse(key),
         controller.signal,
       )
         .then((data) => {
@@ -60,7 +61,7 @@ export function useCore<T>(
             });
         });
     return () => controller.abort();
-  }, [method, key, enabled, requestKey]);
+  }, [method, key, enabled, endpoint, requestKey]);
   return state.requestKey === requestKey
     ? state
     : { loading: enabled, data: undefined, error: undefined, requestKey };

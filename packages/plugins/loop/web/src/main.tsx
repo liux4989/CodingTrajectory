@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -190,7 +190,7 @@ function App() {
                       setOpenMobile(false);
                     }}
                   >
-                    All local sessions
+                    All local projects
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 {(inventory.data?.result.items ?? []).map(
@@ -298,6 +298,8 @@ function App() {
             projectName={
               inventory.data?.result.items.find(item => item.project_id === project)?.display_name ?? ""
             }
+            inventory={inventory}
+            onSelectProject={setProject}
           />
         )}
       </SidebarInset>
@@ -308,15 +310,28 @@ function App() {
 function Explore({
   project,
   projectName,
+  inventory,
+  onSelectProject,
 }: {
   project: string;
   projectName: string;
+  inventory: ReturnType<typeof useCore<ProjectListResponse>>;
+  onSelectProject: (projectId: string) => void;
 }) {
   const [filter, setFilter] = useState("");
   const [cursors, setCursors] = useState<string[]>([]);
   const sessions = useCore<ProjectSessionsResponse>(
     "project.sessions",
     { ...(project ? { project_id: project } : {}), cursor: cursors.at(-1) },
+    !!project,
+    "/api/session-browser",
+  );
+  const projects = inventory.data?.result.items ?? [];
+  const matchingProjects = projects.filter((item) =>
+    [item.display_name, item.path, ...(item.vendors ?? [])]
+      .join(" ")
+      .toLowerCase()
+      .includes(filter.toLowerCase()),
   );
   const all = sessions.data?.result.items ?? [];
   const matches = all.filter((session) =>
@@ -333,20 +348,50 @@ function Explore({
   return (
     <section className="explore">
       <h1>Explore</h1>
-      <p className="lede">Follow a coding session back to its evidence.</p>
+      <p className="lede">{project ? "Follow a coding session back to its evidence." : "Choose a local project to browse its sessions."}</p>
       <div className="explore-toolbar">
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="filter">Filter discovered sessions</FieldLabel>
+            <FieldLabel htmlFor="filter">Filter discovered {project ? "sessions" : "projects"}</FieldLabel>
             <Input
               id="filter"
-              placeholder="Project, session ID, title, or vendor"
+              placeholder={project ? "Project, session ID, title, or vendor" : "Project, path, or vendor"}
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
             />
           </Field>
         </FieldGroup>
       </div>
+      {!project ? (
+        <>
+          <div className="section-heading">
+            <h2>Local projects</h2>
+            <span className="muted small">{matchingProjects.length} of {projects.length} on this page</span>
+          </div>
+          <ErrorNotice message={inventory.error} />
+          {inventory.loading && <Loading />}
+          <div className="session-list">
+            {matchingProjects.map((item) => (
+              <article className="session-row" key={item.project_id}>
+                <div>
+                  <h3>{item.display_name}</h3>
+                  {item.path && <p className="muted small">{item.path}</p>}
+                  <p className="muted small">{(item.vendors ?? []).join(", ")}</p>
+                </div>
+                <Button variant="outline" onClick={() => onSelectProject(item.project_id)}>
+                  Browse sessions <ArrowUpRight data-icon="inline-end" />
+                </Button>
+              </article>
+            ))}
+          </div>
+          {!inventory.loading && !inventory.error && !matchingProjects.length && (
+            <Blank title={projects.length ? "No matching projects" : "No local projects found"}>
+              {projects.length ? "Change the metadata filter to see other projects." : "No supported coding-agent projects were discovered on this host."}
+            </Blank>
+          )}
+        </>
+      ) : (
+      <>
       <div className="section-heading">
         <h2>{projectName || "Local sessions"}</h2>
         <span className="muted small">
@@ -424,6 +469,8 @@ function Explore({
             ? "Change the metadata filter to see other sessions."
             : "Capture logs with a supported coding agent on this host, then reload. Loop never falls back to a hosted source."}
         </Blank>
+      )}
+      </>
       )}
     </section>
   );
@@ -733,7 +780,11 @@ function Items({ reference }: { reference: CanonicalReference }) {
   const [cursor, setCursor] = useState<string | null | undefined>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => pending.current?.abort(), []);
   async function load() {
+    const controller = new AbortController();
+    pending.current = controller;
     setLoading(true);
     setError(undefined);
     try {
@@ -749,13 +800,16 @@ function Items({ reference }: { reference: CanonicalReference }) {
             ...(cursor ? { cursor } : {}),
           },
         },
+        controller.signal,
       );
+      if (controller.signal.aborted) return;
       setItems((previous) => [...previous, ...(data.result.items ?? [])]);
       setCursor(data.result.next_cursor ?? null);
     } catch (error) {
-      setError(String(error));
+      if (!controller.signal.aborted) setError(String(error));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
+      if (pending.current === controller) pending.current = null;
     }
   }
   return (

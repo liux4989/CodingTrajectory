@@ -39,6 +39,7 @@ import type {
   Finding,
   DryRunResult,
   RefreshResult,
+  MonitorRun,
 } from "./monitor-api";
 import { monitorApi, type StrategyManifest, type WatchFormValue } from "./monitor-api";
 import {
@@ -628,8 +629,11 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
     monitorApi.findings({ watch_id: watchId }, signal),
   );
   const watches = useMonitorData(monitorApi.watches);
+  const runs = useMonitorData((signal) => monitorApi.runs(watchId, signal));
   const [editing, setEditing] = useState(false);
   const [runState, setRunState] = useState<"idle" | "running">("idle");
+  const [currentRunId, setCurrentRunId] = useState<string>();
+  const [runRecord, setRunRecord] = useState<MonitorRun>();
   const [dryRunResult, setDryRunResult] = useState<DryRunResult>();
   const [refreshResult, setRefreshResult] = useState<RefreshResult>();
   const [actionError, setActionError] = useState<string>();
@@ -637,6 +641,48 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
   const manifest = strategies.data?.find(
     (item) => item.strategy_id === watch?.strategy_id,
   );
+  const running = runState === "running" || runRecord?.state === "running";
+
+  useEffect(() => {
+    if (!currentRunId && runs.data?.[0]) {
+      setCurrentRunId(runs.data[0].run_id);
+      setRunRecord(runs.data[0]);
+    }
+  }, [currentRunId, runs.data]);
+
+  useEffect(() => {
+    if (!currentRunId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const record = await monitorApi.run(currentRunId!);
+        if (cancelled) return;
+        setRunRecord(record);
+        if (record.state === "completed" && record.result) {
+          if (record.kind === "dry_run")
+            setDryRunResult(record.result as DryRunResult);
+          else setRefreshResult(record.result as RefreshResult);
+          detail.reload();
+          evaluations.reload();
+          findings.reload();
+          watches.reload();
+          runs.reload();
+        } else if (record.state === "running") {
+          timer = setTimeout(poll, 500);
+        }
+      } catch (cause) {
+        if (!cancelled) setActionError(String((cause as Error).message ?? cause));
+      }
+    }
+    void poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // Run status is durable; polling stops when this view is left.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRunId]);
 
   async function act(kind: "dry-run" | "refresh" | "toggle") {
     if (!watch) return;
@@ -644,9 +690,13 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
     setActionError(undefined);
     try {
       if (kind === "dry-run") {
-        setDryRunResult(await monitorApi.dryRun(watch.watch_id));
+        const run = await monitorApi.dryRun(watch.watch_id);
+        setRunRecord(run);
+        setCurrentRunId(run.run_id);
       } else if (kind === "refresh") {
-        setRefreshResult(await monitorApi.refresh(watch.watch_id));
+        const run = await monitorApi.refresh(watch.watch_id);
+        setRunRecord(run);
+        setCurrentRunId(run.run_id);
       } else {
         await monitorApi.updateWatch(watch.watch_id, {
           enabled: !watch.enabled,
@@ -706,7 +756,7 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
       <div className="flex flex-wrap gap-2 watch-actions">
         <Button
           variant="outline"
-          disabled={runState === "running"}
+          disabled={running}
           onClick={() => act("dry-run")}
         >
           <FlaskConical data-icon="inline-start" />
@@ -714,7 +764,7 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
         </Button>
         <Button
           variant="outline"
-          disabled={runState === "running" || !watch.enabled}
+          disabled={running || !watch.enabled}
           onClick={() => act("refresh")}
         >
           <Play data-icon="inline-start" />
@@ -722,7 +772,7 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
         </Button>
         <Button
           variant={watch.enabled ? "outline" : "default"}
-          disabled={runState === "running"}
+          disabled={running}
           onClick={() => act("toggle")}
         >
           <ShieldCheck data-icon="inline-start" />
@@ -732,6 +782,28 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
           {editing ? "Close editor" : "Edit configuration"}
         </Button>
       </div>
+      {runRecord && (
+        <p className="coverage-note">
+          Latest {runRecord.kind === "dry_run" ? "dry-run" : "refresh"}: {runRecord.state}.
+          {runRecord.error && ` ${runRecord.error}`}
+          {(runRecord.state === "interrupted" || runRecord.state === "failed") && (
+            <Button
+              variant="outline"
+              onClick={async () => {
+                try {
+                  const run = await monitorApi.resumeRun(runRecord.run_id);
+                  setRunRecord(run);
+                  setCurrentRunId(run.run_id);
+                } catch (cause) {
+                  setActionError(String((cause as Error).message ?? cause));
+                }
+              }}
+            >
+              Resume run
+            </Button>
+          )}
+        </p>
+      )}
       {!watch.enabled && (
         <p className="coverage-note">
           Refresh stays off until you explicitly enable this watch. Dry-run is a

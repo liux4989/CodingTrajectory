@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from loop_plugin.monitor.models import Evaluation, Finding, Watch
+from loop_plugin.monitor.models import Evaluation, Finding, MonitorRun, Watch
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watches (
@@ -55,6 +56,14 @@ CREATE TABLE IF NOT EXISTS findings (
     record TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS findings_status ON findings (status, severity);
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    watch_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    record TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS runs_watch ON runs (watch_id, updated_at);
 """
 
 
@@ -68,6 +77,70 @@ class MonitorStore:
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
+
+    def save_run(self, run: MonitorRun) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT INTO runs VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(run_id) DO UPDATE SET state=excluded.state, "
+                "updated_at=excluded.updated_at, record=excluded.record",
+                (
+                    str(run.run_id),
+                    str(run.watch_id),
+                    run.state,
+                    run.updated_at.isoformat(),
+                    run.model_dump_json(),
+                ),
+            )
+
+    def get_run(self, run_id: UUID) -> MonitorRun | None:
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT record FROM runs WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return MonitorRun.model_validate_json(row[0]) if row else None
+
+    def list_runs(self, watch_id: UUID) -> list[MonitorRun]:
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT record FROM runs WHERE watch_id = ? "
+                "ORDER BY updated_at DESC LIMIT 20",
+                (str(watch_id),),
+            ).fetchall()
+        return [MonitorRun.model_validate_json(row[0]) for row in rows]
+
+    def running_run(self, watch_id: UUID) -> MonitorRun | None:
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT record FROM runs WHERE watch_id = ? AND state = 'running' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (str(watch_id),),
+            ).fetchone()
+        return MonitorRun.model_validate_json(row[0]) if row else None
+
+    def resumed_run(self, previous_id: UUID, watch_id: UUID) -> MonitorRun | None:
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT record FROM runs WHERE watch_id = ? ORDER BY updated_at DESC",
+                (str(watch_id),),
+            )
+            for (record,) in rows:
+                run = MonitorRun.model_validate_json(record)
+                if run.resumed_from == previous_id:
+                    return run
+        return None
+
+    def interrupt_running_runs(self) -> None:
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT record FROM runs WHERE state = 'running'"
+            ).fetchall()
+        for (record,) in rows:
+            run = MonitorRun.model_validate_json(record)
+            run.state = "interrupted"
+            run.error = "Server stopped before completion; review results and resume."
+            run.updated_at = datetime.now(UTC)
+            self.save_run(run)
 
     # --- watches ---------------------------------------------------------
 

@@ -176,12 +176,37 @@ class LocalPublishedFactRepository:
         scope = params.get("session_id") or params.get("root_session_id") or "workspace"
         if view_hash:
             api, identity = load_local_view(view_hash)
+        elif method == "project.list":
+            # Browsing projects must not ingest or prepare every session graph.
+            # Keep the prepared reader for bounded, stable pagination over the
+            # lightweight metadata snapshot.
+            metadata = project_list_metadata(
+                {}, global_scope=True, current_dir=self.current_dir
+            )
+            api, source = prepare_inventory_api(
+                list(metadata["items"].values()), []
+            )
+            identity = save_local_view(api, source)
         else:
             selector = {
                 key: params[key]
                 for key in ("session_id", "root_session_id")
                 if key in params
             }
+            if method == "project.sessions":
+                if project_name := params.get("project_name"):
+                    selector["project_name"] = project_name
+                elif project_id := params.get("project_id"):
+                    metadata = project_list_metadata(
+                        {"project_id": project_id},
+                        global_scope=True,
+                        current_dir=self.current_dir,
+                    )
+                    project = metadata["items"].get(project_id)
+                    if project is not None:
+                        # Use the name only to narrow source discovery. The
+                        # prepared reader still filters by the exact project ID.
+                        selector["project_name"] = project["display_name"]
             if self._batch_prepared is not None and not method.startswith("project."):
                 prepared = self._batch_prepared
             else:
@@ -192,7 +217,7 @@ class LocalPublishedFactRepository:
                 )
                 self._check_available(bool(store.session_graphs))
                 prepared = self._prepare_store(store)
-            if method in {"project.list", "project.sessions"}:
+            if method == "project.sessions":
                 projects = {
                     graph.root_session_id: graph_project_id(graph)
                     for graph in store.session_graphs.values()

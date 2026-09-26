@@ -236,6 +236,24 @@ class RefreshResult(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class MonitorRun(BaseModel):
+    """Durable status for one explicitly requested Monitor operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    watch_id: UUID
+    kind: Literal["dry_run", "refresh"]
+    state: Literal["running", "completed", "interrupted", "failed"]
+    config_revision: int = Field(ge=1)
+    max_sessions: int = Field(ge=1, le=50)
+    started_at: datetime
+    updated_at: datetime
+    resumed_from: UUID | None = None
+    result: dict | None = None
+    error: str | None = Field(default=None, max_length=512)
+
+
 # --- API request bodies -------------------------------------------------
 
 

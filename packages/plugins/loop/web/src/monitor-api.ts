@@ -15,6 +15,18 @@ export type {
   RefreshResult,
 };
 
+export interface MonitorRun {
+  run_id: string;
+  watch_id: string;
+  kind: "dry_run" | "refresh";
+  state: "running" | "completed" | "interrupted" | "failed";
+  config_revision: number;
+  max_sessions: number;
+  resumed_from?: string | null;
+  error?: string | null;
+  result?: DryRunResult | RefreshResult | null;
+}
+
 export type MonitorRoute =
   | { view: "strategies" }
   | { view: "activity" }
@@ -81,14 +93,34 @@ export const monitorApi = {
     ),
 
   dryRun: (id: string, maxSessions = 8) =>
-    request<{ run: DryRunResult }>(`/api/monitor/watches/${id}/dry-run`, {
+    request<{ run: MonitorRun }>(`/api/monitor/watches/${id}/dry-run`, {
       max_sessions: maxSessions,
     }).then((data) => data.run),
 
   refresh: (id: string, maxSessions = 32) =>
-    request<{ run: RefreshResult }>(`/api/monitor/watches/${id}/refresh`, {
+    request<{ run: MonitorRun }>(`/api/monitor/watches/${id}/refresh`, {
       max_sessions: maxSessions,
     }).then((data) => data.run),
+
+  runs: (watchId: string, signal?: AbortSignal) =>
+    request<{ items: MonitorRun[] }>(
+      `/api/monitor/runs?watch_id=${encodeURIComponent(watchId)}`,
+      undefined,
+      signal,
+    ).then((data) => data.items),
+
+  run: (runId: string, signal?: AbortSignal) =>
+    request<{ run: MonitorRun }>(
+      `/api/monitor/runs/${encodeURIComponent(runId)}`,
+      undefined,
+      signal,
+    ).then((data) => data.run),
+
+  resumeRun: (runId: string) =>
+    request<{ run: MonitorRun }>(
+      `/api/monitor/runs/${encodeURIComponent(runId)}/resume`,
+      {},
+    ).then((data) => data.run),
 
   evaluations: (
     filter: {
