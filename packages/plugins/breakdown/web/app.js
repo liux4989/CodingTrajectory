@@ -159,8 +159,8 @@ function select(ids) {
   selected = ids;
   activeCategory = "All";
   location.hash = ids.length ? `sessions=${ids.join(",")}` : "";
-  renderInventory();
-  loadReport();
+  if (sessions.length) renderInventory();
+  return loadReport();
 }
 
 async function loadReport() {
@@ -198,6 +198,7 @@ async function loadReport() {
     $("status").hidden = true;
     $("report").hidden = false;
     renderReport(data);
+    return data;
   } catch (error) {
     if (version === loadVersion)
       showStatus(`Could not load breakdown: ${error.message}`, true);
@@ -531,17 +532,23 @@ $("refresh").addEventListener("click", async () => {
   await loadSessions();
   loadReport();
 });
-Promise.all([read("/api/config"), loadSessions()])
-  .then(([config]) => {
-    const hash = new URLSearchParams(location.hash.slice(1)).get("sessions");
-    const ids = hash ? hash.split(",").slice(0, 3) : [];
-    const valid = ids.filter((id) => /^[0-9a-f-]{36}$/i.test(id));
-    if (valid.length) select(valid);
-    else if (config.initial_session_id) select([config.initial_session_id]);
-    else if (sessions.length) select([sessionId(sessions[0])]);
-    else if (!$("status").classList.contains("error"))
-      showStatus("No sessions available on this host.");
-  })
-  .catch((error) =>
-    showStatus(`Could not start browser: ${error.message}`, true),
-  );
+const hash = new URLSearchParams(location.hash.slice(1)).get("sessions");
+const ids = hash ? hash.split(",").slice(0, 3) : [];
+const valid = ids.filter((id) => /^[0-9a-f-]{36}$/i.test(id));
+if (valid.length)
+  select(valid).then(async (data) => {
+    await loadSessions();
+    if (data && !$("report").hidden && selected.join(",") === valid.join(","))
+      renderReport(data);
+  });
+else
+  Promise.all([read("/api/config"), loadSessions()])
+    .then(([config]) => {
+      if (config.initial_session_id) select([config.initial_session_id]);
+      else if (sessions.length) select([sessionId(sessions[0])]);
+      else if (!$("status").classList.contains("error"))
+        showStatus("No sessions available on this host.");
+    })
+    .catch((error) =>
+      showStatus(`Could not start browser: ${error.message}`, true),
+    );
