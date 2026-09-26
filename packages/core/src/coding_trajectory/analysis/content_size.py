@@ -196,11 +196,36 @@ def compact_text(value: str, *, limit: int = 240) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def _without_image_data(value: Any) -> Any:
+    """Replace inline base64 image payloads with a size marker.
+
+    Providers attach images to tool results as base64 (Claude Code's
+    ``{"type": "image", "file": {"base64": ...}}`` result and
+    ``{"type": "image", "source": {"type": "base64", "data": ...}}`` content
+    blocks). The encoded bytes are not visible text; tokenizing them reports
+    ~100x the provider's image cost. Metadata such as media type and
+    dimensions stays visible.
+    """
+
+    if isinstance(value, list):
+        return [_without_image_data(entry) for entry in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: _without_image_data(entry) for key, entry in value.items()}
+    encoded = result.get("base64")
+    if isinstance(encoded, str) and encoded:
+        result["base64"] = f"[image data omitted: {len(encoded)} base64 chars]"
+    if result.get("type") == "base64" and isinstance(result.get("data"), str):
+        result["data"] = f"[image data omitted: {len(result['data'])} base64 chars]"
+    return result
+
+
 def _stringify(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
         return value
+    value = _without_image_data(value)
     if isinstance(value, dict):
         try:
             return json.dumps(value, ensure_ascii=False, default=str)

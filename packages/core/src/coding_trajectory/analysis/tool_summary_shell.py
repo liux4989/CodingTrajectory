@@ -313,7 +313,8 @@ def first_path_arg(cmd: str, head: str) -> str | None:
         if skip_next:
             skip_next = False
             continue
-        if token in {"-n", "-e"}:
+        # Value options: sed -n/-e scripts and head/tail -n/-c counts.
+        if token in {"-n", "-e", "-c", "--lines", "--bytes"}:
             skip_next = True
             continue
         if token.startswith("-"):

@@ -112,3 +112,15 @@ fields), not in internal model field names such as `input_tokens` or
 `total_tokens`. Item `estimated_cost` prices each allocated slice using the
 source request's pricing tier; summing all item rows in a turn therefore
 reconciles to the request-ledger cost for that turn.
+
+## Visible item tokens and images
+
+Item `measurements` token counts are tokenizer estimates of an item's visible
+input and output text. Inline base64 image payloads in tool results are not
+visible text: sizing replaces the encoded bytes with a short
+`[image data omitted: N base64 chars]` marker and keeps metadata such as media
+type and dimensions. Image content therefore contributes only its metadata to
+visible item tokens and context composition; it is not an estimate of the
+provider's image token cost. Graphs prepared before this rule keep their
+stored measurements until their source changes or the preparation version is
+advanced.

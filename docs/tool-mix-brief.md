@@ -60,6 +60,11 @@ No Core change was needed:
   (`output_evidence.duration_ms`). The panel reads tool-shaped items with the
   `types` filter, 1,000 per page, up to 5,000 calls, and labels truncation.
 
+Two Core measurement fixes landed with the panel: inline base64 image payloads
+no longer count as visible tokens (see the
+[token glossary](token-usage-glossary.md)), and shell reads such as
+`head -c 300 FILE` no longer report the count as their target.
+
 "Via shell" counts `command_execution` items that Core classified as something
 other than a command, such as a `sed` or `cat` read.
 
