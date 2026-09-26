@@ -44,3 +44,15 @@ explicitly enabled.
 Verification uses synthetic Amp and Codex evidence exercising pass, breach, and
 unavailable turns, desktop Chromium captures of every Monitor surface, and
 offline HTTP integration. Design review stays in-thread as explicitly requested.
+
+# Tool mix colors
+
+The Investigation tool mix colors its call sequence by four families, not by
+its eight groups: Explore (Read, Search) `#2a78d6`, Change (Edit, Write)
+`#eb6834`, Command `#1baf7a`, and Other (Web, Agents, Other) `#c3c6cf`.
+Adjacent calls can be any pair, so the palette is validated all-pairs on the
+white surface: worst CVD ΔE 9.2, worst normal-vision ΔE 21.5. Only three
+categorical hues pass that test; Other is the neutral fold. Command and Other
+sit below 3:1 contrast, so the mix table names every group and a legend names
+every family. Colors follow the family, never rank; focusing a group dims the
+rest instead of repainting it. Tokens live in `styles.css` as `--family-*`.

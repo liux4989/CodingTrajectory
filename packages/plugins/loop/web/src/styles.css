@@ -17,6 +17,10 @@
   --input: #ccd0db;
   --ring: #414ac7;
   --destructive: #b33142;
+  --family-explore: #2a78d6;
+  --family-change: #eb6834;
+  --family-command: #1baf7a;
+  --family-other: #c3c6cf;
   --card: #ffffff;
   --card-foreground: #25272d;
   --sidebar: var(--muted);
@@ -496,6 +500,223 @@ main {
     flex-direction: column;
     align-items: stretch;
   }
+}
+.tool-mix h3 {
+  margin: 22px 0 10px;
+}
+/* Sequence colors mark four families, not eight groups: adjacent calls can be
+   any pair, and only three categorical hues stay distinguishable under every
+   color-vision deficiency. Validated all-pairs on white (dataviz validator):
+   CVD ΔE ≥ 9.2, normal-vision ΔE ≥ 21.5. Command and Other are below 3:1
+   contrast, so the mix table names every group. */
+.group-Read,
+.group-Search {
+  --group: var(--family-explore);
+}
+.group-Edit,
+.group-Write {
+  --group: var(--family-change);
+}
+.group-Command {
+  --group: var(--family-command);
+}
+.group-Web,
+.group-Agents,
+.group-Other {
+  --group: var(--family-other);
+}
+.family-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.family-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mix-table-wrap {
+  overflow-x: auto;
+}
+.mix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.mix-table th,
+.mix-table td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+.mix-table th:first-child {
+  text-align: left;
+}
+.mix-table thead th {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.mix-table tr[data-focused="true"] {
+  background: var(--accent);
+}
+.mix-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-weight: 500;
+}
+.mix-group[aria-pressed="true"] {
+  color: var(--accent-foreground);
+}
+.mix-share {
+  display: inline-block;
+  min-width: 3.4em;
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--group);
+}
+.sequence-heading {
+  margin: 22px 0 4px;
+}
+.sequence-heading h3 {
+  margin: 0;
+}
+.call-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-top: 10px;
+}
+.turn-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 3px;
+}
+.turn-cluster[data-current="true"],
+.turn-bar[data-current="true"] {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.turn-cluster a {
+  width: 8px;
+  height: 22px;
+  border-radius: 2px;
+  background: var(--group);
+}
+.turn-bar {
+  display: flex;
+  max-width: 100%;
+  height: 22px;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.turn-bar span {
+  background: var(--group);
+}
+.call-strip [data-dimmed="true"] {
+  opacity: 0.15;
+}
+.turn-cluster a[data-current="true"] {
+  outline: 2px solid var(--foreground);
+  outline-offset: 1px;
+}
+.turn-cluster a:hover,
+.turn-bar:hover {
+  outline: 2px solid var(--foreground);
+  outline-offset: 1px;
+}
+.top-calls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 28px;
+}
+.top-calls ol {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.top-calls li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.top-calls li > span {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.composition > .section-heading {
+  margin: 22px 0 4px;
+}
+.composition > .section-heading h3 {
+  margin: 0;
+}
+@media (max-width: 650px) {
+  .mix-table thead {
+    display: none;
+  }
+  .mix-table tr {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 2px 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .mix-table th,
+  .mix-table td {
+    border: 0;
+    padding: 0;
+    text-align: left;
+    white-space: normal;
+  }
+  .mix-table th {
+    grid-column: 1 / -1;
+  }
+  .mix-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+}
+.composition-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(80px, 2fr) 4.5em;
+  align-items: center;
+  gap: 10px;
+  padding-block: 3px;
+  font-size: 13px;
+}
+.composition-row > .small {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.composition-bar {
+  height: 8px;
+  background: var(--muted);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.composition-bar span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
 }
 .skip-link {
   position: absolute;

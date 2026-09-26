@@ -18,6 +18,7 @@ governed by the [authority boundaries RFC](authority-boundaries.md).
 | [Collector handoff](local-collector-handoff.md) | Local collection, delivery recovery, and deployment gates |
 | [CLI](cli.md) | Public usage and local/remote execution |
 | [Plugins](plugin.md) | Executable plugin boundary |
+| [Tool mix & context brief](tool-mix-brief.md) | Loop Investigation panel for tool mix and context composition |
 | [Amp collector](amp-collector.md) | Host-local raw capture |
 | [Metrics gate](metrics-validation-quality-gate.md) and [token glossary](token-usage-glossary.md) | Reconciliation and measurement semantics |
 | [Activity reconstruction](codex-activity-reconstruction.md) | Canonical activity and provider-wrapper provenance |

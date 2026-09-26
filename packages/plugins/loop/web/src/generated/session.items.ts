@@ -30,6 +30,10 @@ export type OutputChars = number;
 export type OutputTokens = number;
 export type TextChars = number;
 export type TextTokens = number;
+/**
+ * Reconstructed child position within the wrapper.
+ */
+export type NestedIndex = number | null;
 export type Operation1 = string | null;
 export type Operations = string[] | null;
 export type DurationMs = number | null;
@@ -53,6 +57,14 @@ export type TokenMethod = "provider_reported" | "tokenizer_estimate" | "not_meas
 export type Tokenizer = string | null;
 export type Truncated = boolean;
 export type Preview1 = string | null;
+/**
+ * Whether the item is a semantic projection, not content custody.
+ */
+export type ProjectionOnly = boolean | null;
+/**
+ * Reconstructed wrapper parent; null means unknown.
+ */
+export type ProjectionParentItemId = string | null;
 export type Confidence = "high" | "medium" | "low";
 export type Method = string;
 export type Source = string;
@@ -104,10 +116,14 @@ export interface CanonicalItemRecord {
   item_id: ItemId;
   kind: Kind;
   measurements?: ItemContentMeasurements | null;
+  nested_index?: NestedIndex;
   operation?: Operation1;
   operations?: Operations;
   output_evidence?: ToolOutputEvidence | null;
   preview?: Preview1;
+  projection_only?: ProjectionOnly;
+  projection_parent_item_id?: ProjectionParentItemId;
+  projection_provenance?: CanonicalProvenance | null;
   provenance: CanonicalProvenance;
   session_id: SessionId;
   source_order_key: SourceOrderKey;

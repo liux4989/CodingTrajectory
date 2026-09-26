@@ -19,6 +19,7 @@ const schemas = Object.fromEntries(
     "session.events",
     "session.usage",
     "session.request_usage",
+    "session.stats",
   ].map((method) => [method, standaloneSchema(snapshot.methods[method].result)]),
 );
 const loopModels = {

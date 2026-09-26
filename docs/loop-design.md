@@ -120,6 +120,7 @@ meaning.
 - **Explore** — recent sessions, projects, search, factual filters, source, and
   coverage state.
 - **Investigation** — coordinated topology, chronology, native measurements,
+  a whole-session tool mix and context composition panel,
   selected-item detail, and evidence drawer. Context and cache facts appear at
   their relevant turn or request rather than as a separate product universe.
 - **Reports** — user-selected factual cohorts and descriptive statistical data;

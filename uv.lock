@@ -13,7 +13,6 @@ members = [
     "coding-trajectory-benchmarks",
     "coding-trajectory-core",
     "coding-trajectory-workspace",
-    "ct-plugin-breakdown",
     "ct-plugin-loop",
 ]
 
@@ -373,21 +372,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/eb/5d7124083e8d8cda8f5b348f544b71ad6f707ad63193758ef4d8e569da02/cryptography-50.0.1-cp39-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:9dde0a357190eb3b1da1bb9ab750e9c85cba82ca5977aa0836cbb94e92611239", size = 4772694, upload-time = "2026-08-25T19:45:18.315Z" },
     { url = "https://files.pythonhosted.org/packages/63/8e/f1f955e0921dd2b6d22eae7e8d24a4c4b638d10735ffbf6a71f99eb0fcb8/cryptography-50.0.1-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:fd3718b960d0b5dd213cdf03f3bcb7000e69dda0de8b956061947ff6bcff5558", size = 4888413, upload-time = "2026-08-25T19:45:20.4Z" },
     { url = "https://files.pythonhosted.org/packages/1f/ab/89e2b798d2c3925f82e2bb72d5979f3d2f6da2dd22ef4a8cd8b70d920039/cryptography-50.0.1-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:2a93d05e34d5f67fba6f891fe85d929999baa7195e853923ea6d7576c9e68c5e", size = 5044355, upload-time = "2026-08-25T19:45:22.353Z" },
-]
-
-[[package]]
-name = "ct-plugin-breakdown"
-version = "0.1.0"
-source = { editable = "packages/plugins/breakdown" }
-dependencies = [
-    { name = "coding-trajectory-core" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "coding-trajectory-core", editable = "packages/core" },
-    { name = "pydantic", specifier = ">=2.12.5" },
 ]
 
 [[package]]

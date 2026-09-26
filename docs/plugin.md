@@ -42,32 +42,16 @@ references. SQLite stores only references and titles under `ct.loop.v1`.
 The service exposes no cleanup, deletion of logs, publication, or hosted route.
 Monitor and Improve remain separate later workflows, without fake navigation.
 
+Investigation includes a **Tool mix & context** panel. It groups a session's
+tool calls by Core activity concept (from `session.items` detail), with call
+counts, estimated visible tokens, measured durations, shell-routed and failed
+calls, a source-order sequence (per call, or per turn by default above 300 calls,
+with the selected turn or call outlined), and the largest and slowest calls, each
+linked to its item. Context composition comes from `session.stats`. The panel
+sits above the chronology; readers can hide it, the choice is remembered in
+that browser, and a hidden panel issues no Core queries until shown. See the
+[product brief](tool-mix-brief.md).
+
 See [Loop design](loop-design.md) for exact routes, local security assumptions,
 coverage semantics, commands, and the non-blocking inventory pagination proposal.
 The [Core freeze](core-protocol.md) governs all 18 Core methods and Chronicle.
-
-## Session breakdown
-
-The read-only `breakdown` plugin browses paginated local session inventory.
-Select a root or member session, search loaded pages, or add up to three sessions
-for side-by-side comparison. Its compact metric panels use Core's provider
-usage and runtime observations; unavailable cost, billed input, and request
-counts remain blank. Turn-runtime strips use observed turn execution duration,
-not elapsed wall-clock or per-tool timings. Tool-call sequence strips show
-call order by Read / Write / Edit / Bash / Other, with retained activity targets
-and measured call duration from `session.items` where available, falling back
-to `session.overview` summaries. Context composition uses `session.stats`.
-Unknown tool names remain **Other**, and a multi-command `exec` wrapper remains
-one call. Visible tool-token estimates are not billed usage or the active
-resident context total. No evaluator relevance, redundancy, or pass/fail
-scores are inferred.
-
-```bash
-uv run --package coding-trajectory ct plugin breakdown web
-# Optionally preselect a session:
-uv run --package coding-trajectory ct plugin breakdown web SESSION_ID
-```
-
-The server listens on the local loopback interface (default port 8766). The
-plugin has no persistent state or write routes; use `--port` to run alongside
-Loop. A trusted authenticated proxy can be permitted with `--allow-host`.

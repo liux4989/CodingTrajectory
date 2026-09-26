@@ -7,10 +7,11 @@ entry = "loop_plugin/main.py"
 "project.sessions" = 3
 "session.summary" = 2
 "session.overview" = 3
-"session.items" = 4
+"session.items" = 6
 "session.events" = 4
 "session.usage" = 3
 "session.request_usage" = 3
+"session.stats" = 4
 "living.sessions" = 2
 
 [[tools]]

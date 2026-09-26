@@ -71,17 +71,31 @@ export type Activities =
       OverviewActivity,
       OverviewActivity
     ];
-export type Concept = string | null;
-export type ExitCode = number | null;
-export type ItemId = string;
-export type Kind = string;
-export type Operation = string | null;
-export type Outcome = string | null;
+export type Cmd = string | null;
+export type Commands = string[] | null;
+export type Count = number | null;
+/**
+ * @minItems 1
+ */
+export type ItemIds = [string, ...string[]];
+export type Items = string | null;
+export type Outcome = ("succeeded" | "failed") | null;
 export type Path = string | null;
+export type PathCounts = {
+  [k: string]: number;
+} | null;
+export type Paths = string[] | null;
+export type Queries = string[] | null;
+export type Query = string | null;
+export type Session = string | null;
 export type Status1 = string | null;
 export type Target = string | null;
-export type TargetKind = string | null;
-export type ToolName = string | null;
+export type Targets = string[] | null;
+export type Task = string | null;
+export type Tool = string;
+export type Url = string | null;
+export type Urls = string[] | null;
+export type WrapperStatus = string | null;
 /**
  * @maxItems 8
  */
@@ -112,7 +126,7 @@ export type AssistantResponses =
       OverviewAssistant,
       OverviewAssistant
     ];
-export type ItemId1 = string;
+export type ItemId = string;
 export type Preview = string;
 export type Returned1 = number;
 export type Total1 = number;
@@ -123,7 +137,7 @@ export type GlobalOrdinal = number;
 /**
  * @maxItems 100
  */
-export type ItemIds = string[];
+export type ItemIds1 = string[];
 export type UserRequestEventId = string | null;
 export type SessionId1 = string;
 export type SessionNarrativeOrdinal = number;
@@ -217,21 +231,36 @@ export interface OverviewTurn {
   turn_id: TurnId;
   user_request: OverviewRequestPreview | null;
 }
+/**
+ * One semantic activity cell, not one canonical item.
+ *
+ * Fields mirror build_overview_flows; descriptions and evidence membership
+ * belong to that projector. Prepared object/response byte limits still apply.
+ */
 export interface OverviewActivity {
-  concept: Concept;
-  exit_code: ExitCode;
-  item_id: ItemId;
-  kind: Kind;
-  operation: Operation;
-  outcome: Outcome;
-  path: Path;
-  status: Status1;
-  target: Target;
-  target_kind: TargetKind;
-  tool_name: ToolName;
+  cmd?: Cmd;
+  commands?: Commands;
+  count?: Count;
+  item_ids: ItemIds;
+  items?: Items;
+  outcome?: Outcome;
+  path?: Path;
+  path_counts?: PathCounts;
+  paths?: Paths;
+  queries?: Queries;
+  query?: Query;
+  session?: Session;
+  status?: Status1;
+  target?: Target;
+  targets?: Targets;
+  task?: Task;
+  tool: Tool;
+  url?: Url;
+  urls?: Urls;
+  wrapper_status?: WrapperStatus;
 }
 export interface OverviewAssistant {
-  item_id: ItemId1;
+  item_id: ItemId;
   preview: Preview;
 }
 export interface TurnContentCoverage {
@@ -246,7 +275,7 @@ export interface ContentCount {
   truncated: Truncated;
 }
 export interface OverviewReferences {
-  item_ids: ItemIds;
+  item_ids: ItemIds1;
   user_request_event_id: UserRequestEventId;
 }
 export interface OverviewRequestPreview {

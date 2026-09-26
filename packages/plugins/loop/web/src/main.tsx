@@ -69,6 +69,7 @@ import {
 } from "./api";
 import { readMonitorRoute } from "./monitor-api";
 import { MonitorHome } from "./monitor";
+import { ToolMix } from "./tool-mix";
 import "./styles.css";
 
 const monitorNavigation = [
@@ -622,6 +623,10 @@ function InvestigationView({
               </>
             )}
           </section>
+          <ToolMix
+            reference={pinnedReference}
+            enabled={Boolean(viewHash) && !summary.loading}
+          />
           <section>
             <div className="section-heading">
               <h2>Chronology</h2>
@@ -655,18 +660,24 @@ function InvestigationView({
                     {turn.activities.map((activity, index) => (
                       <div className="activity" key={index}>
                         <p>
-                          {activity.target || activity.path || activity.concept || activity.kind} · {activity.outcome || activity.status || "Outcome unknown"}
+                          {activity.tool}
+                          {(activity.count ?? 1) > 1 ? ` ×${activity.count}` : ""} ·{" "}
+                          {activity.target || activity.path || activity.cmd || activity.query || activity.url || activity.task || "Target not retained"} ·{" "}
+                          {activity.outcome || activity.status || "Outcome unknown"}
                         </p>
-                              <EvidenceLink
-                                reference={{
-                                  session_id: string(session.session_id),
-                                  turn_id: string(turn.turn_id),
-                                  item_id: activity.item_id,
-                                  view_manifest_sha256: viewHash,
-                                }}
-                              >
-                                Item {short(activity.item_id)}
-                              </EvidenceLink>
+                        {activity.item_ids.map((item_id) => (
+                          <EvidenceLink
+                            key={item_id}
+                            reference={{
+                              session_id: string(session.session_id),
+                              turn_id: string(turn.turn_id),
+                              item_id,
+                              view_manifest_sha256: viewHash,
+                            }}
+                          >
+                            Item {short(item_id)}
+                          </EvidenceLink>
+                        ))}
                       </div>
                     ))}
                     <EvidenceLink
