@@ -1,18 +1,28 @@
-# Benchmarks and generated artifacts
+# Benchmarks and artifacts
 
-Reproducible inputs belong in Git: fixtures, benchmark scripts, and example
-configuration. The metric acceptance corpus remains in `validation/metrics/`,
-including source evidence, provenance, audits, pinned pricing, and expected
-responses. It is not disposable benchmark output.
+Commit reproducible inputs: fixtures, scripts, and example configuration.
+Write generated reports to ignored `.artifacts/benchmarks/`, not `docs/`.
+Review and sanitize a report before sharing it.
 
-Generated reports go to the ignored `.artifacts/benchmarks/` directory:
+The audited corpus in `validation/metrics/` is acceptance evidence, not disposable
+output. Never replace its expected values with benchmark results. See
+[metrics validation](../docs/metrics-validation-quality-gate.md).
 
-- `uv run python scripts/benchmark-query.py` measures local query performance.
-- `uv run python scripts/benchmark-session-retrieval.py` runs synthetic retrieval checks.
-- `uv run ct-bench LOGFILE` runs the separate agent/judge experiment and can
-  invoke external agent processes; it is not the metric acceptance workflow.
+## Choose a workload
 
-For the current local historical API versus prepared artifact reads, run:
+| Command | Scope |
+| --- | --- |
+| `uv run python scripts/benchmark-query.py` | Local store ingestion and projection |
+| `uv run python scripts/benchmark-session-retrieval.py` | Synthetic retrieval qualification |
+| `uv run python scripts/benchmark-local-api-artifacts.py --help` | Local API versus in-memory artifact-reader comparison |
+| `uv run ct-bench LOGFILE` | Separate agent/judge experiment; can invoke external agents |
+
+Agent/judge experiments are not the metric acceptance gate. Obtain authorization
+before invoking external agents or sending private evidence.
+
+## Run an isolated local comparison
+
+From the repository root:
 
 ```sh
 uv sync --package coding-trajectory-core
@@ -23,66 +33,37 @@ HOME="$bench_home" uv run --package coding-trajectory-core python \
 rm -rf "$bench_home"
 ```
 
-Repeat with `--graphs 116` for the larger inventory. This reuses the synthetic
-Amp journals from the older compute benchmark but calls current `ServiceRuntime`,
-`LocalPublishedFactRepository`, and `CloudflareArtifactRepository`, without the
-older benchmark's pinned prototype wrappers. It checks full response equality and
-that warm artifact reads fetch no additional objects. Network access is prohibited.
-The disposable home isolates provider discovery and the persisted locator cache.
+The disposable home isolates discovery and locator caches. The harness checks
+response equality, source hashes, and warm object-read reuse. It prohibits network
+access and disables live pricing. Repeat with `--graphs 116` for a larger synthetic inventory.
 
-To use real remote-orb sources without a Mac or production API calls, replace
-`--graphs 29 --turns 100` with `--logs /path/to/frozen-private-amp-journals`.
-The directory must contain a stable copy of Amp JSONL journals, not an actively
-captured directory. Use the same disposable-home wrapper; real inputs are read
-with global scope inside that isolated home. The benchmark verifies that input
-hashes remain unchanged and emits only aggregate counts, timings, and hashes.
-Keep raw journals and archives private and outside Git; do not publish them with
-the aggregate report. A small captured corpus is not a production capacity test.
+For private Amp inputs, replace `--graphs 29 --turns 100` with
+`--vendor amp --logs /path/to/frozen-amp-journals`. Use a frozen copy, not active journals.
+Keep raw logs and archives outside Git and public reports.
 
-For Codex, place the frozen source tree under the disposable home's
-`.codex/sessions`, retaining directory structure, session segments, and any
-parent/child sources selected for the comparison. Invoke the same script with
-`--vendor codex_cli --logs "$bench_home/.codex/sessions"` and `HOME="$bench_home"`.
-Do not point `CT_AMP_LOG_DIR` at Codex files: the harness clears it for Codex and
-uses the real provider discovery. It records source, canonical-session, and
-manifest vendor counts, and measures detail reads on the smallest and largest
-graphs by fact count. Keep corpus selection independent of measured speed.
-Live pricing is disabled for both providers; missing offline prices remain
-unavailable rather than triggering network access.
+For Codex, copy the frozen source tree into `$bench_home/.codex/sessions`.
+Preserve directory structure, segments, and selected parent/child sources.
+Use `--vendor codex_cli --logs "$bench_home/.codex/sessions"` with the same isolated
+`HOME`. Do not point `CT_AMP_LOG_DIR` at Codex sources.
 
-Preparation reports include exclusive wall/process-CPU timings for discovery,
-fact projection, summaries, object serialization, and manifest assembly, plus
-unassigned residual time. Fractions use each run's external preparation total;
-medians of fractions need not sum to one. The first iteration remains included.
-`--expected-preparation-fingerprint <json>` optionally verifies an uninstrumented
-baseline: supply the `preparation_fingerprint` fields plus `input` in one object.
-Use identical frozen source paths, not just identical bytes, because provenance
-paths affect fact identity. Fingerprint checks run outside preparation timings.
+Select the corpus before measuring speed. A small corpus does not qualify production capacity.
 
-Add `--fact-projection-profile` to measure projection separately after parsing.
-It splits row production from fact-set construction and measures helper-level
-work, with unassigned validation/model work retained as a combined bucket.
-Benchmark-only wrappers are restored before a separate cProfile diagnostic pass.
-Both paths must reproduce the prepared fact bytes. Profile self time is exclusive;
-cumulative time includes callees and must not be added across nested functions.
-Profiled durations are not ordinary latency samples, and helper timers also add
-overhead. Source parsing is reported outside these projection-only timings.
+## Interpret results
 
-Cold timings mean fresh runtimes, not cold OS or locator caches. Artifact reads
-decode in-memory objects, excluding disk, network, authentication, and publication.
-Preparation (parse, project, prepare summaries, serialize) is reported separately;
-this is not a durable collector reuse benchmark. **The ordinary local API does not
-currently consume prepared artifact summaries.** This comparison measures the
-potential read-side benefit, not a shipped local-cache speedup. The older
-`benchmark-query.py` instead measures direct DocumentStore ingestion/projection,
-not the full public historical API path.
+- Cold means a fresh runtime, not a cold OS cache.
+- Artifact reads decode in-memory bytes. They exclude disk, network,
+  authentication, and publication latency.
+- Preparation time is separate from reads. This is not a collector-cache benchmark.
+- The comparison artifact reader is benchmark-only. Production remote clients
+  use the prepared API described in [architecture](../docs/architecture.md#remote-authority).
+- Local reads already share graph preparation. Comparison results are not proof
+  of a new local-cache improvement.
+- Stage timings retain unassigned residual work. Median stage fractions need not sum to one.
+- `--fact-projection-profile` adds instrumentation overhead. Cumulative profile
+  times include callees; do not sum them across nested functions.
+- `--expected-preparation-fingerprint JSON` checks a frozen uninstrumented baseline.
+  Use identical source paths as well as bytes, because provenance affects identity.
 
-Private local retrieval reports use `.artifacts/session-retrieval-local/`.
-Local rollout receipts are retained separately under `.artifacts/reset-rollout/`.
-Neither directory is a source of public expected values.
-
-Old checked-in dashboard/query/retrieval reports and the standalone June HTML
-report were removed during the September 5 cleanup. Git history retains them;
-dated measurements in design notes remain historical observations. New runs
-must not overwrite committed acceptance fixtures or silently establish a new
-baseline. Review and sanitize any report before deliberately publishing it.
+Keep private retrieval reports in `.artifacts/session-retrieval-local/`.
+Keep operational receipts in their private run directories, not benchmark output.
+Git history retains removed reports; old measurements are not current guarantees.

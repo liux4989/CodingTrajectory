@@ -1,342 +1,81 @@
-# Metrics Validation Quality Gate Design
+# Metrics validation
 
-## Status
+Use committed source evidence to check canonical reconstruction and public metrics.
+The gate is not a snapshot of current output. Expected values must come from an
+independent source audit.
 
-Implemented on 2026-07-15. The recurring gate, path-aware wrapper, pinned pricing input, and first active Codex CLI, Claude Code, and Pi evidence cohort live under `validation/metrics/`.
+## Run the gate
 
-## Purpose
+From the repository root:
 
-CodingTrajectory deliberately does not use unit tests in this repository, but canonical ingestion and core metric changes still need a repeatable correctness gate. The gate uses audited historical coding sessions from multiple providers as immutable evidence for two outputs: canonical session/tree/graph reconstruction and public session/graph metrics.
-
-The gate is not a snapshot test that records whatever the current code emits. A coding agent must first inspect the source JSONL and independently derive the expected values. Only an audited expectation can become an active baseline.
-
-## Goals
-
-- Detect structural regressions in session identity, graph membership, relationships, turns, and source tool linkage.
-- Detect semantic regressions in token usage, cost evidence, runtime, graph aggregation, and model attribution when the core ingestion or metric layer changes.
-- Exercise real historical behaviors from Codex CLI, Claude Code, and Pi instead of synthetic one-field examples.
-- Preserve the distinction between provider evidence, normalized canonical facts, and public `ct` projections.
-- Produce an actionable field-level diff instead of a generic pass or fail.
-- Run through one repository command and become a required gate whenever relevant core paths change.
-- Allow intentional metric-contract changes without silently blessing new output.
-
-## Non-goals
-
-- This is not a unit-test suite.
-- This does not evaluate whether an agent completed its software-engineering task successfully.
-- This does not benchmark providers or models against one another.
-- This does not replace static analysis, import checks, or frontend builds.
-- This does not commit unredacted user session logs, credentials, environment values, or proprietary source content.
-- This does not require live provider APIs or current model pricing during recurring validation.
-
-## Quality Assertion
-
-For every active baseline case, the same immutable source evidence and pinned pricing inputs must produce the audited canonical metrics and public service projections.
-
-```text
-historical JSONL evidence
-  -> production two-pass ingestion (including inherited-history cutting)
-  -> canonical sessions and connected graph
-     -> canonical structure + public session.tree / graph.overview checks
-     -> session.* + graph.* metric checks
-  -> source-linked field-level regression report
-```
-
-The recurring gate verifies deterministic transformation of evidence. It does not claim that the historical provider log is complete beyond the fields actually present in that log.
-
-## Baseline Case Selection
-
-The first baseline cohort should be small enough to audit deeply and broad enough to cover the known semantic boundaries. A case is selected for a behavior, not merely because it is a convenient recent session.
-
-| Coverage dimension | Minimum initial case |
-| --- | --- |
-| Provider | One Codex CLI, one Claude Code, and one Pi session graph |
-| Graph shape | One single-session graph and one graph containing a subagent or sidechain |
-| Token accounting | Fresh input, cached input, cache write when available, completion, and reasoning tokens |
-| Model attribution | One single-model graph and one graph containing a model or effort change |
-| Runtime | Multiple turns with measurable execution and wait intervals |
-| Tool lifecycle | Successful tool calls and at least one failed or interrupted operation |
-| Context lifecycle | One compaction or cache-boundary case when the provider exposes it |
-| Cost evidence | One provider-reported cost case and one pinned estimated-cost case when available |
-
-One historical graph may satisfy several dimensions. The manifest must state exactly why each case exists so later cleanup does not remove apparently redundant coverage.
-
-## Evidence Bundle
-
-Recurring validation must be portable and must not depend on a developer's live `~/.codex`, `~/.claude`, or `~/.pi` directories. Each approved case becomes a committed, sanitized evidence bundle.
-
-Implemented layout:
-
-```text
-validation/metrics/
-  manifest.toml
-  pricing/
-    pinned-model-prices.json
-  cases/
-    <case-id>/
-      provenance.json
-      source/
-        *.jsonl
-      expected/
-        structure.json
-        session-overview.json
-        session-stats.json
-        session-usage.json
-        session-model-usage.json
-        graph-stats.json       # when the case establishes graph aggregation
-        graph-usage.json       # when the case establishes graph aggregation
-      audit.md
-scripts/
-  validate-metrics-baselines.py
-  check-metrics-quality-gate.sh
-```
-
-Expected files contain source-linked JSON-path assertions instead of copying whole internal models or presentation payloads. `structure.json` is deliberately limited to stable canonical identity, hierarchy, linkage, and public tree/graph facts. Metric files contain stable public facts. This keeps source evidence, reconstruction, metrics, provenance, and audit reasoning separate while producing the smallest useful failure path.
-
-### Provenance
-
-`provenance.json` records:
-
-- baseline case ID and status;
-- provider and adapter family;
-- original source hash before sanitization;
-- committed source hash after sanitization;
-- sanitization procedure version;
-- session graph entry-point ID;
-- selected coverage dimensions;
-- expected-output schema versions;
-- pinned pricing artifact version when cost is in scope;
-- original audit date and auditor agent identity;
-- last intentional contract migration, if any.
-
-The original source path may be recorded in a private audit note during case creation, but it must not be required by the committed recurring gate.
-
-### Sanitization
-
-Sanitization removes or replaces secrets and unrelated user content while retaining every field needed to reproduce the selected metric behaviors. It must preserve event order, timestamps, usage observations, model/provider identifiers, session relationships, tool statuses, runtime observations, and any content length needed by a metric under validation.
-
-Sanitization is allowed to change stable IDs only if all affected references are deterministically rewritten together. The audit must confirm that the sanitized bundle still reproduces the independently derived metric expectations.
-
-## Independent Baseline Audit
-
-The initial audit prevents current implementation bugs from becoming accepted baselines.
-
-### Pass 1: Source-only reconstruction
-
-A fresh coding-agent thread receives:
-
-- the sanitized JSONL evidence;
-- the provider token semantics documented in `docs/token-usage-glossary.md`;
-- the public metric definitions under review;
-- the pinned pricing table when cost is included.
-
-It does not receive the current `ct` output during the first pass. The agent reconstructs:
-
-- session and graph membership;
-- parent relationships, relationship type/provenance, and conversation-tree versus orchestration-run boundaries;
-- turn boundaries and statuses;
-- canonical tool-call/result linkage where the source establishes it;
-- provider usage observations;
-- normalized token buckets;
-- graph, session, and turn totals;
-- model/provider grouping;
-- execution and wait durations;
-- tool and interruption counts;
-- reported or estimated cost evidence.
-
-The resulting derivation is written to `audit.md` with explicit arithmetic and source-event references.
-
-### Pass 2: Implementation comparison
-
-The agent then runs the current public surfaces against the evidence bundle:
-
-```text
-ct session overview <id> --output json
-ct session stats <id> --output json
-ct session usage <id> --output json
-ct api call session.model_usage --params '{"session_id":"<id>"}'
-```
-
-Current output is compared with the source-only reconstruction. A baseline is approved only after discrepancies are resolved as one of:
-
-- implementation defect fixed before approval;
-- audit calculation corrected with evidence;
-- documented provider limitation represented as missing or lower-confidence data;
-- intentional public-contract rule added to the audit.
-
-### Pass 3: Cross-check
-
-A second agent or human reviewer checks the arithmetic, source references, sanitization safety, and expected JSON. The reviewer must not approve by merely observing that current and expected JSON match.
-
-## Expected Output Policy
-
-Expected JSON contains the stable public facts required by the case. It should omit irrelevant presentation fields so an unrelated wording or ordering change does not invalidate the gate.
-
-Comparison rules:
-
-- identifiers, counts, token integers, statuses, relationships, and normalized enum values compare exactly;
-- timestamps compare exactly after canonical UTC serialization;
-- durations compare exactly when derived from fixed timestamps;
-- USD values compare at the precision declared by the core cost contract;
-- list ordering compares only where ordering is part of the public contract;
-- absent evidence remains absent and is never coerced to zero;
-- warnings expected by the case compare explicitly;
-- graph totals, main-session values, and subagent values remain separate.
-
-The verifier uses Pydantic models to validate the manifest, provenance, expected output, and comparison report before evaluating values.
-
-## Cost Stability
-
-Recurring validation must not depend on the live models.dev catalog. Cost cases use a committed pricing snapshot or provider-reported cost from the immutable source evidence.
-
-Usage correctness and pricing correctness are reported separately:
-
-```text
-usage gate: observed and normalized token buckets
-pricing gate: pinned rates applied to the audited usage buckets
-```
-
-An updated market price is not a metric regression. Updating the pinned pricing artifact is an explicit baseline-contract change with its own audit entry.
-
-## Recurring Gate
-
-The primary command is:
-
-```text
+```sh
+scripts/check-metrics-quality-gate.sh
 uv run python scripts/validate-metrics-baselines.py
 ```
 
-It performs the following steps:
+The wrapper selects metric-sensitive changes. With no arguments, it checks the
+worktree and branch changes against `origin/main`. The direct command always
+runs the full active baseline set. Run both before committing metric-sensitive changes.
+See the wrapper for the exact trigger paths.
 
-1. Validate the baseline manifest and every evidence bundle.
-2. Load only the committed evidence paths, never the user's live discovery roots.
-3. Run the production two-pass ingestion core, graph assembly, `DocumentStore`, and contract-validating public service dispatch.
-4. Normalize only fields declared non-semantic by the baseline contract.
-5. Compare actual and expected values.
-6. Verify cross-field invariants.
-7. Emit a concise terminal report and a machine-readable JSON report.
-8. Exit nonzero on any unexplained difference, missing case, invalid artifact, or invariant failure.
+The validator uses production ingestion, graph assembly, and contract-validated
+service calls. It checks source hashes, provenance, expected fields, and
+cross-field invariants. Failures identify the case, surface, field, source
+references, and audit reference. Unexplained differences cause a nonzero exit.
 
-Required invariants include:
+## Evidence ownership
 
-- graph token totals reconcile with the distinct session sections returned by `graph.usage`;
-- graph turn counts reconcile with those session sections;
-- main and subagent sections remain distinct from the graph aggregate;
-- processed-token accounting uses canonical uncached, cached, cache-write, completion, and reasoning semantics;
-- cost is absent when required pricing evidence is absent;
-- a graph cost is not silently presented as complete when one attributed model is unpriced;
-- execution time, wait time, and elapsed timestamp span are not conflated;
-- failed tool calls and interrupted turns come from their canonical event or runtime observations.
+`validation/metrics/manifest.toml` selects active cases and pinned pricing.
+Each case contains sanitized source JSONL, hash provenance, source-linked
+expected JSON, and an `audit.md` derivation. These are acceptance evidence,
+not disposable benchmark output.
 
-## Automatic Trigger
+| Active case | Main boundary |
+| --- | --- |
+| `codex-fork-runtime` | Separate conversation forks, cache/reasoning accounting, runtime |
+| `claude-stream-cache` | Repeated response events, cache reads, tool lifecycle |
+| `pi-reported-cost` | Provider-reported cost and cached usage |
+| `codex-interagent-turn` | Spawned-agent turns, orphan-marker rejection, graph totals |
 
-`scripts/check-metrics-quality-gate.sh` inspects the changed paths and runs the baseline verifier whenever a commit changes metric-sensitive code. With no arguments it evaluates the worktree, including untracked files; git diff arguments may be passed for commit or CI ranges.
+The gate does not need live user logs, provider APIs, or current pricing.
+Cost cases use committed rates or source-reported cost.
+Sanitization must preserve every field needed by the asserted behavior.
+Rewrite all affected references together when sanitization changes IDs.
 
-Initial trigger paths:
+## Change a baseline intentionally
 
-```text
-packages/core/src/coding_trajectory/ingestion/
-packages/core/src/coding_trajectory/metrics/
-packages/core/src/coding_trajectory/analysis/
-packages/core/src/coding_trajectory/contracts.py
-packages/core/src/coding_trajectory/service.py
-packages/core/src/coding_trajectory/runtime.py
-docs/token-usage-glossary.md
-validation/metrics/
-```
-
-The repository's agent workflow must run this command before committing a matching change. CI or a local commit hook may call the same script later, but the validation command remains the single source of truth.
-
-Changes outside the trigger paths can run the command explicitly when they alter a plugin projection or public interpretation of core metrics.
-
-## Failure Report
-
-A failed gate reports the smallest useful path to the difference:
-
-```text
-case: claude-cache-write-compaction
-surface: session.usage
-scope: sessions[0].turns[3]
-field: usage.cached_prompt_tokens
-expected: 51136
-actual: 39680
-source refs: source/session.jsonl:42, source/session.jsonl:57
-audit ref: audit.md#turn-4-provider-usage
-```
-
-The report groups failures by case and surface, distinguishes schema failures from value regressions, and retains enough context for an agent to inspect the exact upstream source events.
-
-## Intentional Contract Changes
-
-The validation command must never provide an automatic `--update` or snapshot-blessing mode.
-
-When a metric contract intentionally changes:
+**Do not copy current command output into expected values.**
 
 1. Document the semantic change and affected fields.
-2. Run the old baseline and retain the failure report.
-3. Reconstruct the new expected values from source evidence.
-4. Update the relevant audit arithmetic and expected JSON.
-5. Record the migration in provenance.
-6. Obtain a second review.
-7. Run the gate cleanly before commit.
+2. Retain the old gate's failure report.
+3. Reconstruct new values from the committed source evidence.
+4. Update the audit with arithmetic and exact source references.
+5. Update expected JSON to match that audited derivation.
+6. Record the migration in provenance.
+7. Obtain an independent review.
+8. Run the full gate before committing.
 
-This makes a baseline update evidence that the contract changed intentionally rather than a way to hide a regression.
+The validator has no automatic update or baseline-approval mode.
+Review must check derivation and sanitization, not only matching JSON.
+The original cohort's implementation cross-check does not establish independent
+organizational sign-off; retain that governance distinction.
 
-## Baseline Lifecycle
+## Contract rules and limits
 
-Cases move through explicit states:
+- Compare IDs, counts, token integers, statuses, and relationships exactly.
+- Compare timestamps after canonical UTC serialization.
+- Keep unavailable evidence absent; never replace it with zero.
+- Keep root-session measurements, subagent sections, and graph totals distinct.
+- Do not present overlapping subagent runtime as user elapsed time.
+- Keep usage correctness separate from pricing correctness.
+- Treat pinned price changes as intentional baseline changes, not market updates.
 
-```text
-candidate -> audited -> active -> superseded or retired
-```
+The cohort verifies its committed evidence, not every historical provider format.
+It uses trajectory retention; it does not establish universal compact/full parity.
+Copied-parent-prefix classification, unknown tools, and other unsupported evidence
+need source-backed qualification before broader claims.
 
-Only active cases participate in the required gate. Superseded cases remain available when they document an old provider format that is still useful for migration history. A case is retired only when the corresponding input format is no longer supported or its evidence cannot be retained safely.
-
-## Implemented Baseline Cohort
-
-| Case | Provider | Primary boundaries |
-| --- | --- | --- |
-| `codex-fork-runtime` | Codex CLI | Ordinary two-branch conversation fork, branch-local cached/uncached/reasoning usage, provider runtime, pinned estimated cost |
-| `claude-stream-cache` | Claude Code | Repeated stream events for one provider response, cache reads, successful tool lifecycle, pinned estimated cost |
-| `pi-reported-cost` | Pi | Five provider calls, four successful tools, cached usage, provider-reported cost |
-| `codex-interagent-turn` | Codex CLI | Multi-session spawned-agent graph, lifecycle-delimited turns without user messages, orphan-marker rejection, graph token aggregation |
-
-Each case has committed sanitized JSONL, SHA-256 provenance, source-only derivation in `audit.md`, and source-linked structural plus session-metric assertions. `codex-interagent-turn` additionally asserts `graph.stats` and `graph.usage`, because its two-session orchestration run provides non-redundant graph aggregation evidence. The original 107 audited session-metric assertions remain unchanged.
-
-## Contract Boundaries and Known Gaps
-
-- `session.tree` describes the full connected conversation lineage. `graph.*` selects the orchestration run containing the entrypoint, so an ordinary conversation fork is a second tree branch rather than part of the parent's graph aggregate. A spawned subagent remains in the same graph.
-- Graph runtime duration and latency fields are rooted in the primary session to avoid presenting overlapping subagent work as user elapsed time. Graph token, model-active, turn, and session sections aggregate the run according to their public field semantics.
-- The recurring gate uses trajectory retention. Measurements retention promises hierarchy, stable IDs, timing, and accounting fields while dropping bodies, but compact ingestion with reattached measurements can still omit Claude/Pi `provider_usage_buckets`; universal compact/full metric parity is not asserted.
-- Chronicle's v2 artifact explicitly promises body-free topology, usage, measurements, operational details, hierarchy ownership, and bounded size. The gate does not add a duplicate Chronicle round-trip assertion where no public contract requires it.
-- Existing committed Codex parent/fork evidence reaches the production inherited-history-cutting path, but does not contain a copied parent prefix. A future source case is warranted only when sanitized committed evidence directly establishes that format; this redesign does not invent one.
-- The evidence does not establish universal correctness for legacy/native matching, collaboration recipient matching, Claude team prose heuristics, or unknown-tool enrichment. Those remain separate ingestion concerns rather than silently blessed baseline contracts.
-
-## Rollout Plan
-
-### Phase 1: Baseline inventory
-
-- Completed for the first active cohort.
-
-### Phase 2: Independent audit
-
-- Source arithmetic and artifact cross-checks are completed for the first active cohort. An independent human or separate-agent sign-off remains an explicit governance follow-up; the provenance reviewer currently records the implementation cross-check rather than organizational approval. Future additions follow the same provenance, arithmetic, and review workflow.
-
-### Phase 3: Validator
-
-- Completed in `scripts/validate-metrics-baselines.py`.
-
-### Phase 4: Change-aware gate
-
-- The path-trigger wrapper and repository agent instruction are implemented. CI invocation remains optional if the repository later adopts CI for validation scripts.
-
-## Acceptance Criteria
-
-- At least one active audited case exists for Codex CLI, Claude Code, and Pi.
-- The initial cohort covers single-session and multi-session graphs.
-- Expected metrics were reconstructed without seeing current `ct` output in the first audit pass.
-- The validator detects a deliberate one-token, one-turn, one-status, and one-cost-evidence mutation.
-- The verifier produces a field-level source-linked diff.
-- Live user log directories and live pricing services are not required.
-- No unit-test files or test-runner dependency are introduced.
-- Metric-sensitive core changes have one documented command that automatically selects and runs this gate.
+Keep unit tests out of this repository, as required by [AGENTS.md](../AGENTS.md).
+Static analysis, protocol checks, and integration qualification remain separate gates.
+See the [token glossary](token-usage-glossary.md) for measurement semantics and the
+[benchmark guide](../benchmarks/README.md) for generated reports.
