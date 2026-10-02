@@ -495,6 +495,10 @@ class TranscriptProjector:
         self.vendor = vendor
         self.records = records
         self.active_status = active_status
+        # Provider-observed end of the open turn (Claude Code ``turn_duration``).
+        # Without it a turn is closed by the next prompt, which folds user idle
+        # time into the turn.
+        self._turn_end_hint: datetime | None = None
         self.default_previous_turn_status = default_previous_turn_status
         self._prefer_lifecycle = prefer_lifecycle
         self._compact = compact
@@ -540,6 +544,8 @@ class TranscriptProjector:
         ) or not has_user_message
 
         for record in self.records:
+            if record.kind in {"assistant_message", "tool_call", "tool_result", "usage"}:
+                self._turn_end_hint = None
             if record.kind == "user_message":
                 if self._use_lifecycle_turns:
                     self._handle_user_message_in_turn(record)
@@ -562,6 +568,11 @@ class TranscriptProjector:
                 self._handle_task_complete(record)
             elif record.kind == "runtime":
                 self._append_turn_event_id(record.record_id)
+                if (
+                    record.data.get("subtype") == "turn_duration"
+                    and self._turn_state.current_turn is not None
+                ):
+                    self._turn_end_hint = record.timestamp
 
         if self._turn_state.current_turn is not None:
             status = self.active_status or TurnStatus.COMPLETED
@@ -990,6 +1001,14 @@ class TranscriptProjector:
             )
 
     def _flush_turn(self, ended_at: datetime, *, status: TurnStatus) -> None:
+        hint, self._turn_end_hint = self._turn_end_hint, None
+        turn = self._turn_state.current_turn
+        if (
+            hint is not None
+            and turn is not None
+            and turn.started_at <= hint < ended_at
+        ):
+            ended_at = hint
         self._turn_state.close_turn(ended_at, status=status)
 
     def _append_turn_event_id(self, event_id: UUID) -> None:

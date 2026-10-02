@@ -29,3 +29,7 @@ by lines 1 and 5 is now in top-level `turns`. `orchestration.kind` still describ
 the one source session. These are field-placement changes, not metric changes.
 The bounded activity list retains canonical actions even when their subject is
 unavailable; the historical display omission described above is no longer used.
+
+## Output token throughput
+
+The numerator is generated (output) tokens: response-1 (47 tokens, repeated across the two stream fragments `source/session.jsonl:2,3`) plus response-2 (323, `source/session.jsonl:5`) = 370 output tokens. Over the same model-active denominator as above, the source-derived rate is `370 / 73.718` = 5.019 output tokens/second. It is an end-to-end model-active rate, so time to first token and prefill are included.

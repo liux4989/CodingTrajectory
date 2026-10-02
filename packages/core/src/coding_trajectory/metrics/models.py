@@ -165,6 +165,11 @@ class TurnMetrics(BaseModel):
     completed_at: datetime | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     model_active_seconds: float | None = None
+    # Raw decode evidence (see ``throughput.decode_samples``); internal inputs to
+    # the model-level ``decode_tokens_per_second``, not serialized.
+    decode_tokens: int = Field(default=0, exclude=True)
+    decode_seconds: float = Field(default=0.0, exclude=True)
+    decode_samples: int = Field(default=0, exclude=True)
     observations: list[TokenUsageObservation] = Field(default_factory=list)
 
 
@@ -175,6 +180,7 @@ class SessionMetrics(BaseModel):
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
+    output_tokens_per_second: float | None = None
     turns: list[TurnMetrics] = Field(default_factory=list)
 
 
@@ -183,6 +189,7 @@ class SessionGraphMetrics(BaseModel):
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
+    output_tokens_per_second: float | None = None
     sessions: list[SessionMetrics] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -242,6 +249,8 @@ class RuntimeStatsFlat(BaseModel):
     execution_seconds: int | None = None
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
+    output_tokens_per_second: float | None = None
+    decode_tokens_per_second: float | None = None
     wait_seconds: int | None = None
     turns: int = 0
     items: int = 0
@@ -263,6 +272,8 @@ class RuntimeStatsFlat(BaseModel):
             "execution_seconds",
             "model_active_seconds",
             "processed_tokens_per_second",
+            "output_tokens_per_second",
+            "decode_tokens_per_second",
             "wait_seconds",
         ):
             if data.get(key) is None:
@@ -276,6 +287,7 @@ class TurnRuntimeFlat(BaseModel):
     execution_seconds: int | None = None
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
+    output_tokens_per_second: float | None = None
     wait_before_seconds: int | None = None
 
     @model_serializer(mode="wrap")
@@ -612,6 +624,8 @@ class ModelUsageModelFlat(BaseModel):
     usage: TokenUsage = Field(default_factory=TokenUsage)
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
+    output_tokens_per_second: float | None = None
+    decode_tokens_per_second: float | None = None
     estimated_cost: CostEvidenceFlat | None = None
 
     @model_serializer(mode="wrap")
@@ -623,6 +637,10 @@ class ModelUsageModelFlat(BaseModel):
             data.pop("model_active_seconds", None)
         if data.get("processed_tokens_per_second") is None:
             data.pop("processed_tokens_per_second", None)
+        if data.get("output_tokens_per_second") is None:
+            data.pop("output_tokens_per_second", None)
+        if data.get("decode_tokens_per_second") is None:
+            data.pop("decode_tokens_per_second", None)
         if data.get("estimated_cost") is None:
             data.pop("estimated_cost", None)
         return data
@@ -643,6 +661,7 @@ class ModelUsageTurnFlat(BaseModel):
     completed_at: datetime | None = None
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
+    output_tokens_per_second: float | None = None
     provider: str | None = None
     model: str | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
@@ -659,6 +678,8 @@ class ModelUsageTurnFlat(BaseModel):
             data.pop("model_active_seconds", None)
         if data.get("processed_tokens_per_second") is None:
             data.pop("processed_tokens_per_second", None)
+        if data.get("output_tokens_per_second") is None:
+            data.pop("output_tokens_per_second", None)
         if data.get("context") == {}:
             data.pop("context", None)
         if data.get("estimated_cost") is None:
@@ -676,6 +697,7 @@ class SessionGraphModelUsageFlat(BaseModel):
     usage: TokenUsage = Field(default_factory=TokenUsage)
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
+    output_tokens_per_second: float | None = None
     context: ModelUsageContextFlat | None = None
     models: list[ModelUsageModelFlat] = Field(default_factory=list)
     dominant_model: DominantModelFlat | None = None
@@ -691,6 +713,8 @@ class SessionGraphModelUsageFlat(BaseModel):
             data.pop("model_active_seconds", None)
         if data.get("processed_tokens_per_second") is None:
             data.pop("processed_tokens_per_second", None)
+        if data.get("output_tokens_per_second") is None:
+            data.pop("output_tokens_per_second", None)
         if data.get("context") == {}:
             data.pop("context", None)
         if data.get("dominant_model") == {}:

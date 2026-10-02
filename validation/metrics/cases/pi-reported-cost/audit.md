@@ -46,3 +46,7 @@ singletons and the existing low-value visibility gate omits them. Therefore
 overview activity total and returned are both zero, while canonical tool counts,
 usage, cost, and runtime remain unchanged. This expectation follows the committed
 source and visibility rule, not regenerated command output.
+
+## Output token throughput
+
+The numerator is generated (output) tokens: the five assistant messages (`source/session.jsonl:5,7,9,11,13`) report 65+47+52+53+50 = 267 output tokens. Over the same model-active denominator as above, the source-derived rate is `267 / 91.227` = 2.927 output tokens/second. It is an end-to-end model-active rate, so time to first token and prefill are included.

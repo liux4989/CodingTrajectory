@@ -76,6 +76,7 @@ def _omit_unavailable_amp_usage(payload: dict[str, Any]) -> None:
         "item_real_token_costs",
         "model_active_seconds",
         "processed_tokens_per_second",
+        "output_tokens_per_second",
     ):
         if key in payload:
             payload[key] = None

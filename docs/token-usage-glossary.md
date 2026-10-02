@@ -87,7 +87,9 @@ by `model_active_seconds`:
 ```
 
 `model_active_seconds` is derived from the turn boundary after subtracting the
-union of completed, observed tool intervals. It is a model-throughput
+union of completed, observed tool intervals. For Claude Code, a turn ends at its
+`turn_duration` runtime record when present, not at the next user prompt, so
+user idle time is not counted as model time. It is a model-throughput
 denominator, not provider decoder-busy time. Turns with an unclosed tool
 interval are ineligible, and mixed-model turns do not assign their duration to
 the dominant model. A graph or session rate remains available when its full
@@ -97,6 +99,35 @@ This metric intentionally excludes tool output tokens and tool monetary cost
 from its scope. A full turn-duration rate may still be useful diagnostically,
 but it must not be labeled as the common model-throughput rate because tool
 execution time remains in that denominator.
+
+`output_tokens_per_second` uses the same `model_active_seconds` denominator but
+only the generated (completion) tokens as numerator:
+
+```text
+completion / model-active seconds
+```
+
+It is the model's generation rate, with tool execution time removed. It is still
+an end-to-end rate over the model-active window, so time to first token and
+prefill remain in the denominator and short responses read low. Codex reports
+reasoning inside `output_tokens`, so reasoning is already part of its
+numerator; providers that bucket reasoning separately are not adjusted.
+
+`decode_tokens_per_second` (Codex only) is the generation rate with time to
+first token and prefill removed. Codex timestamps each response item when it
+completes, so the gap between a completed message (or an earlier parallel call)
+and the next tool call in the same response is pure decoding of that call's
+arguments:
+
+```text
+sum(tool-call input tokens) / sum(gap seconds)
+```
+
+A tool completion between two items starts a new request and discards the pair.
+Samples under 20 tokens or 0.5 s are dropped, and the rate is omitted below 3
+samples. Tokens are counted with the session's effective tokenizer, so the rate
+is an estimate, and it covers tool-call arguments only, not reasoning or
+message text. It is attributed to a model only for single-model turns.
 
 ## Allocated item cost
 

@@ -58,7 +58,11 @@ from coding_trajectory.metrics.pricing import (
     cost_evidence_from_usage,
     get_model_context_window,
 )
-from coding_trajectory.metrics.throughput import processed_tokens_per_second
+from coding_trajectory.metrics.throughput import (
+    decode_tokens_per_second,
+    output_tokens_per_second,
+    processed_tokens_per_second,
+)
 
 
 def build_session_graph_full_metrics(
@@ -245,6 +249,14 @@ def build_session_graph_model_usage(
                         if len(groups) == 1
                         else None
                     ),
+                    output_tokens_per_second=(
+                        output_tokens_per_second(
+                            turn.token_usage.output_tokens,
+                            turn.model_active_seconds,
+                        )
+                        if len(groups) == 1
+                        else None
+                    ),
                     provider=primary.provider if primary else None,
                     model=primary.model if primary else None,
                     usage=turn.token_usage,
@@ -290,6 +302,7 @@ def build_session_graph_model_usage(
         usage=selected_usage,
         model_active_seconds=full.model_active_seconds,
         processed_tokens_per_second=full.processed_tokens_per_second,
+        output_tokens_per_second=full.output_tokens_per_second,
         context=_context_for_session_graph(session_graph),
         models=models,
         dominant_model=DominantModelFlat(
@@ -594,6 +607,10 @@ def _turn_runtime(
             turn.token_usage.processed_token_total(),
             turn.model_active_seconds,
         ),
+        output_tokens_per_second=output_tokens_per_second(
+            turn.token_usage.output_tokens,
+            turn.model_active_seconds,
+        ),
         wait_before_seconds=wait_before_seconds,
     )
 
@@ -625,6 +642,11 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
                 if single_model
                 else None
             ),
+            output_tokens_per_second=(
+                output_tokens_per_second(usage.output_tokens, turn.model_active_seconds)
+                if single_model
+                else None
+            ),
             estimated_cost=(
                 _aggregate_observation_cost(observations_by_model[(provider, model)])
                 if observations_by_model.get((provider, model))
@@ -652,6 +674,7 @@ def _model_usage_breakdown(
     model_turns: dict[tuple[str | None, str | None], set[UUID]] = {}
     active_seconds: dict[tuple[str | None, str | None], float] = {}
     active_seconds_complete: dict[tuple[str | None, str | None], bool] = {}
+    decode_totals: dict[tuple[str | None, str | None], list[float]] = {}
     model_costs: dict[tuple[str | None, str | None], list[CostEvidenceFlat | None]] = {}
     for turn in turn_list:
         groups = _model_groups_for_turn(turn)
@@ -661,6 +684,12 @@ def _model_usage_breakdown(
             model_requests[key] = model_requests.get(key, 0) + group.requests
             model_turns.setdefault(key, set()).add(turn.turn_id)
             model_costs.setdefault(key, []).append(group.estimated_cost)
+            if len(groups) == 1:
+                # Decode samples belong to the model only for single-model turns.
+                totals = decode_totals.setdefault(key, [0.0, 0.0, 0.0])
+                totals[0] += turn.decode_tokens
+                totals[1] += turn.decode_seconds
+                totals[2] += turn.decode_samples
             if group.model_active_seconds is None:
                 active_seconds_complete[key] = False
             elif active_seconds_complete.get(key, True):
@@ -687,6 +716,19 @@ def _model_usage_breakdown(
                     if active_seconds_complete.get((provider, model), True)
                     else None
                 ),
+            ),
+            output_tokens_per_second=output_tokens_per_second(
+                usage.output_tokens,
+                (
+                    active_seconds[(provider, model)]
+                    if active_seconds_complete.get((provider, model), True)
+                    else None
+                ),
+            ),
+            decode_tokens_per_second=decode_tokens_per_second(
+                int(decode_totals.get((provider, model), [0, 0, 0])[0]),
+                decode_totals.get((provider, model), [0, 0, 0])[1],
+                int(decode_totals.get((provider, model), [0, 0, 0])[2]),
             ),
             estimated_cost=_aggregate_cost_evidence(
                 model_costs.get((provider, model), []),

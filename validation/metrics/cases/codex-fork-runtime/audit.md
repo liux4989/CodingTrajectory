@@ -46,3 +46,7 @@ and `orchestration`. Parent line 1 has no parent, hence relationship `root`
 (formerly the presentation role `main`). Lines 2–6 prove the single turn's
 zero-based source ordinal 0 and completed status. Replace the duplicate status
 assertion with that ordinal. No usage, cost, runtime or membership value changes.
+
+## Output token throughput
+
+The numerator is generated (output) tokens: `last_token_usage.output_tokens` is 937 at `source/parent.jsonl:5` (reasoning included). Over the same model-active denominator as above, the source-derived rate is `937 / 108.767` = 8.615 output tokens/second. It is an end-to-end model-active rate, so time to first token and prefill are included.

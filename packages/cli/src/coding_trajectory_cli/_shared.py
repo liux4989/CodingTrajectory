@@ -434,6 +434,9 @@ def compact_usage_turn(turn: Any) -> Any:
                     "processed_tokens_per_second": (turn.get("runtime") or {}).get(
                         "processed_tokens_per_second"
                     ),
+                    "output_tokens_per_second": (turn.get("runtime") or {}).get(
+                        "output_tokens_per_second"
+                    ),
                     "wait_before_seconds": (turn.get("runtime") or {}).get(
                         "wait_before_seconds"
                     ),
@@ -477,6 +480,12 @@ def compact_usage_session(session: Any) -> Any:
                     "model_active_seconds": runtime.get("model_active_seconds"),
                     "processed_tokens_per_second": runtime.get(
                         "processed_tokens_per_second"
+                    ),
+                    "output_tokens_per_second": runtime.get(
+                        "output_tokens_per_second"
+                    ),
+                    "decode_tokens_per_second": runtime.get(
+                        "decode_tokens_per_second"
                     ),
                     "wait_seconds": runtime.get("wait_seconds"),
                     "turns": runtime.get("turns"),
@@ -528,6 +537,8 @@ def compact_usage_models(models: Any) -> list[dict[str, Any]] | None:
                 "turns": model.get("turns"),
                 "model_active_seconds": model.get("model_active_seconds"),
                 "processed_tokens_per_second": model.get("processed_tokens_per_second"),
+                "output_tokens_per_second": model.get("output_tokens_per_second"),
+                "decode_tokens_per_second": model.get("decode_tokens_per_second"),
                 "usage": compact_usage(model.get("usage")),
                 "cost": evidence_value(model.get("estimated_cost")),
                 "pricing": evidence_to_pricing(model.get("estimated_cost")),
@@ -588,6 +599,12 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     "model_active_seconds": runtime.get("model_active_seconds"),
                     "processed_tokens_per_second": runtime.get(
                         "processed_tokens_per_second"
+                    ),
+                    "output_tokens_per_second": runtime.get(
+                        "output_tokens_per_second"
+                    ),
+                    "decode_tokens_per_second": runtime.get(
+                        "decode_tokens_per_second"
                     ),
                     "wait_seconds": runtime.get("wait_seconds"),
                     "turns": runtime.get("turns"),
@@ -690,6 +707,12 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "model_active_seconds": runtime.get("model_active_seconds"),
                         "processed_tokens_per_second": runtime.get(
                             "processed_tokens_per_second"
+                        ),
+                        "output_tokens_per_second": runtime.get(
+                            "output_tokens_per_second"
+                        ),
+                        "decode_tokens_per_second": runtime.get(
+                            "decode_tokens_per_second"
                         ),
                         "wait_seconds": runtime.get("wait_seconds"),
                     }

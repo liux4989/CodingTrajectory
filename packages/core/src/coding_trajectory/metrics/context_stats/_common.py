@@ -35,7 +35,11 @@ from coding_trajectory.metrics.models import (
     SessionMetrics,
     TokenUsage,
 )
-from coding_trajectory.metrics.throughput import processed_tokens_per_second
+from coding_trajectory.metrics.throughput import (
+    decode_tokens_per_second,
+    output_tokens_per_second,
+    processed_tokens_per_second,
+)
 
 
 def root_session(session_graph: SessionGraph) -> Session:
@@ -115,6 +119,7 @@ def runtime_stats(
     wait_seconds = sum(_turn_wait_seconds(primary))
     model_active = primary_metrics.model_active_seconds
     processed_tokens = primary_metrics.token_usage.processed_token_total()
+    output_tokens = primary_metrics.token_usage.output_tokens
     first_token_durations = [
         observation.time_to_first_token_ms
         for observation in primary.runtime_observations
@@ -130,6 +135,15 @@ def runtime_stats(
         processed_tokens_per_second=processed_tokens_per_second(
             processed_tokens or 0,
             model_active,
+        ),
+        output_tokens_per_second=output_tokens_per_second(
+            output_tokens,
+            model_active,
+        ),
+        decode_tokens_per_second=decode_tokens_per_second(
+            sum(turn.decode_tokens for turn in primary_metrics.turns),
+            sum(turn.decode_seconds for turn in primary_metrics.turns),
+            sum(turn.decode_samples for turn in primary_metrics.turns),
         ),
         wait_seconds=wait_seconds,
         # Exclude low-value turns (no items, e.g. a compaction-only lifecycle)
