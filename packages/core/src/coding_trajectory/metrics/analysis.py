@@ -60,6 +60,7 @@ from coding_trajectory.metrics.pricing import (
 )
 from coding_trajectory.metrics.throughput import (
     decode_tokens_per_second,
+    estimated_output_tokens_per_second,
     output_tokens_per_second,
     processed_tokens_per_second,
 )
@@ -257,6 +258,9 @@ def build_session_graph_model_usage(
                         if len(groups) == 1
                         else None
                     ),
+                    estimated_output_tokens_per_second=estimated_output_tokens_per_second(
+                        [turn]
+                    ),
                     provider=primary.provider if primary else None,
                     model=primary.model if primary else None,
                     usage=turn.token_usage,
@@ -303,6 +307,12 @@ def build_session_graph_model_usage(
         model_active_seconds=full.model_active_seconds,
         processed_tokens_per_second=full.processed_tokens_per_second,
         output_tokens_per_second=full.output_tokens_per_second,
+        estimated_output_tokens_per_second=estimated_output_tokens_per_second(
+            turn
+            for session in full.sessions
+            for turn in session.turns
+            if turn_id is None or str(turn.turn_id) == turn_id
+        ),
         context=_context_for_session_graph(session_graph),
         models=models,
         dominant_model=DominantModelFlat(
@@ -611,6 +621,7 @@ def _turn_runtime(
             turn.token_usage.output_tokens,
             turn.model_active_seconds,
         ),
+        estimated_output_tokens_per_second=estimated_output_tokens_per_second([turn]),
         wait_before_seconds=wait_before_seconds,
     )
 

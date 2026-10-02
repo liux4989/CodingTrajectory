@@ -21,6 +21,7 @@ from coding_trajectory.ingestion.models import (
     TurnStatus,
     Vendor,
     VendorExtensions,
+    is_tool_shaped_item,
 )
 from coding_trajectory.ingestion.provenance import RecordSpan
 from coding_trajectory.ingestion.retention import CanonicalRetention
@@ -345,6 +346,46 @@ class AmpAdapter(BaseAdapter):
             ),
         )
         session.cwd = cwd
+        # Snapshots alone cannot establish historical execution windows. Require
+        # a matched successful lifecycle pair and live hooks for every tool.
+        live_windows = set()
+        for (event, key), (end, _) in observations.items():
+            start = observations.get(("agent.start", key))
+            if event == "agent.end" and end.status == "done" and start:
+                live_windows.add(
+                    (
+                        start[0].observed_at or start[0].captured_at,
+                        end.observed_at or end.captured_at,
+                    )
+                )
+        for turn in session.turns:
+            if (
+                turn.status != TurnStatus.COMPLETED
+                or (turn.started_at, turn.ended_at) not in live_windows
+            ):
+                continue
+            tools = [item for item in turn.items if is_tool_shaped_item(item)]
+            if any(
+                ("tool.call", item.tool_call_id) not in observations
+                or ("tool.result", item.tool_call_id) not in observations
+                or observations[("tool.result", item.tool_call_id)][0].status
+                not in {"done", "error", "cancelled"}
+                or item.completed_at is None
+                or not turn.started_at
+                <= item.started_at
+                <= item.completed_at
+                <= turn.ended_at
+                for item in tools
+            ):
+                continue
+            if any(
+                record.captured_at > turn.ended_at
+                for record, _, first in messages.values()
+                if record.message.get("role") == "assistant"
+                and turn.started_at <= first <= turn.ended_at
+            ):
+                continue
+            turn.timing_source = "live_hooks"
         session.status = (
             SessionStatus.LIVING
             if session.turns and session.turns[-1].status == TurnStatus.RUNNING

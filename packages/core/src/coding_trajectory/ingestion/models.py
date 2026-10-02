@@ -252,6 +252,7 @@ class ItemMeasurements(BaseModel):
     output_tokens: int = 0
     text_chars: int = 0
     text_tokens: int = 0
+    thinking_tokens: int = Field(default=0, ge=0)
     projection_only: bool = False
     output_truncated: bool = False
     output_original_tokens: int | None = None
@@ -403,6 +404,9 @@ class Turn(BaseModel):
     items: list[Item] = Field(default_factory=list)
     team_state: TeamTurnState | None = None
     status: TurnStatus = TurnStatus.COMPLETED
+    # Both boundaries and every tool interval have live hook observations.
+    # This is observation provenance, not provider inference timing.
+    timing_source: Literal["live_hooks"] | None = None
 
 
 class Session(BaseModel):

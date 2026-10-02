@@ -129,6 +129,45 @@ samples. Tokens are counted with the session's effective tokenizer, so the rate
 is an estimate, and it covers tool-call arguments only, not reasoning or
 message text. It is attributed to a model only for single-model turns.
 
+### Amp observed throughput estimate
+
+`estimated_output_tokens_per_second` is separate from both provider-throughput
+fields above. For Amp it measures:
+
+```text
+(estimated captured assistant text + thinking + tool-argument tokens)
+/ (live-observed turn seconds − union of live-observed tool windows)
+```
+
+Only completed turns with matched `agent.start`/successful `agent.end` hooks and
+terminal live call/result hooks for every tool qualify. Tool intervals must lie
+inside the turn and have ordered boundaries. Replayed snapshots, late message
+revisions, interrupted/running turns, and nonpositive non-tool windows do not
+qualify. Tool results, user prompts, and idle gaps between turns are excluded.
+Revisions count once by message ID; distinct messages count separately even if
+their text matches. Only captured thinking is counted, not hidden reasoning.
+
+The estimate appears in `session.stats`/`graph.stats` runtime, usage runtime and
+turn runtime, and at the top level and per turn of `session.model_usage`; CLI
+compact JSON preserves it. Runtime aggregates cover the root session, not
+overlapping subagents; the model-usage top level covers the selected session's
+turns. Aggregate rates divide summed tokens by summed non-tool seconds,
+never average turn rates, and are omitted if any included turn is ineligible.
+Eligible individual turns still retain their own rates.
+
+Content uses the existing effective tokenizer (normally `cl100k_base` as an Amp
+proxy, with the existing offline fallback). Counts and live-timing provenance
+survive body-free fact publication. Old artifacts without that provenance do
+not acquire a fabricated estimate. Upgrade readers/authority and collectors
+together before publishing new facts; preparation v7 invalidates the local
+disposable cache, but existing remote artifacts require explicit republication.
+
+The denominator includes first-token latency, prefill, plugin overhead, and
+other non-tool waiting. This is **not provider-reported generation or pure
+decode speed**, and is not attributed to a guessed model. Amp provider usage,
+cost, `output_tokens_per_second`, and `decode_tokens_per_second` remain
+unavailable without a separate evidence source.
+
 ## Allocated item cost
 
 `session.tool_usage` exposes per-tool allocation by default and adds the full

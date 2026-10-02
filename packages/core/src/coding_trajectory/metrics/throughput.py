@@ -12,8 +12,18 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import NamedTuple
 
-from coding_trajectory.analysis.content_size import item_input_size
-from coding_trajectory.ingestion.models import Turn, Vendor, is_tool_shaped_item
+from coding_trajectory.analysis.content_size import (
+    item_input_size,
+    item_text_size,
+    item_thinking_tokens,
+)
+from coding_trajectory.ingestion.models import (
+    Turn,
+    TurnStatus,
+    Vendor,
+    is_tool_shaped_item,
+)
+from coding_trajectory.metrics.models import TurnMetrics
 
 # A decode sample shorter than either bound is dominated by log-write jitter.
 _MIN_DECODE_SAMPLE_TOKENS = 20
@@ -92,6 +102,43 @@ def output_tokens_per_second(
     the model-active window: time to first token and prefill are included.
     """
     return processed_tokens_per_second(output_tokens, active_seconds)
+
+
+def estimated_output_tokens(turn: Turn, vendor: Vendor) -> int | None:
+    """Captured Amp generation content, never provider-reported consumption."""
+    if (
+        vendor != Vendor.AMP
+        or turn.status != TurnStatus.COMPLETED
+        or turn.timing_source != "live_hooks"
+    ):
+        return None
+    return sum(
+        item_input_size(item).tokens
+        if is_tool_shaped_item(item)
+        else item_text_size(item).tokens + item_thinking_tokens(item)
+        for item in turn.items
+    )
+
+
+def estimated_output_tokens_per_second(turns: Iterable[TurnMetrics]) -> float | None:
+    """Weight complete live-observed turns by time, not by their individual rates.
+
+    A partial selection is not silently presented as whole-session throughput.
+    Hook time minus the union of tool windows still includes latency, prefill,
+    plugin overhead, and other non-tool waiting; this is not decoder-busy time.
+    """
+    selected = list(turns)
+    if not selected or any(
+        turn.estimated_output_tokens is None
+        or turn.model_active_seconds is None
+        or turn.model_active_seconds <= 0
+        for turn in selected
+    ):
+        return None
+    return processed_tokens_per_second(
+        sum(turn.estimated_output_tokens for turn in selected),
+        sum(turn.model_active_seconds for turn in selected),
+    )
 
 
 def decode_samples(turn: Turn, vendor: Vendor) -> list[DecodeSample]:

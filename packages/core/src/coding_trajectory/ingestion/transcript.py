@@ -851,7 +851,9 @@ class TranscriptProjector:
         items = current_turn.items
         if items:
             last = items[-1]
-            if isinstance(last, AgentMessageItem):
+            # Amp already deduplicates revisions by message ID. Distinct Amp
+            # messages with identical text are separate generated content.
+            if isinstance(last, AgentMessageItem) and self.vendor != Vendor.AMP:
                 last_text = self._turn_state._last_agent_text if compact else last.text
                 if last_text == text:
                     for event_id in event_ids:

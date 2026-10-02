@@ -129,6 +129,7 @@ class TurnFactPayload(FactModel):
     started_at: datetime
     completed_at: datetime | None = None
     status: str = Field(max_length=512)
+    timing_source: Literal["live_hooks"] | None = None
     user_request: ChronicleUserRequest | None = None
     team_state: ChronicleTeamState | None = None
 
@@ -901,6 +902,7 @@ def _assemble_fact_rows(
                         started_at=turn.started_at,
                         completed_at=turn.completed_at,
                         status=turn.status,
+                        timing_source=turn.timing_source,
                         user_request=turn.user_request,
                         team_state=turn.team_state,
                     ),

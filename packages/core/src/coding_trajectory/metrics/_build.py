@@ -31,6 +31,7 @@ from coding_trajectory.metrics.models import (
 from coding_trajectory.metrics.pricing import _uses_net_input_convention
 from coding_trajectory.metrics.throughput import (
     decode_samples,
+    estimated_output_tokens,
     model_active_seconds,
     output_tokens_per_second,
     processed_tokens_per_second,
@@ -143,6 +144,7 @@ def _build_turn_metrics(
         completed_at=turn.ended_at,
         token_usage=total,
         model_active_seconds=model_active_seconds(turn),
+        estimated_output_tokens=estimated_output_tokens(turn, session.vendor),
         decode_tokens=sum(sample.tokens for sample in decode),
         decode_seconds=sum(sample.seconds for sample in decode),
         decode_samples=len(decode),

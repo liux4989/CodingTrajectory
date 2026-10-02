@@ -37,6 +37,7 @@ from coding_trajectory.metrics.models import (
 )
 from coding_trajectory.metrics.throughput import (
     decode_tokens_per_second,
+    estimated_output_tokens_per_second,
     output_tokens_per_second,
     processed_tokens_per_second,
 )
@@ -144,6 +145,9 @@ def runtime_stats(
             sum(turn.decode_tokens for turn in primary_metrics.turns),
             sum(turn.decode_seconds for turn in primary_metrics.turns),
             sum(turn.decode_samples for turn in primary_metrics.turns),
+        ),
+        estimated_output_tokens_per_second=estimated_output_tokens_per_second(
+            primary_metrics.turns
         ),
         wait_seconds=wait_seconds,
         # Exclude low-value turns (no items, e.g. a compaction-only lifecycle)

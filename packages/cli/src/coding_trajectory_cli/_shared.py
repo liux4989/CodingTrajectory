@@ -437,6 +437,9 @@ def compact_usage_turn(turn: Any) -> Any:
                     "output_tokens_per_second": (turn.get("runtime") or {}).get(
                         "output_tokens_per_second"
                     ),
+                    "estimated_output_tokens_per_second": (
+                        turn.get("runtime") or {}
+                    ).get("estimated_output_tokens_per_second"),
                     "wait_before_seconds": (turn.get("runtime") or {}).get(
                         "wait_before_seconds"
                     ),
@@ -481,11 +484,10 @@ def compact_usage_session(session: Any) -> Any:
                     "processed_tokens_per_second": runtime.get(
                         "processed_tokens_per_second"
                     ),
-                    "output_tokens_per_second": runtime.get(
-                        "output_tokens_per_second"
-                    ),
-                    "decode_tokens_per_second": runtime.get(
-                        "decode_tokens_per_second"
+                    "output_tokens_per_second": runtime.get("output_tokens_per_second"),
+                    "decode_tokens_per_second": runtime.get("decode_tokens_per_second"),
+                    "estimated_output_tokens_per_second": runtime.get(
+                        "estimated_output_tokens_per_second"
                     ),
                     "wait_seconds": runtime.get("wait_seconds"),
                     "turns": runtime.get("turns"),
@@ -600,11 +602,10 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     "processed_tokens_per_second": runtime.get(
                         "processed_tokens_per_second"
                     ),
-                    "output_tokens_per_second": runtime.get(
-                        "output_tokens_per_second"
-                    ),
-                    "decode_tokens_per_second": runtime.get(
-                        "decode_tokens_per_second"
+                    "output_tokens_per_second": runtime.get("output_tokens_per_second"),
+                    "decode_tokens_per_second": runtime.get("decode_tokens_per_second"),
+                    "estimated_output_tokens_per_second": runtime.get(
+                        "estimated_output_tokens_per_second"
                     ),
                     "wait_seconds": runtime.get("wait_seconds"),
                     "turns": runtime.get("turns"),
@@ -713,6 +714,9 @@ def compact_payload(method: str, payload: Any) -> Any:
                         ),
                         "decode_tokens_per_second": runtime.get(
                             "decode_tokens_per_second"
+                        ),
+                        "estimated_output_tokens_per_second": runtime.get(
+                            "estimated_output_tokens_per_second"
                         ),
                         "wait_seconds": runtime.get("wait_seconds"),
                     }

@@ -155,6 +155,15 @@ def item_text_size(item: Item) -> ContentSize:
     return visible_text_size(getattr(item, "text", None) or "")
 
 
+def item_thinking_tokens(item: Item) -> int:
+    """Size captured thinking blocks, including after their bodies are dropped."""
+    if item.measurements is not None:
+        return item.measurements.thinking_tokens
+    return sum(
+        visible_text_size(text).tokens for text in item.vendor_data.get("thinking", [])
+    )
+
+
 def _measured_size(chars: int, tokens: int) -> ContentSize:
     return ContentSize(
         chars=chars,

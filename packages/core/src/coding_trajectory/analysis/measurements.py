@@ -17,6 +17,7 @@ from uuid import UUID
 from coding_trajectory.analysis.content_size import (
     item_input_text,
     item_output_text,
+    item_thinking_tokens,
     output_is_truncated,
     reported_token_count,
     tool_input_summary,
@@ -77,6 +78,7 @@ def extract_item_measurements(item: Item) -> ItemMeasurements:
         output_tokens=output_size.tokens,
         text_chars=text_size.chars,
         text_tokens=text_size.tokens,
+        thinking_tokens=item_thinking_tokens(item),
         projection_only=is_projection_only_item(item),
         output_truncated=output_is_truncated(output_text),
         output_original_tokens=reported_token_count(output_text),

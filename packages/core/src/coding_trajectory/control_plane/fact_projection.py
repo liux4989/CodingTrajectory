@@ -223,6 +223,8 @@ class ChronicleItemMeasurements(ChronicleModel):
     output_tokens: int = Field(default=0, ge=0)
     text_chars: int = Field(default=0, ge=0)
     text_tokens: int = Field(default=0, ge=0)
+    # Omit absent/zero thinking so legacy immutable row hashes remain valid.
+    thinking_tokens: int | None = Field(default=None, ge=0)
     projection_only: bool = False
     output_truncated: bool = False
     output_original_tokens: int | None = Field(default=None, ge=0)
@@ -359,6 +361,7 @@ class ChronicleTurn(ChronicleModel):
     started_at: datetime
     completed_at: datetime | None = None
     status: _BoundedString
+    timing_source: Literal["live_hooks"] | None = None
     user_request: ChronicleUserRequest | None = None
     requests: list[ChronicleRequestUsage] = Field(default_factory=list)
     items: list[ChronicleItem] = Field(default_factory=list)
@@ -693,6 +696,7 @@ def _build_chronicle_turn(
         started_at=turn.started_at,
         completed_at=turn.ended_at,
         status=turn.status.value,
+        timing_source=turn.timing_source,
         user_request=_build_user_request(turn, request, index=index),
         requests=[
             _build_request_usage(observation)
@@ -842,6 +846,7 @@ def _build_chronicle_item(
             output_tokens=measurements.output_tokens,
             text_chars=measurements.text_chars,
             text_tokens=measurements.text_tokens,
+            thinking_tokens=measurements.thinking_tokens or None,
             projection_only=measurements.projection_only,
             output_truncated=measurements.output_truncated,
             output_original_tokens=measurements.output_original_tokens,
@@ -1316,6 +1321,7 @@ def _to_session(value: ChronicleSession) -> Session:
                 ],
                 team_state=_to_team_state(turn.team_state),
                 status=turn.status,
+                timing_source=turn.timing_source,
             )
         )
     measurements = SessionMeasurements(
@@ -1377,7 +1383,10 @@ def _to_item(value: ChronicleItem, session_id: UUID, turn_id: UUID) -> Item:
                 tool_summary.detail.truncated
             )
     measurements = ItemMeasurements(
-        **value.measurements.model_dump(mode="python", exclude={"tool_summary"}),
+        **value.measurements.model_dump(
+            mode="python", exclude={"tool_summary", "thinking_tokens"}
+        ),
+        thinking_tokens=value.measurements.thinking_tokens or 0,
         tool_summary=restored_tool_summary,
     )
     vendor_data: dict[str, Any] = {

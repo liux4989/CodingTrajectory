@@ -167,6 +167,23 @@ observation times from execution ground truth; task-text prediction remains
 available. No exact model inference duration, cache accounting, or billed cost
 is reconstructed from message lengths.
 
+Amp now exposes a separate `estimated_output_tokens_per_second` in stats and
+usage runtime and in session/turn model-usage projections. It divides estimated
+captured assistant text, thinking, and tool arguments by completed live-observed
+turn time minus the union of live-observed tool windows. User prompts, tool
+results, and inter-turn idle time are excluded. Complete matching lifecycle and
+tool hooks are required; replayed or incomplete timing yields no rate. Session
+aggregates require every included turn to qualify and use summed tokens/seconds,
+not an average of turn rates. Model routing is not inferred.
+
+This is an observed-content estimate, not provider output-token consumption or
+decoder speed. The published facts retain counts, not thinking bodies, and
+live-timing provenance. Preparation v7 refreshes disposable local caches; remote
+readers/authority and collectors must be upgraded together and existing remote
+artifacts explicitly republished to gain the new evidence. No deployment or
+publication happens automatically. See the
+[throughput glossary](token-usage-glossary.md#amp-observed-throughput-estimate).
+
 ## Linux orb credentials and retry
 
 A successful local scan proves discovery only. Configure a scoped Cloudflare
