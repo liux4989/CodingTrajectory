@@ -249,6 +249,7 @@ def context_usage_observation(
 
     return ContextUsageObservation(
         source_event_id=source_event_id,
+        provider_response_id=_as_str(normalized.get("provider_response_id")),
         timestamp=timestamp,
         source=source,
         model=_as_str(metrics.get("model")),

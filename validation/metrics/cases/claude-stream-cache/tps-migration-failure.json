@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "status": "fail",
+  "pricing_artifact_version": "2026-07-15-baseline-v1",
+  "cases": [
+    {
+      "case": "codex-fork-runtime",
+      "provider": "codex_cli",
+      "status": "pass",
+      "assertions": 40,
+      "structural_assertions": 13,
+      "invariants": 12,
+      "differences": []
+    },
+    {
+      "case": "claude-stream-cache",
+      "provider": "claude_code",
+      "status": "fail",
+      "assertions": 40,
+      "structural_assertions": 9,
+      "invariants": 12,
+      "differences": [
+        {
+          "case": "claude-stream-cache",
+          "surface": "session.usage",
+          "scope": "$.runtime",
+          "field": "$.runtime.output_tokens_per_second",
+          "expected": 5.657,
+          "actual": 5.019,
+          "source_refs": [
+            "source/session.jsonl:2",
+            "source/session.jsonl:3",
+            "source/session.jsonl:5",
+            "source/session.jsonl:1",
+            "source/session.jsonl:4"
+          ],
+          "audit_ref": "audit.md#model-throughput",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        },
+        {
+          "case": "claude-stream-cache",
+          "surface": "session.model_usage",
+          "scope": "$.models[0]",
+          "field": "$.models[0].output_tokens_per_second",
+          "expected": 5.657,
+          "actual": 5.019,
+          "source_refs": [
+            "source/session.jsonl:2",
+            "source/session.jsonl:3",
+            "source/session.jsonl:5",
+            "source/session.jsonl:1",
+            "source/session.jsonl:4"
+          ],
+          "audit_ref": "audit.md#model-throughput",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        }
+      ]
+    },
+    {
+      "case": "pi-reported-cost",
+      "provider": "pi",
+      "status": "pass",
+      "assertions": 43,
+      "structural_assertions": 9,
+      "invariants": 12,
+      "differences": []
+    },
+    {
+      "case": "codex-interagent-turn",
+      "provider": "codex_cli",
+      "status": "pass",
+      "assertions": 66,
+      "structural_assertions": 19,
+      "invariants": 20,
+      "differences": []
+    }
+  ]
+}

@@ -138,7 +138,15 @@ use a different label.
 
 ### Output speed
 
-`output_tokens_per_second` is `completion_tokens / model_active_seconds`.
+`output_tokens_per_second` divides output tokens by `model_active_seconds`.
+For Claude, stream records with the same provider response ID repeat or advance
+a cumulative output count. Use the highest count once per response within its
+turn; recorded usage totals and cost estimates continue to include every record.
+Missing response IDs make Claude output speed unavailable. The ID is retained
+on canonical usage observations and published request facts, so measurements
+retention and prepared reads use the same numerator. Previously published facts
+without those IDs cannot reconstruct the corrected speed. Other vendors keep
+their existing output-token accounting.
 The time includes processing the prompt and waiting for the first output token.
 Codex includes reasoning in its output count. When a provider reports reasoning
 separately, it is not added to the output count used here.

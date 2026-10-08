@@ -61,6 +61,7 @@ from coding_trajectory.metrics.pricing import (
 from coding_trajectory.metrics.throughput import (
     decode_tokens_per_second,
     estimated_output_tokens_per_second,
+    output_tokens_for_throughput,
     output_tokens_per_second,
     processed_tokens_per_second,
 )
@@ -252,7 +253,7 @@ def build_session_graph_model_usage(
                     ),
                     output_tokens_per_second=(
                         output_tokens_per_second(
-                            turn.token_usage.output_tokens,
+                            output_tokens_for_throughput(turn.observations),
                             turn.model_active_seconds,
                         )
                         if len(groups) == 1
@@ -620,7 +621,7 @@ def _turn_runtime(
             turn.model_active_seconds,
         ),
         output_tokens_per_second=output_tokens_per_second(
-            turn.token_usage.output_tokens,
+            output_tokens_for_throughput(turn.observations),
             turn.model_active_seconds,
         ),
         estimated_output_tokens_per_second=estimated_output_tokens_per_second([turn]),
@@ -656,7 +657,12 @@ def _model_groups_for_turn(turn: TurnMetrics) -> list[ModelUsageModelFlat]:
                 else None
             ),
             output_tokens_per_second=(
-                output_tokens_per_second(usage.output_tokens, turn.model_active_seconds)
+                output_tokens_per_second(
+                    output_tokens_for_throughput(
+                        observations_by_model.get((provider, model), [])
+                    ),
+                    turn.model_active_seconds,
+                )
                 if single_model
                 else None
             ),
@@ -689,7 +695,13 @@ def _model_usage_breakdown(
     active_seconds_complete: dict[tuple[str | None, str | None], bool] = {}
     decode_totals: dict[tuple[str | None, str | None], list[float]] = {}
     model_costs: dict[tuple[str | None, str | None], list[CostEvidenceFlat | None]] = {}
+    output_observations: dict[
+        tuple[str | None, str | None], list[TokenUsageObservation]
+    ] = {}
     for turn in turn_list:
+        for observation in turn.observations:
+            key = (observation.provider, observation.model)
+            output_observations.setdefault(key, []).append(observation)
         groups = _model_groups_for_turn(turn)
         for group in groups:
             key = (group.provider, group.model)
@@ -731,7 +743,9 @@ def _model_usage_breakdown(
                 ),
             ),
             output_tokens_per_second=output_tokens_per_second(
-                usage.output_tokens,
+                output_tokens_for_throughput(
+                    output_observations.get((provider, model), [])
+                ),
                 (
                     active_seconds[(provider, model)]
                     if active_seconds_complete.get((provider, model), True)

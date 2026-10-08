@@ -158,6 +158,7 @@ class ChronicleUsageCategory(ChronicleModel):
 
 class ChronicleRequestUsage(ChronicleModel):
     request_id: UUID
+    provider_response_id: _BoundedString | None = None
     timestamp: datetime
     source: _BoundedString
     model: _BoundedString | None = None
@@ -756,6 +757,7 @@ def _build_user_request(
 def _build_request_usage(observation: ContextUsageObservation) -> ChronicleRequestUsage:
     return ChronicleRequestUsage(
         request_id=observation.source_event_id,
+        provider_response_id=observation.provider_response_id,
         timestamp=observation.timestamp,
         source=observation.source,
         model=observation.model,
@@ -1303,6 +1305,7 @@ def _to_session(value: ChronicleSession) -> Session:
             context_usage.append(
                 ContextUsageObservation(
                     source_event_id=request.request_id,
+                    provider_response_id=request.provider_response_id,
                     timestamp=request.timestamp,
                     source=request.source,
                     model=request.model,

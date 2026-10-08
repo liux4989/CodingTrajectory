@@ -32,13 +32,34 @@ unavailable; the historical display omission described above is no longer used.
 
 ## Output token throughput
 
-The numerator is recorded output tokens: both response-1 stream fragments (47 each, `source/session.jsonl:2,3`) plus response-2 (323, `source/session.jsonl:5`) = 417 output tokens. Over the same model-active denominator as above, the source-derived rate is `417 / 73.718` = 5.657 output tokens/second. Repeated usage is included, so this is not deduplicated generation throughput. It is an end-to-end model-active rate, so time to first token and prefill are included.
+The output-speed numerator counts each provider response once. Lines 2 and 3
+both identify `response-1` and report the same cumulative 47 output tokens.
+Its contribution is `max(47, 47) = 47`, not 94. Line 5 identifies `response-2`
+with 323 output tokens. Thus the numerator is `47 + 323 = 370`, and the
+source-derived rate is `370 / (75.245 - 1.527) = 370 / 73.718 = 5.019` output
+tokens/second, rounded to three decimals. Time to first token and prefill remain
+included in the model-active denominator.
+
+This intentionally replaces the old `417 / 73.718 = 5.657` output rate across
+stats, usage runtimes, model summaries, and model turn rows. Recorded output
+remains 417, processed tokens remain 117,563, processed throughput remains
+1,594.767, and recorded-usage cost estimates remain unchanged. Output speed
+and recorded usage now have distinct numerators.
+
+The migration failure report is retained as `tps-migration-failure.json`.
+The replacement value was reconstructed independently from committed source
+IDs, token counts, and timestamps, rather than copied from that report.
+Response IDs are retained in canonical observations and optional
+`provider_response_id` published request facts. Older facts without response
+identity omit Claude output speed. Source hashes and sanitized evidence are
+unchanged. The source and arithmetic cross-check is not independent
+organizational sign-off.
 
 ## Execution split
 
 The turn spans 75.245 seconds (source/session.jsonl:1,5). The tool spans 1.527 seconds (lines 3–4), leaving 73.718 seconds of estimated LLM time.
 
-These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.
+These additive assertions derive from committed timestamps, not command output. Execution and processed-throughput expectations remain unchanged; output throughput follows the deduplication migration above. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.
 
 
 ## Recorded cost and net cache savings

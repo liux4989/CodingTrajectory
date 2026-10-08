@@ -164,6 +164,7 @@ class TokenUsageObservation(BaseModel):
     usage: TokenUsage
     provider: str | None = None
     model: str | None = None
+    provider_response_id: str | None = Field(default=None, exclude=True)
     source: MetricSource
 
 

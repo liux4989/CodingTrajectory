@@ -160,6 +160,7 @@ class ContextCategoryObservation(BaseModel):
 
 class ContextUsageObservation(BaseModel):
     source_event_id: UUID | None = None
+    provider_response_id: str | None = None
     timestamp: datetime
     source: str
     model: str | None = None

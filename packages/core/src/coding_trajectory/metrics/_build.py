@@ -33,6 +33,7 @@ from coding_trajectory.metrics.throughput import (
     decode_samples,
     estimated_output_tokens,
     execution_timing,
+    output_tokens_for_throughput,
     output_tokens_per_second,
     processed_tokens_per_second,
 )
@@ -77,7 +78,9 @@ def _build_full_metrics(
             graph_active_seconds,
         ),
         output_tokens_per_second=output_tokens_per_second(
-            total.output_tokens,
+            output_tokens_for_throughput(
+                observation for turn in all_turns for observation in turn.observations
+            ),
             graph_active_seconds,
         ),
         sessions=session_metrics,
@@ -108,7 +111,9 @@ def _build_session_metrics(
             session_active_seconds,
         ),
         output_tokens_per_second=output_tokens_per_second(
-            session_total.output_tokens,
+            output_tokens_for_throughput(
+                observation for turn in turn_metrics for observation in turn.observations
+            ),
             session_active_seconds,
         ),
         turns=turn_metrics,
@@ -189,6 +194,7 @@ def _usage_from_context_observation(
         usage=token_usage,
         provider=provider,
         model=observation.model,
+        provider_response_id=observation.provider_response_id,
         source=MetricSource(
             vendor=session.vendor.value,
             source_type="session.context_usage",

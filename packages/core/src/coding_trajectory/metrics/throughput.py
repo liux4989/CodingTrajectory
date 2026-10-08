@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from itertools import pairwise
 from typing import NamedTuple
+from uuid import UUID
 
 from coding_trajectory.analysis.content_size import (
     item_input_size,
@@ -25,7 +26,7 @@ from coding_trajectory.ingestion.models import (
     Vendor,
     is_tool_shaped_item,
 )
-from coding_trajectory.metrics.models import TurnMetrics
+from coding_trajectory.metrics.models import TokenUsageObservation, TurnMetrics
 
 # A decode sample shorter than either bound is dominated by log-write jitter.
 _MIN_DECODE_SAMPLE_TOKENS = 20
@@ -133,7 +134,7 @@ def processed_tokens_per_second(
 
 
 def output_tokens_per_second(
-    output_tokens: int,
+    output_tokens: int | None,
     active_seconds: float | None,
 ) -> float | None:
     """Return output speed: recorded output tokens divided by model time.
@@ -142,7 +143,33 @@ def output_tokens_per_second(
     added here. Model time includes prompt processing and waiting for the
     first output token.
     """
+    if output_tokens is None:
+        return None
     return processed_tokens_per_second(output_tokens, active_seconds)
+
+
+def output_tokens_for_throughput(
+    observations: Iterable[TokenUsageObservation],
+) -> int | None:
+    """Count Claude cumulative response output once without changing usage.
+
+    Stream fragments repeat (or advance) a response's cumulative output count.
+    Take the maximum per response within its turn and session. Without response
+    identity, Claude output throughput is unavailable rather than inflated.
+    Other vendors retain their existing per-observation output accounting.
+    """
+    responses: dict[tuple[UUID, str], int] = {}
+    output_tokens = 0
+    for observation in observations:
+        if observation.source.vendor != Vendor.CLAUDE_CODE.value:
+            output_tokens += observation.usage.output_tokens
+            continue
+        response_id = observation.provider_response_id
+        if not response_id:
+            return None
+        key = (observation.scope_id, response_id)
+        responses[key] = max(responses.get(key, 0), observation.usage.output_tokens)
+    return output_tokens + sum(responses.values())
 
 
 def estimated_output_tokens(turn: Turn, vendor: Vendor) -> int | None:
