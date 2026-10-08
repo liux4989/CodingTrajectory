@@ -116,18 +116,22 @@ def build_session_graph_context_stats(
             vendor=vendor.value,
         )
     if provider_usage_buckets:
-        _record_context_warning(
-            warnings,
+        # Separate accounting buckets are expected; retain the explanation
+        # in diagnostics without treating it as a context anomaly.
+        debug.warn(
             "Provider input counts are reported separately from the visible context breakdown.",
             code="context.provider_buckets_separate",
+            severity="info",
             vendor=vendor.value,
         )
     if context_window_inferred:
-        _record_context_warning(
-            warnings,
-            f"Context window of {context_window} tokens inferred from a static model "
-            f"catalog; {vendor.value} logs do not report the model context window.",
+        # The resolver also accepts explicit model aliases and a live catalog.
+        # A successful fallback is informational, not an anomaly.
+        debug.warn(
+            f"Context window of {context_window} tokens inferred from model "
+            f"metadata; the {vendor.value} usage observation does not report the model context window.",
             code="context.window_inferred",
+            severity="info",
             vendor=vendor.value,
         )
 
