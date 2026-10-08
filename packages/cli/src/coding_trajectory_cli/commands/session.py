@@ -451,19 +451,28 @@ def _render_context_category(
     label = str(category.get("label") or category.get("key") or "-")
     display_width = max(category_width - indent, 16)
     label = one_line(label, limit=display_width)
+    token_text = (
+        format_tokens(category["tokens"])
+        if category.get("tokens") is not None
+        else "unknown"
+    )
+    percent_text = (
+        format_percent(category["percent"])
+        if category.get("percent") is not None
+        else ""
+    )
     if include_allocated_usage:
         allocated_usage = category.get("allocated_usage")
         if allocated_usage is None:
             allocated_usage = category.get("real_tokens")
         lines.append(
-            f"{' ' * indent}{label:<{display_width}} {format_tokens(category.get('tokens')):>7} "
+            f"{' ' * indent}{label:<{display_width}} {token_text:>7} "
             f"{_format_allocated_usage(allocated_usage):>{CONTEXT_USAGE_WIDTH}} "
-            f"{format_percent(category.get('percent')):>8}"
+            f"{percent_text:>8}"
         )
     else:
         lines.append(
-            f"{' ' * indent}{label:<{display_width}} {format_tokens(category.get('tokens')):>7} "
-            f"{format_percent(category.get('percent')):>8}"
+            f"{' ' * indent}{label:<{display_width}} {token_text:>7} {percent_text:>8}"
         )
     for child in category.get("children") or []:
         if isinstance(child, dict):

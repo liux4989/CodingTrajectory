@@ -157,6 +157,16 @@ def extract_session_measurements(session: Session) -> SessionMeasurements:
         )
     return SessionMeasurements(
         context_sources=sources,
+        compaction_history=[
+            ContextSourceMeasurement(
+                timestamp=source.timestamp,
+                key=source.key,
+                label=source.label,
+                chars=(size := visible_text_size(source.text)).chars,
+                tokens=size.tokens,
+            )
+            for source in session.compaction_history
+        ],
         llm_response_count=semantic_assistant_response_count(session),
         llm_response_text_sizes=llm_text_sizes,
     )

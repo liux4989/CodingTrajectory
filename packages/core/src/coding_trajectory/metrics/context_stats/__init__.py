@@ -186,6 +186,10 @@ def _latest_context_usage(
 
 
 _ANCHOR_OUTCOME_WARNINGS = {
+    AnchorOutcome.UNAVAILABLE_HISTORY: (
+        "Compacted history is encrypted in the Codex log; its token count is "
+        "unavailable. Readable context estimates are not scaled to fill that gap."
+    ),
     AnchorOutcome.OVERCOUNT: (
         "Context composition overcounts the provider-reported used_input_tokens "
         "(e.g. reasoning the API stripped); observed estimates were retained "

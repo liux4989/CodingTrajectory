@@ -122,6 +122,8 @@ _CONTEXT_SOURCE_LABELS = {
     "mcp": frozenset({"Tools / MCP"}),
     "memory": frozenset({"Memory"}),
     "unattributed_context": frozenset({"Unattributed context"}),
+    "retained_user_input": frozenset({"Retained requests"}),
+    "compacted_history": frozenset({"Compacted history"}),
 }
 _BASE64_BODY = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 _HOST_PATH = re.compile(
@@ -1080,7 +1082,11 @@ def _build_session_measurements(
 ) -> ChronicleSessionMeasurements:
     return ChronicleSessionMeasurements(
         context_sources=[
-            _build_context_source(source) for source in measurements.context_sources
+            _build_context_source(source)
+            for source in [
+                *measurements.context_sources,
+                *measurements.compaction_history,
+            ]
         ],
         llm_response_count=measurements.llm_response_count,
         llm_response_text_sizes=[
@@ -1346,6 +1352,12 @@ def _to_session(value: ChronicleSession) -> Session:
         context_sources=[
             ContextSourceMeasurement(**source.model_dump(mode="python"))
             for source in value.measurements.context_sources
+            if source.key not in {"retained_user_input", "compacted_history"}
+        ],
+        compaction_history=[
+            ContextSourceMeasurement(**source.model_dump(mode="python"))
+            for source in value.measurements.context_sources
+            if source.key in {"retained_user_input", "compacted_history"}
         ],
         llm_response_count=value.measurements.llm_response_count,
         llm_response_text_sizes=[

@@ -58,6 +58,7 @@ class AnchorOutcome(Enum):
     # Provider ``used_input`` is below the starting prefix: visible content
     # overcounts (e.g. reasoning the API stripped), so estimates are retained.
     OVERCOUNT = "overcount"
+    UNAVAILABLE_HISTORY = "unavailable_history"
 
 
 @dataclass
@@ -146,21 +147,32 @@ def build_context_composition(
         boundaries=boundaries,
     )
     evicted = user_input[2].plus(agent_work[2])
+    history = _Measure(allocated_usage=evicted.allocated_usage)
+    history_unavailable = False
+    for session in session_graph.sessions:
+        boundary = boundaries[session.session_id]
+        for key, tokens, chars in _compaction_history_sizes(session, boundary):
+            if key == "compacted_history":
+                history.add(tokens=tokens, chars=chars)
+        history_unavailable |= _history_unavailable(session, boundary)
     categories = [
         _category("starting_context", "Starting context", starting[0], starting[1]),
         _category("user_input", "User input", user_input[0], user_input[1]),
         _category("agent_work", "Agent work", agent_work[0], agent_work[1]),
     ]
-    if evicted.items:
-        # Pre-compaction content the API evicted is not resident in the final
-        # context window, so it carries 0 visible tokens; but its historically
-        # billed usage must still reconcile to the stats attribution, so the
-        # allocated usage is retained on a separate (non-anchored) category.
-        categories.append(
-            _category("compacted_history", "Compacted history", evicted, [])
-        )
+    if evicted.items or history.items or history_unavailable:
+        # Only the replacement summary is resident. Preserve evicted items'
+        # historical usage here without treating their bodies as visible input.
+        category = _category("compacted_history", "Compacted history", history, [])
+        if history_unavailable:
+            category.tokens = None
+            category.observed_chars = None
+            category.items = (category.items or 0) + 1
+            category.confidence = "structural"
+            category.source = "encrypted Codex compaction; visible size unavailable"
+        categories.append(category)
     anchor_outcome = _anchor_composition_to_used_input(categories, session_graph)
-    observed_total = sum(category.tokens for category in categories)
+    observed_total = sum(category.tokens or 0 for category in categories)
     _set_percent(categories, observed_total)
     _assert_context_composition_usage_reconciles(
         categories,
@@ -192,6 +204,11 @@ def context_composition_anchor_outcome(
         session.session_id: _eviction_boundary(session)
         for session in session_graph.sessions
     }
+    if any(
+        _history_unavailable(session, boundaries[session.session_id])
+        for session in session_graph.sessions
+    ):
+        return AnchorOutcome.UNAVAILABLE_HISTORY
     if not _has_resident_conversation(session_graph, boundaries=boundaries):
         return AnchorOutcome.NO_CONVERSATION
 
@@ -256,20 +273,20 @@ def _anchor_composition_to_used_input(
     latest = _latest_context_usage_observation(session_graph)
     if latest is None or not latest.used_input_tokens:
         return AnchorOutcome.NO_USAGE
+    if any(category.tokens is None for category in categories):
+        # Scaling readable content into an opaque summary's share would invent
+        # an attribution the source cannot support.
+        return AnchorOutcome.UNAVAILABLE_HISTORY
     starting = next(
         (category for category in categories if category.key == "starting_context"),
         None,
     )
-    base_tokens = starting.tokens if starting is not None else 0
-    # ``compacted_history`` carries evicted (non-resident) content with 0 visible
-    # tokens; exclude it from the scaled conversation so the anchor only rescales
-    # resident user-input and agent-work categories.
+    base_tokens = (starting.tokens or 0) if starting is not None else 0
+    # Replacement summaries are resident conversation; evicted bodies are not.
     conversation = [
-        category
-        for category in categories
-        if category.key not in ("starting_context", "compacted_history")
+        category for category in categories if category.key != "starting_context"
     ]
-    conversation_visible = sum(category.tokens for category in conversation)
+    conversation_visible = sum(category.tokens or 0 for category in conversation)
     if conversation_visible <= 0:
         return AnchorOutcome.NO_CONVERSATION
     conversation_real = latest.used_input_tokens - base_tokens
@@ -283,7 +300,7 @@ def _anchor_composition_to_used_input(
 
 def _scale_category_tokens(category: ContextCategoryFlat, scale: float) -> None:
     if scale != 1.0:
-        category.tokens = max(round(category.tokens * scale), 0)
+        category.tokens = max(round((category.tokens or 0) * scale), 0)
     for child in category.children:
         _scale_category_tokens(child, scale)
 
@@ -326,6 +343,28 @@ def _is_resident(timestamp: datetime, boundary: datetime | None) -> bool:
     return boundary is None or timestamp >= boundary
 
 
+def _history_unavailable(session: Session, boundary: datetime | None) -> bool:
+    return any(
+        observation.timestamp == boundary
+        and observation.kind == "codex_encrypted_compaction"
+        for observation in session.runtime_observations
+    )
+
+
+def _compaction_history_sizes(
+    session: Session, boundary: datetime | None
+) -> Iterable[tuple[str, int, int]]:
+    if session.measurements is not None:
+        for source in session.measurements.compaction_history:
+            if source.timestamp == boundary:
+                yield source.key, source.tokens, source.chars
+        return
+    for source in session.compaction_history:
+        if source.timestamp == boundary:
+            size = visible_text_size(source.text)
+            yield source.key, size.tokens, size.chars
+
+
 def _has_resident_conversation(
     session_graph: SessionGraph,
     *,
@@ -334,6 +373,11 @@ def _has_resident_conversation(
     """Whether composition would assign positive tokens to conversation."""
     for session in session_graph.sessions:
         boundary = boundaries.get(session.session_id)
+        if any(
+            tokens
+            for _key, tokens, _chars in _compaction_history_sizes(session, boundary)
+        ):
+            return True
         if any(
             event.type == EventType.USER_PROMPT_SUBMITTED
             and _is_resident(event.timestamp, boundary)
@@ -471,6 +515,9 @@ def _user_input(
     prompt_index = 0
     for session in session_graph.sessions:
         boundary = boundaries.get(session.session_id)
+        for key, tokens, chars in _compaction_history_sizes(session, boundary):
+            if key == "retained_user_input":
+                buckets["user_retained_requests"].add(tokens=tokens, chars=chars)
         for event in session.events:
             if event.type != EventType.USER_PROMPT_SUBMITTED:
                 continue
@@ -496,6 +543,7 @@ def _user_input(
             )
             prompt_index += 1
     labels = {
+        "user_retained_requests": "Retained requests",
         "user_initial_request": "Initial request",
         "user_follow_up_requests": "Follow-up requests",
     }
@@ -940,7 +988,9 @@ def _category(
 def _set_percent(categories: Iterable[ContextCategoryFlat], denominator: int) -> None:
     for category in categories:
         category.percent = (
-            round((category.tokens / denominator) * 100, 1) if denominator else None
+            round((category.tokens / denominator) * 100, 1)
+            if denominator and category.tokens is not None
+            else None
         )
         _set_percent(category.children, denominator)
 
@@ -948,7 +998,7 @@ def _set_percent(categories: Iterable[ContextCategoryFlat], denominator: int) ->
 def _measure_from_categories(categories: Iterable[ContextCategoryFlat]) -> _Measure:
     return _sum(
         _Measure(
-            tokens=category.tokens,
+            tokens=category.tokens or 0,
             chars=category.observed_chars,
             items=category.items,
             allocated_usage=category.allocated_usage,

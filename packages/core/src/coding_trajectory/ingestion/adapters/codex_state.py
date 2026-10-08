@@ -64,6 +64,7 @@ class CodexParseState:
     context_window_tokens: int | None = None
     context_usage: list[ContextUsageObservation] = field(default_factory=list)
     runtime_observations: list[RuntimeObservation] = field(default_factory=list)
+    compaction_history: list[ContextSourceObservation] = field(default_factory=list)
     # Older rollouts follow a compacted record with a context_compacted event.
     # Pair once across metadata records, never across substantive activity.
     pending_compaction_event: bool = False

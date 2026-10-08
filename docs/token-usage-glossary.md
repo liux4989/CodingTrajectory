@@ -212,6 +212,21 @@ existing remote results requires explicitly authorized republication.
 
 ## Visible tokens and images
 
+After Codex compaction, visible context includes readable user messages and
+summaries from the latest `replacement_history`, plus later conversation items.
+Retained messages are context evidence; they do not create additional turns,
+requests, or recorded usage. Re-injected AGENTS.md and developer instructions
+remain starting context. Earlier replacement windows do not accumulate.
+
+An encrypted `compaction` block has no readable token count. Its
+`compacted_history.tokens` is `null`, its percentage is absent, and the CLI shows
+`unknown`. Readable estimates remain unscaled: assigning the hidden summary's
+tokens to user input or agent work would invent a breakdown. Historical usage
+allocated to evicted items is preserved independently of the summary's size.
+Prepared facts retain replacement text sizes and an encrypted-compaction runtime
+marker, without retaining the text or ciphertext. Existing published facts that
+lack this evidence cannot reconstruct it; local preparation refreshes from logs.
+
 Visible tokens are estimates of the input and output text we can read, counted
 with a tokenizer. For sizing, inline base64 image data is replaced by a marker
 saying the image was omitted. Only kept details, such as image type and dimensions,

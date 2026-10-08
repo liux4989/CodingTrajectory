@@ -285,6 +285,7 @@ class SessionMeasurements(BaseModel):
     """Session-level content primitives for body-free compact sessions."""
 
     context_sources: list[ContextSourceMeasurement] = Field(default_factory=list)
+    compaction_history: list[ContextSourceMeasurement] = Field(default_factory=list)
     # Semantic provider responses, deduplicated from persisted stream fragments.
     llm_response_count: int = 0
     llm_response_text_sizes: list[EventTextMeasurement] = Field(default_factory=list)
@@ -427,6 +428,8 @@ class Session(BaseModel):
     turns: list[Turn] = Field(default_factory=list)
     context_usage: list[ContextUsageObservation] = Field(default_factory=list)
     context_sources: list[ContextSourceObservation] = Field(default_factory=list)
+    # Replacement-window content, separate from historical events and billing.
+    compaction_history: list[ContextSourceObservation] = Field(default_factory=list)
     runtime_observations: list[RuntimeObservation] = Field(default_factory=list)
     measurements: SessionMeasurements | None = None
     extensions: VendorExtensions | None = None

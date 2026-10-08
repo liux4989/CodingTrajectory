@@ -48,6 +48,7 @@ from coding_trajectory.ingestion.common import (
     source_is_living,
 )
 from coding_trajectory.ingestion.models import (
+    ContextSourceObservation,
     EventType,
     RuntimeObservation,
     Session,
@@ -546,6 +547,9 @@ class CodexAdapter(BaseAdapter):
             parent_session_id=parent_session_id,
             runtime_observations=state.runtime_observations,
             session_fields={
+                "compaction_history": state.compaction_history
+                if retention == "trajectory"
+                else [],
                 "model": _as_non_empty_str(ctx.get("model")),
                 "reasoning_effort": _as_non_empty_str(ctx.get("effort")),
                 "agent_name": extensions.codex.agent_nickname
@@ -1020,17 +1024,64 @@ class CodexAdapter(BaseAdapter):
         compaction counting and the eviction boundary. A subsequent legacy
         event is paired once, avoiding a duplicate observation.
 
-        The ``replacement_history`` items are intentionally NOT re-projected
-        here: they overlap with pre-compaction ``response_item`` records already
-        in the transcript, and the canonical compaction observation correctly
-        marks those originals as evicted.
-        Re-projecting would double-count the surviving subset.
+        Replacement content is context evidence, never new turns or events.
+        Keep retained user text and readable summaries separately so composition
+        can restore the surviving subset without duplicating historical usage.
         """
+        message = _as_non_empty_str(payload.get("message"))
+        history = payload.get("replacement_history")
+        summary_seen = False
+        unavailable = False
+        for item in history if isinstance(history, list) else []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "compaction":
+                unavailable |= bool(item.get("encrypted_content"))
+                continue
+            if item.get("type") != "message":
+                continue
+            role = item.get("role")
+            if role not in {"user", "assistant"}:
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            text = "\n".join(
+                part["text"]
+                for part in content
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            )
+            if not text or _codex_user_prompt_block_name(text):
+                continue
+            is_summary = role == "assistant" or text == message
+            summary_seen |= text == message
+            state.compaction_history.append(
+                ContextSourceObservation(
+                    timestamp=ts,
+                    key="compacted_history" if is_summary else "retained_user_input",
+                    label="Compacted history" if is_summary else "Retained requests",
+                    text=text,
+                    source="codex_replacement_history",
+                )
+            )
+        if message and not summary_seen:
+            state.compaction_history.append(
+                ContextSourceObservation(
+                    timestamp=ts,
+                    key="compacted_history",
+                    label="Compacted history",
+                    text=message,
+                    source="codex_compaction_message",
+                )
+            )
         state.runtime_observations.append(
             RuntimeObservation(timestamp=ts, kind="context_compacted")
         )
+        if unavailable:
+            state.runtime_observations.append(
+                RuntimeObservation(timestamp=ts, kind="codex_encrypted_compaction")
+            )
         state.pending_compaction_event = True
-        message = _as_non_empty_str(payload.get("message"))
         window_number = payload.get("window_number")
         window_id = _as_non_empty_str(payload.get("window_id"))
         transcript.append(

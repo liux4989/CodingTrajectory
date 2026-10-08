@@ -210,7 +210,7 @@ class SessionGraphMetrics(BaseModel):
 class ContextCategoryFlat(BaseModel):
     key: str
     label: str
-    tokens: int = 0
+    tokens: int | None = 0
     allocated_usage: dict[str, int] | None = None
     estimated_cost: CostEvidenceFlat | None = None
     observed_chars: int | None = None
