@@ -122,8 +122,21 @@ def qualify_semantic_details(graph, root: Path) -> None:
         )
     assert prepare_graph(graph, cache_path=cache_path) == prepared
     assert prepare_graph(graph, cache_path=cache_path) == prepared
+    # Reuse within one implementation; rebuild the same source graph when the
+    # implementation changes, without changing the publication format version.
+    with (
+        patch.object(graph_preparation, "preparation_code_digest", return_value="f" * 64),
+        patch.object(
+            graph_preparation,
+            "build_fact_rows",
+            wraps=graph_preparation.build_fact_rows,
+        ) as rebuilt,
+    ):
+        assert prepare_graph(graph, cache_path=cache_path) == prepared
+        assert prepare_graph(graph, cache_path=cache_path) == prepared
+        assert rebuilt.call_count == 1
     print(
-        "PASS semantic detail publication/replay, credential redaction, and v5 cache invalidation"
+        "PASS semantic detail publication/replay, credential redaction, legacy and automatic code cache invalidation"
     )
     # More than eight later noise records must not displace useful activities.
     turn.items = turn.items + [

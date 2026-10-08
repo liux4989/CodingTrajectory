@@ -1,7 +1,7 @@
 """Shared, disposable preparation of local graphs for reads and publication.
 
-Source graphs remain authoritative. Cache keys include canonical graph content
-and the preparation version; publication limits are applied only at upload.
+Source graphs remain authoritative. Cache keys automatically account for graph
+content and preparation code; publication limits are applied only at upload.
 """
 
 from __future__ import annotations
@@ -9,13 +9,13 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from contextlib import closing
+from functools import cache
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from coding_trajectory.control_plane.artifact_protocol import (
-    ARTIFACT_PREPARATION_VERSION,
     PreparedGraphSummary,
 )
 from coding_trajectory.control_plane.fact_projection import build_fact_rows
@@ -56,6 +56,30 @@ def graph_input_digest(graph: SessionGraph) -> str:
     ).hexdigest()
 
 
+@cache
+def preparation_code_digest() -> str:
+    """Identify this process's Core implementation without manual cache versions.
+
+    A new CLI process reads the current package sources. Long-running services
+    keep one implementation identity until restart, like their imported code.
+    """
+    package = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    for source in sorted(package.rglob("*.py")):
+        digest.update(source.relative_to(package).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(source.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def preparation_cache_key(graph: SessionGraph) -> str:
+    """Use the same automatic identity for reusable preparation and publication."""
+    return hashlib.sha256(
+        (preparation_code_digest() + graph_input_digest(graph)).encode()
+    ).hexdigest()
+
+
 def prepared_graph_summary(index: FactIndex) -> PreparedGraphSummary:
     from coding_trajectory.service.handlers import SERVICE_HANDLERS, ServiceContext
     from coding_trajectory.service.store import IndexCache
@@ -92,7 +116,7 @@ def prepare_graph(
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Create privately before SQLite opens it; cached facts may contain previews.
     path.touch(mode=0o600, exist_ok=True)
-    key = f"{ARTIFACT_PREPARATION_VERSION}:{graph_input_digest(graph)}"
+    key = preparation_cache_key(graph)
     with closing(sqlite3.connect(path, timeout=30)) as connection, connection:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS prepared (key TEXT PRIMARY KEY, body BLOB NOT NULL)"

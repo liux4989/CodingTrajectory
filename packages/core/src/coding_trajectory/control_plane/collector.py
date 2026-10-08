@@ -58,7 +58,7 @@ from coding_trajectory.control_plane.collector_protocol import (
 )
 from coding_trajectory.control_plane.fact_projection import build_published_fact_set
 from coding_trajectory.control_plane.graph_preparation import (
-    graph_input_digest,
+    preparation_cache_key,
     prepare_graph,
     prepared_graph_summary,
 )
@@ -936,7 +936,9 @@ class LocalCollector:
                 for session in graph.sessions
                 for source in session_sources[session.session_id][1]
             ]
-            graph_input_sha256 = graph_input_digest(graph)
+            # Artifact reuse follows the same automatic preparation identity.
+            # The historical column name also covers implementation changes.
+            graph_input_sha256 = preparation_cache_key(graph)
             graph_preparation = (
                 prepare_graph(graph, cache_path=self.preparation_cache_path)
                 if self.preparation_cache_path is not None

@@ -56,7 +56,10 @@ Publication must not repair incorrect reconstruction or invent missing values.
 
 Graph preparation produces validated facts, summaries, and bounded API objects.
 Local reads and the collector share this computation. A disposable SQLite cache
-uses the canonical graph digest and preparation version as its key.
+uses one automatic key derived from canonical graph content and Core Python
+source code. Each new CLI process detects code edits without a manual version
+bump. Long-running services load a new code identity when restarted. Local
+reads use this SQLite cache directly; a batch reuses its already prepared graphs.
 Its default path is `~/.coding-trajectory/prepared-graphs.sqlite`; its payload
 budget is 128 MiB. Discovery, parsing, and hashing still detect changed sources.
 

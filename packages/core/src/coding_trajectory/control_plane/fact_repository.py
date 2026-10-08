@@ -19,7 +19,6 @@ from uuid import UUID
 
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.control_plane.artifact_protocol import (
-    ARTIFACT_PREPARATION_VERSION,
     ArtifactManifest,
     PreparedGraphSummary,
 )
@@ -30,7 +29,6 @@ from coding_trajectory.control_plane.fact_projection import (
 from coding_trajectory.control_plane.graph_preparation import (
     PreparedGraph,
     filter_session_cards,
-    graph_input_digest,
     prepare_graph,
 )
 from coding_trajectory.control_plane.published_facts import (
@@ -102,7 +100,6 @@ class LocalPublishedFactRepository:
         self._resolve = resolve
         self._require_available = require_available
         self._indexes: dict[tuple[Any, ...], tuple[FactIndex, str]] = {}
-        self._prepared_cache = ArtifactReadCache()
         self._batch_index: tuple[FactIndex, str] | None = None
         self._batch_prepared: list[PreparedGraph] | None = None
         self._identity: dict[str, Any] | None = None
@@ -134,17 +131,7 @@ class LocalPublishedFactRepository:
         self._batch_prepared = None
 
     def _prepare_store(self, store: DocumentStore) -> list[PreparedGraph]:
-        values = []
-        for graph in store.session_graphs.values():
-            key = ("local", ARTIFACT_PREPARATION_VERSION, graph_input_digest(graph))
-            prepared = self._prepared_cache.get(key)
-            if prepared is None:
-                prepared = prepare_graph(graph)
-                self._prepared_cache.put(
-                    key, prepared, len(prepared.model_dump_json().encode())
-                )
-            values.append(prepared)
-        return values
+        return [prepare_graph(graph) for graph in store.session_graphs.values()]
 
     def response_for(
         self, method: str, params: dict[str, Any]

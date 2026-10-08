@@ -198,8 +198,8 @@ model only when the source identifies that model. Amp provider usage, billed cos
 without separate evidence.
 
 Before publishing new measurements, update the readers, code that determines
-which evidence to trust, and collectors together. Changing the preparation
-version makes existing reusable caches out of date. Adding new source evidence to
+which evidence to trust, and collectors together. Local preparation detects
+source and Core code changes automatically. Adding new source evidence to
 existing remote results requires explicitly authorized republication.
 
 ## Visible tokens and images
@@ -210,5 +210,5 @@ saying the image was omitted. Only kept details, such as image type and dimensio
 contribute to visible token counts and context breakdowns. These counts do not
 estimate the provider's image-token cost.
 
-Saved graphs keep their existing measurements until the source content or
-preparation version changes. Updating a reader alone does not rewrite saved results.
+Reusable local results refresh when source content or Core code changes.
+Published remote snapshots retain their saved measurements until republished.
