@@ -30,7 +30,10 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 from coding_trajectory.ingestion.provenance import RecordSpan, SessionProvenance
-from coding_trajectory.ingestion.retention import retain_event_for_measurements
+from coding_trajectory.ingestion.retention import (
+    retain_event_for_measurements,
+    retain_tool_relationship_for_measurements,
+)
 
 TranscriptKind = Literal[
     "user_message",
@@ -732,7 +735,7 @@ class TranscriptProjector:
             "status": status if isinstance(status, str) else "requested",
             "event_ids": [self._turn_state.map_event_id(record.record_id)],
             "vendor_data": (
-                {}
+                retain_tool_relationship_for_measurements(vendor_data)
                 if self._compact is not None
                 else vendor_data
                 if isinstance(vendor_data, dict)
@@ -947,7 +950,11 @@ class TranscriptProjector:
             output=None if self._compact is not None else output,
             status=status or "completed",
             event_ids=[self._turn_state.map_event_id(eid) for eid in event_ids],
-            vendor_data={} if self._compact is not None else dict(vendor_data or {}),
+            vendor_data=(
+                retain_tool_relationship_for_measurements(vendor_data)
+                if self._compact is not None
+                else dict(vendor_data or {})
+            ),
         )
         compact_id = self._turn_state.next_item_id(
             kind="tool_call",
@@ -997,7 +1004,9 @@ class TranscriptProjector:
             mapped = self._turn_state.map_event_id(event_id)
             if mapped not in item.event_ids:
                 item.event_ids.append(mapped)
-        if vendor_data and not compact:
+        if compact:
+            vendor_data = retain_tool_relationship_for_measurements(vendor_data)
+        if vendor_data:
             item.vendor_data.update(
                 {k: v for k, v in vendor_data.items() if v is not None}
             )

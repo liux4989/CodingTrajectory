@@ -17,7 +17,9 @@ from coding_trajectory.analysis.content_size import (
     item_text_size,
     item_thinking_tokens,
 )
+from coding_trajectory.analysis.measurements import is_projection_only_item
 from coding_trajectory.ingestion.models import (
+    Item,
     Turn,
     TurnStatus,
     Vendor,
@@ -61,14 +63,27 @@ def execution_timing(turn: Turn) -> ExecutionTiming | None:
     if turn_end < turn_start:
         return None
 
-    intervals: list[tuple[datetime, datetime]] = []
+    calls: dict[str, list[Item]] = {}
     for item in turn.items:
-        if not is_tool_shaped_item(item):
+        if not is_tool_shaped_item(item) or is_projection_only_item(item):
             continue
-        if item.completed_at is None or item.completed_at < item.started_at:
+        # Generic response items and native lifecycle records may represent
+        # the same call. Its result can be attached to only the native row.
+        call_id = getattr(item, "tool_call_id", None) or str(item.item_id)
+        calls.setdefault(call_id, []).append(item)
+
+    intervals: list[tuple[datetime, datetime]] = []
+    for items in calls.values():
+        completions = [
+            item.completed_at for item in items if item.completed_at is not None
+        ]
+        if not completions or any(
+            item.completed_at is not None and item.completed_at < item.started_at
+            for item in items
+        ):
             return None
-        start = max(item.started_at, turn_start)
-        end = min(item.completed_at, turn_end)
+        start = max(min(item.started_at for item in items), turn_start)
+        end = min(max(completions), turn_end)
         if end > start:
             intervals.append((start, end))
 

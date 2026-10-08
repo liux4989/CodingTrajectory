@@ -690,6 +690,13 @@ def _build_chronicle_turn(
         if isinstance((tool_call_id := getattr(item, "tool_call_id", None)), str)
         and tool_call_id
     }
+    tool_completions: dict[str, datetime] = {}
+    for item in turn.items:
+        call_id = getattr(item, "tool_call_id", None)
+        if isinstance(call_id, str) and call_id and item.completed_at is not None:
+            tool_completions[call_id] = max(
+                tool_completions.get(call_id, item.completed_at), item.completed_at
+            )
     return ChronicleTurn(
         turn_id=turn.turn_id,
         sequence=turn.sequence,
@@ -709,6 +716,7 @@ def _build_chronicle_turn(
                 item,
                 cwd=session.cwd,
                 item_ids_by_tool_call=item_ids_by_tool_call,
+                tool_completions=tool_completions,
                 tokenizer=tokenizer,
                 provider=provider,
             )
@@ -800,6 +808,7 @@ def _build_chronicle_item(
     *,
     cwd: str | None,
     item_ids_by_tool_call: dict[str, UUID],
+    tool_completions: dict[str, datetime],
     tokenizer: str,
     provider: str | None,
 ) -> ChronicleItem:
@@ -818,7 +827,12 @@ def _build_chronicle_item(
         sequence=item.sequence,
         kind=item.kind,
         started_at=item.started_at,
-        completed_at=item.completed_at,
+        # Publication replaces vendor call IDs with opaque item identities.
+        # Carry a matching native row's completion onto an unfinished generic
+        # row before that joining evidence is discarded. Outcome stays intact.
+        completed_at=item.completed_at or tool_completions.get(
+            getattr(item, "tool_call_id", None)
+        ),
         status=(
             str(getattr(item.status, "value", item.status))
             if item.status is not None

@@ -59,11 +59,23 @@ def retain_event_for_measurements(event: Event) -> Event | None:
 def retain_item_for_measurements(item: Item) -> Item:
     """Drop transcript bodies while preserving timing and tool identity."""
 
-    update: dict[str, Any] = {"vendor_data": {}}
+    update: dict[str, Any] = {
+        "vendor_data": retain_tool_relationship_for_measurements(item.vendor_data)
+    }
     for field in ("text", "input", "output", "command"):
         if hasattr(item, field):
             update[field] = None
     return item.model_copy(update=update)
+
+
+def retain_tool_relationship_for_measurements(value: Any) -> dict[str, Any]:
+    """Keep the opaque wrapper relationship needed for timing attribution."""
+    activity = value.get("activity") if isinstance(value, dict) else None
+    provenance = activity.get("provenance") if isinstance(activity, dict) else None
+    parent = provenance.get("parent_tool_call_id") if isinstance(provenance, dict) else None
+    if not isinstance(parent, str) or not parent:
+        return {}
+    return {"activity": {"provenance": {"parent_tool_call_id": parent}}}
 
 
 def compact_usage_mapping(value: dict[str, Any]) -> dict[str, Any]:

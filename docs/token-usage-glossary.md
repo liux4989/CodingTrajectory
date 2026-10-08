@@ -107,6 +107,12 @@ it estimates model activity rather than measuring provider inference directly.
 Both fields are unavailable if any turn boundary or tool completion is missing
 or invalid. Time waiting for the user between turns is separate.
 
+Codex may record one tool call as both a generic response item and a native
+lifecycle item. Timing joins those rows by call ID, using the earliest start
+and latest recorded completion. Derived nested actions use their observed
+wrapper's interval; their unknown individual outcomes do not invalidate the
+wrapper's recorded timing.
+
 The split covers all turns, including turns without recorded token usage.
 `model_active_seconds` at session scope covers only turns with recorded usage
 and remains the denominator for token throughput. Graph runtime shows the root
