@@ -608,14 +608,25 @@ function Composition({
   const [open, setOpen] = useState(false);
   function render(category: Record<string, unknown>, depth: number) {
     const value = typeof category.tokens === "number" ? category.tokens : 0;
+    const windowPercent =
+      typeof category.percent === "number" ? category.percent : undefined;
     return (
       <div key={string(category.key)}>
         <div className="composition-row">
           <span style={{ paddingLeft: depth * 14 }}>
             {string(category.label) || string(category.key)}
           </span>
-          <span className="composition-bar">
-            <span style={{ width: `${total ? (value / total) * 100 : 0}%` }} />
+          <span
+            className="composition-bar"
+            title={
+              windowPercent === undefined
+                ? "Context window size unavailable"
+                : `${windowPercent}% of context window capacity`
+            }
+          >
+            <span
+              style={{ width: `${Math.min(Math.max(windowPercent ?? 0, 0), 100)}%` }}
+            />
           </span>
           <span className="small">{tokens(value)}</span>
         </div>
@@ -639,7 +650,7 @@ function Composition({
         {typeof context.used_percent === "number"
           ? ` · ${context.used_percent}% of the context window`
           : ""}{" "}
-        · from session.stats
+        · bars show % of window capacity
       </p>
       <ErrorNotice message={error} />
       {loading && <Loading />}

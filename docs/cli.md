@@ -100,9 +100,12 @@ include cache. Audit lines can also show `reported total` and
 `prompt + output (including cache)`. Costs are labeled `reported cost` or
 `estimated cost`.
 
-Context categories show estimated shares based on visible tokens. Provider input
-counts describe the latest request; recorded usage adds up usage entries across
-the session. Repeated Claude response IDs each contribute to recorded usage,
+Context categories use visible-token estimates.
+Category percentages use the full context-window capacity. An unknown window
+size leaves the percentage unavailable. CT reconstructs categories from logged
+evidence; it does not use Claude's `/context` output as a metric source.
+Provider input counts describe the latest request; recorded usage adds up entries
+across the session. Repeated Claude response IDs each contribute to recorded usage,
 so these totals may differ from billed usage. JSON field names stay stable;
 the glossary maps them to the display terms.
 
@@ -111,8 +114,12 @@ execution time with estimated LLM and tool time, activity, and compaction count
 first. The full category tree uses a narrow table with estimated visible tokens
 and their share of the context.
 Claude starting context uses instruction, memory, skill, MCP, and prompt-snapshot
-attachments recorded before the first API response. Visible source estimates
-are subtracted from the first-input estimate; the remainder is `Unattributed context`.
+attachments recorded before the first API response. If the initial snapshot
+omits tool schemas, CT recovers non-deferred definitions from the next matching
+snapshot before a new user request or API response. The unchanged system prompt
+links those definitions to the initial request; their token counts remain estimates.
+Visible source estimates are subtracted from the first-input estimate;
+the remainder is `Unattributed context`.
 Logs without these attachments retain the combined `System prompt & tools` estimate.
 When recorded timing is available, `TTFT avg` shows the average time to first
 token across completed turns with a TTFT observation, in seconds. Turns without

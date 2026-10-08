@@ -59,6 +59,14 @@ def build_session_graph_context_stats(
     messages = message_stats(session_graph)
     compaction = compaction_stats(session_graph)
     observation = _latest_context_usage(session_graph)
+    context_window = (
+        observation.context_window_tokens
+        or get_model_context_window(
+            observation.model, provider=observation.provider or vendor.value
+        )
+        if observation is not None
+        else None
+    )
     if include_composition:
         categories, anchor_outcome = build_context_composition(
             session_graph,
@@ -67,6 +75,7 @@ def build_session_graph_context_stats(
             pricing_model=observation.model if observation else None,
             pricing_provider=(observation.provider if observation else None)
             or vendor.value,
+            context_window_tokens=context_window,
         )
     else:
         categories = []
@@ -93,9 +102,6 @@ def build_session_graph_context_stats(
         ).model_dump(mode="json")
         return _project_composition(payload, include=include_composition)
 
-    context_window = observation.context_window_tokens or get_model_context_window(
-        observation.model, provider=observation.provider or vendor.value
-    )
     context_window_inferred = (
         not observation.context_window_tokens and context_window is not None
     )
@@ -104,7 +110,7 @@ def build_session_graph_context_stats(
             key=category.key,
             label=category.label,
             tokens=category.tokens,
-            percent=percent(category.tokens, observation.used_input_tokens),
+            percent=percent(category.tokens, context_window),
             confidence=category.confidence,
             source=category.source,
         )

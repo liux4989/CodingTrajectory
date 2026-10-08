@@ -124,6 +124,7 @@ _CONTEXT_SOURCE_LABELS = {
     "unattributed_context": frozenset({"Unattributed context"}),
     "retained_user_input": frozenset({"Retained requests"}),
     "compacted_history": frozenset({"Compacted history"}),
+    "system_tools": frozenset({"System tools"}),
 }
 _BASE64_BODY = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 _HOST_PATH = re.compile(

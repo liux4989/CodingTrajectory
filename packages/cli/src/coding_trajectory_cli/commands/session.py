@@ -742,7 +742,7 @@ def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
                 "",
                 "Visible context (estimated)",
                 "```",
-                f"{'Category':<32} {'Tokens':>7} {'Share':>8}",
+                f"{'Category':<32} {'Tokens':>7} {'% window':>8}",
             ]
         )
         for category in categories:
@@ -828,7 +828,7 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
         (
             f"{'Visible context':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
             f"{CONTEXT_USAGE_HEADER:>{CONTEXT_USAGE_WIDTH}} "
-            f"{'Share':>8}"
+            f"{'% window':>8}"
         ),
     ]
 
@@ -931,7 +931,7 @@ def _render_session_stats_sections(
                 (
                     f"{'Visible context':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
                     f"{CONTEXT_USAGE_HEADER:>{CONTEXT_USAGE_WIDTH}} "
-                    f"{'Share':>8}"
+                    f"{'% window':>8}"
                 ),
             ]
         )

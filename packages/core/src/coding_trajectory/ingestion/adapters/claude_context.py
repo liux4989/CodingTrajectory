@@ -36,8 +36,9 @@ _as_int_or_none = int_or_none
 class _ClaudeStartingContextScan:
     """Capture initial request attachments before the first usage-bearing response.
 
-    Read the raw records before retention drops bodies. Later snapshots and
-    reinjections belong to subsequent requests, not the starting context.
+    Read the raw records before retention drops bodies. A partial initial
+    snapshot may omit tool schemas; the next matching snapshot in the same
+    turn can recover non-deferred tools. Later injections are excluded.
     """
 
     _LABELS: ClassVar[dict[str, str]] = {
@@ -47,6 +48,7 @@ class _ClaudeStartingContextScan:
         "memory": "Memory",
         "skills": "Skills",
         "mcp": "Tools / MCP",
+        "system_tools": "System tools",
     }
     _CATEGORIES: ClassVar[dict[str, str]] = {
         "skill_listing": "skills",
@@ -64,8 +66,21 @@ class _ClaudeStartingContextScan:
     def __init__(self) -> None:
         self.sources: dict[tuple[str, str], ContextSourceObservation] = {}
         self.finished = False
+        self._initial_prompt: str | None = None
+        self._initial_snapshot_at: datetime | None = None
+        self._deferred_names: set[str] = set()
+        self._recover_tools = False
+        self._first_response_id: str | None = None
 
-    def _record(self, timestamp: datetime, key: str, identity: str, text: str) -> None:
+    def _record(
+        self,
+        timestamp: datetime,
+        key: str,
+        identity: str,
+        text: str,
+        *,
+        source: str = "claude_initial_attachment",
+    ) -> None:
         if not text:
             return
         self.sources[(key, identity)] = ContextSourceObservation(
@@ -73,11 +88,104 @@ class _ClaudeStartingContextScan:
             key=key,
             label=self._LABELS[key],
             text=text,
-            source="claude_initial_attachment",
+            source=source,
         )
+
+    def _record_tools(
+        self, timestamp: datetime, tools: object, *, recovered: bool = False
+    ) -> None:
+        for tool in tools if isinstance(tools, list) else []:
+            if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+                continue
+            name = tool["name"]
+            if recovered and (name in self._deferred_names or name.startswith("mcp__")):
+                continue
+            definition = tool.get("definition", tool)
+            if not isinstance(definition, dict):
+                continue
+            # Snapshots call the API's input_schema field "schema". Count a
+            # compact request definition, not arbitrary JSON display spacing.
+            definition = dict(definition)
+            if "schema" in definition:
+                definition["input_schema"] = definition.pop("schema")
+            self._record(
+                timestamp,
+                "mcp" if name.startswith("mcp__") else "system_tools",
+                f"tool:{name}",
+                json.dumps(
+                    definition,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                source=(
+                    "claude_matching_tool_snapshot"
+                    if recovered
+                    else "claude_initial_attachment"
+                ),
+            )
+
+    def _recover_tool_snapshot(self, record: dict) -> None:
+        if not self._recover_tools:
+            return
+        message = record.get("message") or {}
+        content = message.get("content") if isinstance(message, dict) else None
+        if (
+            (
+                record.get("type") == "user"
+                and not record.get("isMeta")
+                and not (
+                    isinstance(content, list)
+                    and any(
+                        isinstance(block, dict) and block.get("type") == "tool_result"
+                        for block in content
+                    )
+                )
+            )
+            or (
+                record.get("type") == "assistant"
+                and isinstance(message, dict)
+                and message.get("usage")
+                and (
+                    self._first_response_id is None
+                    or message.get("id") != self._first_response_id
+                )
+            )
+            or record.get("subtype") == "compact_boundary"
+        ):
+            self._recover_tools = False
+            return
+        attachment = record.get("attachment")
+        if isinstance(attachment, dict) and attachment.get("type") in {
+            "deferred_tools_delta",
+            "instructions",
+            "skill_listing",
+            "mcp_instructions_delta",
+            "agent_listing_delta",
+            "model",
+            "environment",
+        }:
+            self._recover_tools = False
+            return
+        if (
+            not isinstance(attachment, dict)
+            or attachment.get("type") != "prompt_snapshot"
+        ):
+            return
+        if (
+            json.dumps(attachment.get("systemPrompt"), sort_keys=True)
+            != self._initial_prompt
+        ):
+            self._recover_tools = False
+            return
+        tools = attachment.get("tools")
+        if isinstance(tools, list) and tools and self._initial_snapshot_at is not None:
+            self._record_tools(self._initial_snapshot_at, tools, recovered=True)
+            self._recover_tools = False
 
     def observe(self, record: dict) -> None:
         if self.finished:
+            self._recover_tool_snapshot(record)
             return
         message = record.get("message")
         if (
@@ -87,6 +195,7 @@ class _ClaudeStartingContextScan:
             and message["usage"]
         ):
             self.finished = True
+            self._first_response_id = message.get("id")
             return
         if record.get("type") != "attachment":
             return
@@ -116,6 +225,8 @@ class _ClaudeStartingContextScan:
             return
         if kind == "prompt_snapshot":
             prompt = attachment.get("systemPrompt")
+            self._initial_prompt = json.dumps(prompt, sort_keys=True)
+            self._initial_snapshot_at = timestamp
             if isinstance(prompt, list):
                 prompt = "\n\n".join(
                     block
@@ -126,7 +237,18 @@ class _ClaudeStartingContextScan:
             if isinstance(prompt, str):
                 self._record(timestamp, "base_system", kind, prompt)
             tools = attachment.get("tools")
+            self._recover_tools = (
+                isinstance(prompt, str)
+                and bool(prompt)
+                and (not isinstance(tools, list) or not tools)
+            )
         else:
+            if kind == "deferred_tools_delta":
+                names = attachment.get("addedNames")
+                if isinstance(names, list):
+                    self._deferred_names.update(
+                        name for name in names if isinstance(name, str)
+                    )
             key = self._CATEGORIES.get(kind)
             if key is not None:
                 rendered = record.get("rendered")
@@ -156,18 +278,7 @@ class _ClaudeStartingContextScan:
                 self._record(timestamp, key, kind, text)
             # Tool schemas can be surfaced before the first prompt snapshot.
             tools = attachment.get("surfacedDefinitions")
-        for tool in tools if isinstance(tools, list) else []:
-            if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
-                continue
-            definition = tool.get("definition", tool)
-            if not isinstance(definition, dict):
-                continue
-            self._record(
-                timestamp,
-                "mcp",
-                f"tool:{tool['name']}",
-                json.dumps(definition, ensure_ascii=False, sort_keys=True),
-            )
+        self._record_tools(timestamp, tools)
 
 
 def _estimate_prompt_tokens(text: str | None) -> int:

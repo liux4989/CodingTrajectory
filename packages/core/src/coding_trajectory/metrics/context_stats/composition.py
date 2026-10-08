@@ -98,6 +98,7 @@ _STARTING_CONTEXT_LABELS = {
     "mcp": "Tools / MCP",
     "memory": "Memory",
     "unattributed_context": "Unattributed context",
+    "system_tools": "System tools",
 }
 _FILE_CONCEPT_LABELS = {
     READ_FILE: "Files read",
@@ -125,6 +126,7 @@ def build_context_composition(
     allocated_usage_by_context_source: dict[str, dict[str, int]] | None = None,
     pricing_model: str | None = None,
     pricing_provider: str | None = None,
+    context_window_tokens: int | None = None,
 ) -> tuple[list[ContextCategoryFlat], AnchorOutcome]:
     allocated_usage_by_item = allocated_usage_by_item or {}
     allocated_usage_by_context_source = allocated_usage_by_context_source or {}
@@ -172,8 +174,7 @@ def build_context_composition(
             category.source = "encrypted Codex compaction; visible size unavailable"
         categories.append(category)
     anchor_outcome = _anchor_composition_to_used_input(categories, session_graph)
-    observed_total = sum(category.tokens or 0 for category in categories)
-    _set_percent(categories, observed_total)
+    _set_percent(categories, context_window_tokens or 0)
     _assert_context_composition_usage_reconciles(
         categories,
         allocated_usage_by_item,
