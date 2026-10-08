@@ -18,8 +18,8 @@ from coding_trajectory_cli._shared import (
     format_tokens,
     one_line,
     positive_int,
+    render_recorded_tokens,
     render_usage_buckets,
-    render_usage_line,
 )
 
 EVENT_SCAN_EPILOG = """\
@@ -707,7 +707,7 @@ def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
 def _append_stats_usage(lines: list[str], payload: dict[str, Any]) -> None:
     usage = payload.get("billed_token_usage") or {}
     if usage:
-        lines.append(f"Recorded tokens: {render_usage_buckets(usage)}")
+        lines.append(f"Recorded tokens: {render_recorded_tokens(usage)}")
 
 
 def _append_stats_activity(lines: list[str], runtime: dict[str, Any]) -> None:
@@ -801,7 +801,7 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
     )
     if billed_token_usage:
         lines.append(
-            f"- Recorded tokens: {render_usage_line(billed_token_usage)}"
+            f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}"
         )
         lines.append(RECORDED_USAGE_NOTE)
     lines.append(f"- {runtime_line}")
@@ -882,7 +882,7 @@ def _render_session_stats_sections(
             f"{format_percent(used_percent)} of context window"
         )
         if billed_token_usage:
-            lines.append(f"- Recorded tokens: {render_usage_line(billed_token_usage)}")
+            lines.append(f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}")
             lines.append(RECORDED_USAGE_NOTE)
         lines.append(
             "- Runtime: "
@@ -901,7 +901,7 @@ def _render_session_stats_sections(
         f"tokens {format_percent(graph_context.get('used_percent'))}"
     )
     if graph_billed:
-        lines.append(f"- Total recorded tokens: {render_usage_line(graph_billed)}")
+        lines.append(f"- Total recorded tokens: {render_recorded_tokens(graph_billed)}")
         lines.append(RECORDED_USAGE_NOTE)
     lines.append(
         "- Graph runtime: "

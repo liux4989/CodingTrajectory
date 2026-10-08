@@ -109,6 +109,17 @@ the glossary maps them to the display terms.
 `session stats` puts the model, latest-request context, recorded token usage,
 execution time, activity, and compaction count first. The full category tree
 uses a narrow table with estimated visible tokens and their share of the context.
+The `Recorded tokens` line shows `input`, `output`, `processed tokens`, and
+`cache hit ratio`. The ratio is cached input divided by cache-inclusive input,
+weighted by tokens across recorded usage entries. Cache writes count in the
+denominator, not as hits. The ratio is unknown when input is zero or the required
+counts are unavailable.
+Input adds fresh input, cache reads, and cache writes across recorded usage entries,
+so it has the same meaning for Codex and Claude. Output uses the recorded completion
+count; processed tokens retains the canonical total, including separately counted
+reasoning. Input is shown as unknown when the cache-inclusive count cannot be derived.
+Use `session usage` or `session request-usage` for the individual cache and reasoning
+buckets. JSON field names and recorded totals stay unchanged.
 Use `--details` to include estimated usage shares, provider input breakdowns,
 message counts, and the compaction timeline:
 

@@ -902,6 +902,32 @@ def evidence_to_pricing(evidence: Any) -> dict[str, Any] | None:
     )
 
 
+def render_recorded_tokens(usage: dict[str, Any]) -> str:
+    """Summarize recorded usage with cache-inclusive input across providers."""
+    uncached = usage.get("uncached_prompt_tokens")
+    input_tokens = (
+        uncached
+        + (usage.get("cached_prompt_tokens") or 0)
+        + (usage.get("cache_write_tokens") or 0)
+        if uncached is not None
+        else None
+    )
+    cached = usage.get("cached_prompt_tokens")
+    cache_hit_ratio = (
+        f"{100 * cached / input_tokens:.1f}%"
+        if input_tokens is not None and input_tokens > 0 and cached is not None
+        else "unknown"
+    )
+    return "  ".join(
+        (
+            f"input {format_tokens(input_tokens) if input_tokens is not None else 'unknown'}",
+            f"output {format_tokens(usage.get('completion_tokens'))}",
+            f"processed tokens {format_tokens(usage.get('processed_tokens'))}",
+            f"cache hit ratio {cache_hit_ratio}",
+        )
+    )
+
+
 def render_usage_buckets(usage: dict[str, Any]) -> str:
     """Summarize token usage with the common terms from the glossary.
 
