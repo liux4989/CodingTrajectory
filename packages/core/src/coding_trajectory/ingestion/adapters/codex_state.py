@@ -64,6 +64,9 @@ class CodexParseState:
     context_window_tokens: int | None = None
     context_usage: list[ContextUsageObservation] = field(default_factory=list)
     runtime_observations: list[RuntimeObservation] = field(default_factory=list)
+    # Older rollouts follow a compacted record with a context_compacted event.
+    # Pair once across metadata records, never across substantive activity.
+    pending_compaction_event: bool = False
     # The first persisted user message is a display preview, never an
     # inferred thread name. Current Codex rollouts can encode it as either
     # a legacy user_message event or a native UserMessage item.

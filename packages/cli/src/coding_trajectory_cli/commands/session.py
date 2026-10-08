@@ -503,11 +503,11 @@ def _compaction_line(compaction: Any) -> str | None:
 def _compaction_has_detail(compaction: Any) -> bool:
     """Whether the compaction summary carries info beyond a bare count.
 
-    `session stats` already appends the compaction count to the Execution line,
+    `session stats` already shows a dedicated compaction count metric,
     so the standalone ``- Compactions:`` line is only worth emitting when it adds
     dropped-token totals or a last-event delta (Claude Code). Codex
     compactions carry neither in the event, so a count-only line would just
-    duplicate the Execution line.
+    duplicate the count metric.
     """
     if not isinstance(compaction, dict):
         return False
@@ -678,15 +678,13 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
             f"- Billed tokens (all API calls): {render_usage_line(billed_token_usage)}"
         )
     lines.append(f"- {runtime_line}")
-    if runtime.get("compactions"):
-        lines[-1] += f", {runtime['compactions']} compactions"
     if runtime.get("interrupted_turns"):
         lines[-1] += f", {runtime['interrupted_turns']} interrupted"
     if runtime.get("rollbacks"):
         lines[-1] += f", {runtime['rollbacks']} rolled back"
     compaction = payload.get("compaction")
-    # The Execution line already carries the compaction count; only emit the
-    # standalone line when it adds detail (dropped totals / last delta).
+    lines.append(f"- Compaction count: {runtime.get('compactions') or 0}")
+    # Only emit the detailed summary when it adds dropped totals / last delta.
     if _compaction_has_detail(compaction):
         compaction_line = _compaction_line(compaction)
         if compaction_line:
@@ -763,6 +761,7 @@ def _render_session_stats_sections(
             f"{runtime.get('items') or 0} items, "
             f"{runtime.get('tool_calls') or 0} tool calls"
         )
+        lines.append(f"- Compaction count: {runtime.get('compactions') or 0}")
 
     graph_context = payload.get("context_window") or {}
     runtime = payload.get("runtime") or {}
@@ -781,6 +780,7 @@ def _render_session_stats_sections(
         f"{runtime.get('tool_calls') or 0} tool calls, "
         f"{runtime.get('subagent_sessions') or 0} subagent sessions"
     )
+    lines.append(f"- Aggregate compaction count: {runtime.get('compactions') or 0}")
     for warning in payload.get("warnings") or []:
         lines.append(f"- Warning: {warning}")
     return "\n".join(lines).rstrip()

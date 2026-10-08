@@ -624,6 +624,20 @@ class CodexAdapter(BaseAdapter):
         payload = record.get("payload") or {}
         ts = parse_iso_timestamp(record.get("timestamp"))
 
+        # A legacy compaction event can follow its compacted record after
+        # context/usage metadata. Invalidate pairing on any actual activity;
+        # timestamps and turn IDs cannot distinguish rapid repeated compactions.
+        if not (
+            outer_type
+            in {"compacted", "world_state", "turn_context", "token_usage_record"}
+            or (
+                outer_type == "event_msg"
+                and payload.get("type")
+                in {"context_compacted", "token_count", "thread_settings_applied"}
+            )
+        ):
+            state.pending_compaction_event = False
+
         if outer_type == "session_meta":
             self._handle_session_meta(payload, ts, state, transcript)
             return
@@ -1001,17 +1015,21 @@ class CodexAdapter(BaseAdapter):
         Codex writes this record via ``replace_compacted_history`` after every
         compaction (local, remote v1/v2, and token-budget). It carries the
         replacement history, window chain metadata, and (for local compaction)
-        the summary text. The ``context_compacted`` event_msg already produces
-        the runtime observation that drives compaction counting and the
-        eviction boundary; this handler ensures the record is not silently
-        ignored and records the window metadata for future use.
+        the summary text. Newer rollouts omit the ``context_compacted`` event,
+        so this record also produces the runtime observation that drives
+        compaction counting and the eviction boundary. A subsequent legacy
+        event is paired once, avoiding a duplicate observation.
 
         The ``replacement_history`` items are intentionally NOT re-projected
         here: they overlap with pre-compaction ``response_item`` records already
-        in the transcript, and the eviction boundary (driven by
-        ``context_compacted``) correctly marks those originals as evicted.
+        in the transcript, and the canonical compaction observation correctly
+        marks those originals as evicted.
         Re-projecting would double-count the surviving subset.
         """
+        state.runtime_observations.append(
+            RuntimeObservation(timestamp=ts, kind="context_compacted")
+        )
+        state.pending_compaction_event = True
         message = _as_non_empty_str(payload.get("message"))
         window_number = payload.get("window_number")
         window_id = _as_non_empty_str(payload.get("window_id"))
@@ -1199,9 +1217,11 @@ class CodexAdapter(BaseAdapter):
             )
 
         elif inner_type == "context_compacted":
-            state.runtime_observations.append(
-                RuntimeObservation(timestamp=ts, kind="context_compacted")
-            )
+            if not state.pending_compaction_event:
+                state.runtime_observations.append(
+                    RuntimeObservation(timestamp=ts, kind="context_compacted")
+                )
+            state.pending_compaction_event = False
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),

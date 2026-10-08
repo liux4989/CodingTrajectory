@@ -81,7 +81,7 @@ Missing or expired views fail explicitly; do not silently continue on a newer vi
 | `session search SESSION_ID PATH --mode path` | Find retained path references locally |
 | `session items SESSION_ID --turn TURN_ID` | Retained item details within one turn |
 | `session events SESSION_ID --type usage` | Normalized event envelopes |
-| `session stats SESSION_ID` | Time, status, counts, and context composition |
+| `session stats SESSION_ID` | Time, status, counts (including compactions), and context composition |
 | `session usage SESSION_ID --turn TURN_ID` | Observed token buckets and cost evidence |
 | `session request-usage SESSION_ID` | Provider-request ledger |
 | `session graph overview SESSION_ID` | Orchestration topology |
@@ -92,6 +92,13 @@ Session methods normally require an exact session ID. `turn_id` narrows that
 session; it is not a replacement session selector. Tree and graph commands can
 resolve an entry point in the same lineage or orchestration run.
 Ordinary conversation forks do not enter the parent's graph aggregate.
+
+`session stats` always displays a compaction count, including zero. For Codex,
+outer `compacted` records and legacy `context_compacted` events both establish
+compaction boundaries. An event following a `compacted` record across only
+context/usage metadata is paired with that record, not counted twice. Substantive
+activity or lifecycle records end that pairing window. This also restores context
+eviction accounting for newer rollouts that omit the legacy event.
 
 Events contain normalized types, status, timestamps, and references, not raw
 payloads. Item detail returns retained evidence, not an unrestricted raw log.
