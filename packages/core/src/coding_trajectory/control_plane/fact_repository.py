@@ -170,16 +170,20 @@ class LocalPublishedFactRepository:
             metadata = project_list_metadata(
                 {}, global_scope=True, current_dir=self.current_dir
             )
-            api, source = prepare_inventory_api(
-                list(metadata["items"].values()), []
-            )
+            api, source = prepare_inventory_api(list(metadata["items"].values()), [])
             identity = save_local_view(api, source)
         else:
             selector = {
                 key: params[key]
-                for key in ("session_id", "root_session_id")
+                for key in (
+                    "session_id",
+                    "root_session_id",
+                    "modified_since",
+                    "agent_vendor",
+                )
                 if key in params
             }
+            missing_project = False
             if method == "project.sessions":
                 if project_name := params.get("project_name"):
                     selector["project_name"] = project_name
@@ -194,7 +198,15 @@ class LocalPublishedFactRepository:
                         # Use the name only to narrow source discovery. The
                         # prepared reader still filters by the exact project ID.
                         selector["project_name"] = project["display_name"]
-            if self._batch_prepared is not None and not method.startswith("project."):
+                    else:
+                        missing_project = True
+            if missing_project:
+                # A missing exact project cannot contribute inventory cards.
+                # Do not fall through to an unscoped transcript discovery.
+                store = DocumentStore.from_session_graphs([])
+                self._check_available(False)
+                prepared = []
+            elif self._batch_prepared is not None and not method.startswith("project."):
                 prepared = self._batch_prepared
             else:
                 store, _ = self._resolve_store(
@@ -203,7 +215,14 @@ class LocalPublishedFactRepository:
                     (),
                 )
                 self._check_available(bool(store.session_graphs))
-                prepared = self._prepare_store(store)
+                if method == "project.sessions":
+                    # Inventory consumes one graph at a time. Retaining every
+                    # graph's facts and detailed API objects inflates peak memory.
+                    prepared = (
+                        prepare_graph(graph) for graph in store.session_graphs.values()
+                    )
+                else:
+                    prepared = self._prepare_store(store)
             if method == "project.sessions":
                 projects = {
                     graph.root_session_id: graph_project_id(graph)

@@ -279,6 +279,8 @@ def _build_store_full(
         since_days=since_days,
         modified_since=modified_since,
         agent_vendor=agent_vendor,
+        allow_empty=True,
+        preserve_graphs=True,
     )
     cache.index_discovery(sources=discovery.sources, store=discovery.store)
 

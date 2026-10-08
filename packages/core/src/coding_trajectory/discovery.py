@@ -523,7 +523,15 @@ def discover_store(
     since_days: int | None = None,
     modified_since: datetime | None = None,
     agent_vendor: str | None = None,
+    allow_empty: bool = False,
+    preserve_graphs: bool = False,
 ) -> DiscoveryResult:
+    """Reconstruct matching sources; optionally allow an empty discovery.
+
+    Service queries use empty discoveries for valid filters without matches.
+    Failed ingestion of every candidate still raises a discovery error.
+    Filtered service reads retain related sessions and older source segments.
+    """
     current_dir = current_dir.resolve()
     scoped_project = project_name or (None if global_scope else current_dir.name)
     scoped_project_key = (
@@ -551,6 +559,11 @@ def discover_store(
         ):
             candidates.append((vendor, adapter_cls, path))
 
+    if preserve_graphs and candidates and (modified_since or agent_vendor):
+        candidates = _complete_discovery_candidates(
+            candidates, current_dir=current_dir, project_name=scoped_project
+        )
+
     ingested, _provenance = _ingest_sessions(candidates)
     for ingested_session in ingested:
         vendor = ingested_session.vendor
@@ -576,7 +589,7 @@ def discover_store(
             (vendor, path, session.session_id) for path in ingested_session.paths
         )
 
-    if not sessions_by_project:
+    if not sessions_by_project and (not allow_empty or (candidates and not ingested)):
         raise DocumentError(f"no matching coding-agent logs found for {current_dir}")
 
     session_graphs: list[SessionGraph] = []
@@ -600,6 +613,40 @@ def discover_store(
     return DiscoveryResult(
         store=DocumentStore.from_session_graphs(session_graphs), sources=sources
     )
+
+
+def _complete_discovery_candidates(
+    selected: list[tuple[Vendor, type[BaseAdapter], Path]],
+    *,
+    current_dir: Path,
+    project_name: str | None,
+) -> list[tuple[Vendor, type[BaseAdapter], Path]]:
+    """Keep whole related components while scanning only unrelated headers."""
+    candidates = discover_source_candidates(
+        current_dir=current_dir, global_scope=True, project_name=project_name
+    )
+    all_sources = [(row.vendor, row.adapter_cls, row.path) for row in candidates]
+    files: dict[UUID, tuple[Path, UUID | None]] = {}
+    segments: dict[UUID, list[Path]] = {}
+    _scan_session_identities(
+        all_sources, file_by_session=files, paths_by_session=segments
+    )
+    paths = {path for _vendor, _adapter, path in selected}
+    pending = [sid for sid, sources in segments.items() if paths.intersection(sources)]
+    neighbors: dict[UUID, set[UUID]] = {}
+    for sid, (_path, parent) in files.items():
+        if parent is not None and parent in files:
+            neighbors.setdefault(sid, set()).add(parent)
+            neighbors.setdefault(parent, set()).add(sid)
+    visited: set[UUID] = set()
+    while pending:
+        sid = pending.pop()
+        if sid in visited:
+            continue
+        visited.add(sid)
+        paths.update(segments[sid])
+        pending.extend(neighbors.get(sid, set()) - visited)
+    return [row for row in all_sources if row[2] in paths]
 
 
 def discover_source_candidates(
