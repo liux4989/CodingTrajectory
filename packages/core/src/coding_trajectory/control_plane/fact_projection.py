@@ -121,6 +121,7 @@ _CONTEXT_SOURCE_LABELS = {
     "skills": frozenset({"Skills"}),
     "mcp": frozenset({"Tools / MCP"}),
     "memory": frozenset({"Memory"}),
+    "unattributed_context": frozenset({"Unattributed context"}),
 }
 _BASE64_BODY = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 _HOST_PATH = re.compile(

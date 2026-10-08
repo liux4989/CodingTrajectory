@@ -96,6 +96,7 @@ _STARTING_CONTEXT_LABELS = {
     "skills": "Skills",
     "mcp": "Tools / MCP",
     "memory": "Memory",
+    "unattributed_context": "Unattributed context",
 }
 _FILE_CONCEPT_LABELS = {
     READ_FILE: "Files read",

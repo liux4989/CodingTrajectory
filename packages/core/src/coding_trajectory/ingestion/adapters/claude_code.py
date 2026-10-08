@@ -25,6 +25,7 @@ from coding_trajectory.ingestion.adapters._shared import (
 from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
 from coding_trajectory.ingestion.adapters.claude_context import (
     _claude_context_usage,
+    _ClaudeStartingContextScan,
     _first_api_prompt_text,
     _starting_context_sources,
 )
@@ -272,7 +273,10 @@ class ClaudeCodeAdapter(BaseAdapter):
         retention: CanonicalRetention = "trajectory",
     ) -> Session:
         scan = _ClaudeRecordScan()
-        transcript, team_inputs = self._build_transcript(records, scan=scan)
+        context_scan = _ClaudeStartingContextScan()
+        transcript, team_inputs = self._build_transcript(
+            records, scan=scan, context_scan=context_scan
+        )
         raw_session_id = scan.raw_session_id
         if raw_session_id is None:
             raise ValueError(f"ClaudeCodeAdapter: no session id parsed from {source}")
@@ -312,6 +316,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             build_context_sources=lambda context: _starting_context_sources(
                 started_at=context.started_at,
                 context_usage=context.context_usage,
+                captured_sources=list(context_scan.sources.values()),
                 first_prompt_text=_first_api_prompt_text(
                     turns=context.turns,
                     events=context.events,
@@ -371,6 +376,7 @@ class ClaudeCodeAdapter(BaseAdapter):
         records: Iterable[tuple[dict, RecordSpan | None]],
         *,
         scan: _ClaudeRecordScan | None = None,
+        context_scan: _ClaudeStartingContextScan | None = None,
     ) -> tuple[list[TranscriptRecord], list[ClaudeTeamStateInput]]:
         """Extract only CT-useful transcript facts from Claude Code JSONL records."""
         transcript: list[TranscriptRecord] = []
@@ -379,6 +385,8 @@ class ClaudeCodeAdapter(BaseAdapter):
         for record, span in records:
             if scan is not None:
                 scan.observe(record)
+            if context_scan is not None:
+                context_scan.observe(record)
             before = len(transcript)
             self._translate_record(record, transcript, team_inputs)
             if span is not None:
@@ -564,6 +572,8 @@ class ClaudeCodeAdapter(BaseAdapter):
 
         elif raw_type == "attachment":
             base = _base_payload(record)
+            attachment = record.get("attachment")
+            attachment = attachment if isinstance(attachment, dict) else {}
             transcript.append(
                 TranscriptRecord(
                     sequence=len(transcript),
@@ -574,10 +584,13 @@ class ClaudeCodeAdapter(BaseAdapter):
                     data={
                         **base,
                         "raw_type": "attachment",
-                        "attachment_type": record.get("attachmentType")
+                        "attachment_type": attachment.get("type")
+                        or record.get("attachmentType")
                         or record.get("subtype"),
-                        "name": _as_non_empty_str(record.get("name")),
-                        "path": _as_non_empty_str(record.get("path")),
+                        "name": _as_non_empty_str(attachment.get("name"))
+                        or _as_non_empty_str(record.get("name")),
+                        "path": _as_non_empty_str(attachment.get("path"))
+                        or _as_non_empty_str(record.get("path")),
                         "content": record.get("content"),
                     },
                 )

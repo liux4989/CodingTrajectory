@@ -110,6 +110,10 @@ the glossary maps them to the display terms.
 execution time with estimated LLM and tool time, activity, and compaction count
 first. The full category tree uses a narrow table with estimated visible tokens
 and their share of the context.
+Claude starting context uses instruction, memory, skill, MCP, and prompt-snapshot
+attachments recorded before the first API response. Visible source estimates
+are subtracted from the first-input estimate; the remainder is `Unattributed context`.
+Logs without these attachments retain the combined `System prompt & tools` estimate.
 When recorded timing is available, `TTFT avg` shows the average time to first
 token across completed turns with a TTFT observation, in seconds. Turns without
 that observation are excluded; sessions without any observations omit the line.
