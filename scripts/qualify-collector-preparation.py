@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from threading import Barrier, Lock, get_ident
 from unittest.mock import patch
@@ -55,6 +56,92 @@ from coding_trajectory.project_identity import local_project_id
 from coding_trajectory.runtime import ServiceRuntime
 from coding_trajectory.service.store import IndexCache
 from coding_trajectory_cli.commands.session import _render_session_overview_text
+
+
+def qualify_shell_chain_labels(graph, root: Path) -> None:
+    """Keep whole-command labels through preparation, replay and public reads."""
+    graph = graph.model_copy(deep=True)
+    session = graph.sessions[0]
+    turn = session.turns[0]
+    commands = [
+        "bun run check",
+        "bun run check && bun run check:full > /tmp/full.log 2>&1",
+        "cat /tmp/readme; bun run check:full",
+        "rg -n TODO src | head -n 3",
+        "bash -lc 'bun run check && bun run check:full'",
+        "printf '%s' 'literal && separator'",
+        "bun run check && python3 inspect.py --token synthetic-credential",
+        "bun run check && echo " + "x" * 250,
+    ]
+    turn.items = [
+        CommandExecutionItem(
+            item_id=UUID(int=3000 + index),
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            sequence=index,
+            started_at=turn.started_at,
+            completed_at=turn.ended_at,
+            status="completed",
+            command=command,
+        )
+        for index, command in enumerate(commands)
+    ]
+    prepared = prepare_graph(graph, cache_path=root / "shell-chain-preparation.sqlite")
+    replay = session_graph_from_fact_index(
+        FactIndex.from_fact_sets([prepared.publication()]), graph.root_session_id
+    )
+    summaries = [
+        item.measurements.tool_summary for item in replay.sessions[0].turns[0].items
+    ]
+    assert summaries[0]["description"] == "bun run check"
+    assert summaries[1]["description"] == "Shell chain: " + commands[1]
+    assert summaries[2]["name"] == "RunCommand"
+    assert summaries[2]["description"] == "Shell chain: " + commands[2]
+    assert summaries[3]["description"] == "Shell chain: " + commands[3]
+    assert (
+        summaries[4]["description"]
+        == "Shell chain: bun run check && bun run check:full"
+    )
+    assert not summaries[5]["description"].startswith("Shell chain:")
+    assert summaries[6]["description"].endswith("--token [redacted]")
+    assert "synthetic-credential" not in prepared.publication().model_dump_json()
+    assert summaries[7]["description"].startswith("Shell chain:")
+    assert len(summaries[7]["description"]) <= 280
+    assert summaries[7]["description_truncated"]
+
+    identity = save_local_view(prepared.api, prepared.summary.fact_set_digest)
+    scope = str(session.session_id)
+    for method in ("session.items", "session.overview"):
+        descriptor = next(
+            entry
+            for entry in prepared.api.methods
+            if entry.method == method and entry.scope == scope and entry.turn_id is None
+        )
+        response = read_prepared(
+            descriptor,
+            {"session_id": scope, "limit": 100},
+            identity=identity,
+            fetch=lambda digest: prepared.api.objects[digest].encode(),
+            signing_key=b"k" * 32,
+        )
+        if method == "session.items":
+            by_id = {row["item_id"]: row for row in response["items"]}
+            for item, summary in zip(turn.items, summaries, strict=True):
+                row = by_id[str(item.item_id)]
+                assert row["detail"]["target"] == summary["description"]
+                assert datetime.fromisoformat(row["started_at"]) == item.started_at
+                assert (
+                    datetime.fromisoformat(row["completed_at"])
+                    if row["completed_at"]
+                    else None
+                ) == item.completed_at
+        else:
+            assert summaries[1]["description"] in _render_session_overview_text(
+                response
+            )
+    print(
+        "PASS whole shell-chain labels, unchanged timestamps, quoted separators, bounded previews and redaction through prepared API and CLI"
+    )
 
 
 def qualify_semantic_details(graph, root: Path) -> None:
@@ -1337,6 +1424,7 @@ def main():
             remote.publications,
         )
         qualify_upload_transport()
+        qualify_shell_chain_labels(graphs[0], root)
         qualify_semantic_details(graphs[0], root)
         qualify_pinned_publication(root, checkpoint_journals / "checkpoint.jsonl")
         print(

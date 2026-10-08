@@ -78,6 +78,7 @@ _COMMAND_RUNNERS = frozenset(
 )
 _RUNNER_SUBWORDS = frozenset({"run", "exec", "dlx", "tool", "task"})
 _SHELL_SETUP_HEADS = frozenset({"cd", "pushd", "popd", "export", "set", "unset"})
+SHELL_CHAIN_PREFIX = "Shell chain: "
 
 
 @scoped_shell_tokens()
@@ -87,6 +88,17 @@ def classify_shell(tool_name: str, tool_input: Any) -> tuple[str, str | None, st
         if tool_name == "write_stdin":
             return RUN_COMMAND, "stdin", "shell:command"
         return RUN_COMMAND, None, "shell:command"
+
+    unwrapped = unwrap_shell_command(cmd)
+    stages = [stage for stage in split_shell_stages(unwrapped) if stage.strip()]
+    if len(stages) > 1:
+        # Item timing and outcome describe the whole chain, not its primary
+        # stage. Keep that scope visible even when the preview is truncated.
+        return (
+            RUN_COMMAND,
+            short_command(SHELL_CHAIN_PREFIX + unwrapped),
+            "shell:command",
+        )
 
     primary = primary_stage(cmd)
     head = primary_command(primary)

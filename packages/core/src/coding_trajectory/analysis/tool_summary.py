@@ -24,7 +24,11 @@ from coding_trajectory.analysis.tool_summary_shared import (
     short_command,
     short_path,
 )
-from coding_trajectory.analysis.tool_summary_shell import classify_shell, shell_cmd
+from coding_trajectory.analysis.tool_summary_shell import (
+    SHELL_CHAIN_PREFIX,
+    classify_shell,
+    shell_cmd,
+)
 from coding_trajectory.ingestion.models import Item, ToolStatus
 
 _EXPANDED_EXEC_TOOL_NAME = "codex_exec_expanded"
@@ -158,9 +162,14 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         result["optimization_profile"] = optimization_profile
     if description:
         result["description"] = description
+        label_prefix_length = (
+            len(SHELL_CHAIN_PREFIX) if description.startswith(SHELL_CHAIN_PREFIX) else 0
+        )
         if (
             classification_name in SHELL_TOOL_NAMES
-            and len(" ".join((shell_cmd(tool_input) or "").split())) > 280
+            and len(" ".join((shell_cmd(tool_input) or "").split()))
+            + label_prefix_length
+            > 280
         ):
             result["description_truncated"] = True
     if item.kind != "command_execution" and concept != RUN_COMMAND:
