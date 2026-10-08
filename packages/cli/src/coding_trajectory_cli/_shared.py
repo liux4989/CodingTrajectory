@@ -903,41 +903,50 @@ def evidence_to_pricing(evidence: Any) -> dict[str, Any] | None:
 
 
 def render_usage_buckets(usage: dict[str, Any]) -> str:
-    """Compact bucket summary using the glossary display labels.
+    """Summarize token usage with the common terms from the glossary.
 
-    Single source for the ``input (+cached) (+cache write)  output
-    (+reasoning)  processed`` line shared by ``session usage`` summaries and
-    the billed-token audit lines. See docs/token-usage-glossary.md for the
-    field-to-label mapping.
+    Shared by usage summaries and recorded-token audit lines. A provider's
+    prompt count may include cache, so label it as prompt when fresh input
+    is unknown. See docs/token-usage-glossary.md for the field-to-label mapping.
     """
     uncached = usage.get("uncached_prompt_tokens")
     if uncached is None:
-        uncached = usage.get("prompt_tokens")
-    input_text = f"input {format_tokens(uncached)}"
+        parts = [f"prompt {format_tokens(usage.get('prompt_tokens'))}"]
+    else:
+        parts = [f"fresh input {format_tokens(uncached)}"]
     cached = usage.get("cached_prompt_tokens")
     cache_write = usage.get("cache_write_tokens")
     if cached:
-        input_text += f" (+{format_tokens(cached)} cached)"
+        parts.append(f"cached input {format_tokens(cached)}")
     if cache_write:
-        input_text += f" (+{format_tokens(cache_write)} cache write)"
+        parts.append(f"cache write {format_tokens(cache_write)}")
 
-    output_text = f"output {format_tokens(usage.get('completion_tokens'))}"
+    parts.append(f"output {format_tokens(usage.get('completion_tokens'))}")
     reasoning = usage.get("reasoning_tokens")
     if reasoning:
-        output_text += f" (+{format_tokens(reasoning)} reasoning)"
+        parts.append(f"reasoning {format_tokens(reasoning)}")
 
-    return f"{input_text}  {output_text}  processed {format_tokens(usage.get('processed_tokens'))}"
+    parts.append(f"processed total {format_tokens(usage.get('processed_tokens'))}")
+    return "  ".join(parts)
 
 
 def render_usage_line(usage: dict[str, Any]) -> str:
-    """Bucket summary plus derived totals (``reported``, ``prompt+completion``)."""
+    """Token breakdown plus reported and cache-inclusive prompt/output totals."""
     parts = [render_usage_buckets(usage)]
     reported = usage.get("reported_total_tokens")
-    if reported:
-        parts.append(f"reported {format_tokens(reported)}")
-    prompt_completion = usage.get("prompt_completion_tokens")
-    if prompt_completion:
-        parts.append(f"prompt+completion {format_tokens(prompt_completion)}")
+    if reported is not None:
+        parts.append(f"reported total {format_tokens(reported)}")
+    # Prompt counts follow provider rules (Claude excludes cache, Codex
+    # includes it). Add the separate token types for this display total.
+    uncached = usage.get("uncached_prompt_tokens")
+    if uncached is not None and usage.get("completion_tokens") is not None:
+        prompt_completion = (
+            uncached
+            + (usage.get("cached_prompt_tokens") or 0)
+            + (usage.get("cache_write_tokens") or 0)
+            + usage["completion_tokens"]
+        )
+        parts.append(f"prompt + output (including cache) {format_tokens(prompt_completion)}")
     if "cost_usd" in usage:
-        parts.append(f"cost {format_cost(usage.get('cost_usd'))}")
+        parts.append(f"reported cost {format_cost(usage.get('cost_usd'))}")
     return "  ".join(parts)

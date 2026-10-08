@@ -122,35 +122,16 @@ def _starting_context_sources(
 def _claude_context_usage(
     transcript: list[TranscriptRecord],
 ) -> list[ContextUsageObservation]:
-    """Build usage observations, deduplicated by provider response id.
+    """Preserve every recorded usage block in transcript order.
 
-    A Claude Code ``uuid`` identifies one local stream event, whereas
-    ``message.id`` identifies the provider response.  One response is recorded
-    as several stream events (thinking, text, tool-use, final state), each
-    repeating the same final usage block.  Preserve every event in the
-    transcript, but retain usage once per provider response so billed
-    accounting does not charge the same request repeatedly.
+    Repeated provider response IDs do not collapse stream observations. These
+    are log-record totals, not a deduplicated API billing ledger: repeated
+    usage blocks contribute repeatedly. Synthetic tool/reasoning records
+    without usage do not contribute.
     """
-    usage_records_by_response_id: dict[str, TranscriptRecord] = {}
-    usage_records_without_response_id: list[TranscriptRecord] = []
-    for record in transcript:
-        vendor_data = record.data.get("vendor_data", {})
-        if not isinstance(vendor_data, dict):
-            continue
-        response_id = vendor_data.get("provider_response_id")
-        if isinstance(response_id, str) and response_id:
-            # The final stream event is the most complete observation and
-            # remains associated with the turn that owns the response.
-            usage_records_by_response_id[response_id] = record
-        else:
-            usage_records_without_response_id.append(record)
-
     return [
         observation
-        for record in [
-            *usage_records_by_response_id.values(),
-            *usage_records_without_response_id,
-        ]
+        for record in transcript
         if (
             observation := context_usage_observation(
                 timestamp=record.timestamp,

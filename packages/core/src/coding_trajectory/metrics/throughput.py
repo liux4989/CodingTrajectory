@@ -1,15 +1,15 @@
-"""Common model-throughput calculations.
+"""Common processing and output speed calculations.
 
-The processed-token numerator follows the canonical accounting contract. The
-denominator removes observed tool intervals from the turn boundary, so the
-result is a model-active rate rather than an end-to-end rate that includes
-tool execution time.
+Processing speed uses the processed token total. Model time is the recorded
+turn duration minus tool runs, with overlapping tool runs counted once.
+See docs/token-usage-glossary.md for the common terms and measurement limits.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
+from itertools import pairwise
 from typing import NamedTuple
 
 from coding_trajectory.analysis.content_size import (
@@ -33,19 +33,18 @@ MIN_DECODE_SAMPLES = 3
 
 
 class DecodeSample(NamedTuple):
-    """Tokens generated over an interval that excludes time to first token."""
+    """Estimated tool-argument tokens and time after the first response item."""
 
     tokens: int
     seconds: float
 
 
 def model_active_seconds(turn: Turn) -> float | None:
-    """Return turn time outside completed, observed tool intervals.
+    """Return model time: recorded turn duration minus completed tool runs.
 
-    This is a derived wall-clock denominator. Provider logs do not generally
-    expose exact decoder-busy time, so a turn with an unclosed tool interval is
-    deliberately ineligible instead of silently assigning that interval to
-    the model.
+    This includes prompt processing and waiting for the first token. Provider
+    logs usually do not reveal the exact time spent generating tokens. A turn
+    with no recorded tool end cannot be used for this measurement.
     """
     if turn.started_at is None or turn.ended_at is None:
         return None
@@ -74,7 +73,7 @@ def model_active_seconds(turn: Turn) -> float | None:
 
 
 def aggregate_model_active_seconds(turns: Iterable[Turn]) -> float | None:
-    """Return a complete model-active denominator when every turn is known."""
+    """Add up model time only when every selected turn has recorded timing."""
     values = [model_active_seconds(turn) for turn in turns]
     if not values or any(value is None for value in values):
         return None
@@ -85,7 +84,7 @@ def processed_tokens_per_second(
     processed_tokens: int,
     active_seconds: float | None,
 ) -> float | None:
-    """Return processed tokens per model-active second."""
+    """Return processing speed: processed tokens divided by model time."""
     if processed_tokens <= 0 or active_seconds is None or active_seconds <= 0:
         return None
     return round(processed_tokens / active_seconds, 3)
@@ -95,17 +94,17 @@ def output_tokens_per_second(
     output_tokens: int,
     active_seconds: float | None,
 ) -> float | None:
-    """Return generated tokens per model-active second.
+    """Return output speed: recorded output tokens divided by model time.
 
-    Reasoning tokens are part of ``output_tokens`` for every supported provider,
-    so this is the model's generation rate. It is still an end-to-end rate over
-    the model-active window: time to first token and prefill are included.
+    Codex includes reasoning in output. Separately reported reasoning is not
+    added here. Model time includes prompt processing and waiting for the
+    first output token.
     """
     return processed_tokens_per_second(output_tokens, active_seconds)
 
 
 def estimated_output_tokens(turn: Turn, vendor: Vendor) -> int | None:
-    """Captured Amp generation content, never provider-reported consumption."""
+    """Estimate Amp output from saved text, thinking, and tool arguments."""
     if (
         vendor != Vendor.AMP
         or turn.status != TurnStatus.COMPLETED
@@ -121,11 +120,11 @@ def estimated_output_tokens(turn: Turn, vendor: Vendor) -> int | None:
 
 
 def estimated_output_tokens_per_second(turns: Iterable[TurnMetrics]) -> float | None:
-    """Weight complete live-observed turns by time, not by their individual rates.
+    """Estimate Amp output speed from total tokens divided by total model time.
 
-    A partial selection is not silently presented as whole-session throughput.
-    Hook time minus the union of tool windows still includes latency, prefill,
-    plugin overhead, and other non-tool waiting; this is not decoder-busy time.
+    Every selected turn needs complete live timing. Model time still includes
+    prompt processing, waiting for the first token, plugin work, and other
+    waiting outside tool runs. It is not time spent generating tokens alone.
     """
     selected = list(turns)
     if not selected or any(
@@ -142,15 +141,14 @@ def estimated_output_tokens_per_second(turns: Iterable[TurnMetrics]) -> float | 
 
 
 def decode_samples(turn: Turn, vendor: Vendor) -> list[DecodeSample]:
-    """Return first-token-free generation samples for one turn.
+    """Collect Codex tool-argument generation speed samples for one turn.
 
-    Codex timestamps each response item when it completes, so the gap between a
-    completed message (or earlier parallel call) and the tool call that follows
-    it in the same response is pure decoding of that call's arguments. Time to
-    first token and prefill fall before the first item and are never included.
-    A tool completion between the two items means a new request began, so the
-    pair is not a single response and is skipped. Other providers do not log
-    item boundaries with these semantics and yield no samples.
+    Codex records when each response item completes. The gap from a completed
+    message or earlier tool call to the next tool call in the same response
+    estimates time spent generating that call's arguments. Prompt processing
+    and waiting for the first token happen before the first item. If a tool
+    finishes between the two items, another request began and the pair is
+    skipped. Other providers lack these timestamps and yield no samples.
     """
     if vendor != Vendor.CODEX_CLI:
         return []
@@ -165,7 +163,7 @@ def decode_samples(turn: Turn, vendor: Vendor) -> list[DecodeSample]:
         if item.kind == "tool_call" and item.completed_at is not None
     ]
     samples: list[DecodeSample] = []
-    for previous, current in zip(calls, calls[1:]):
+    for previous, current in pairwise(calls):
         if current.kind != "tool_call":
             continue
         # A tool that finished before ``current`` started ends the response.
@@ -184,7 +182,7 @@ def decode_tokens_per_second(
     seconds: float,
     samples: int,
 ) -> float | None:
-    """Return the aggregate decode rate when enough samples back it."""
+    """Estimate tool-argument generation speed when enough samples qualify."""
     if samples < MIN_DECODE_SAMPLES or tokens <= 0 or seconds <= 0:
         return None
     return round(tokens / seconds, 3)

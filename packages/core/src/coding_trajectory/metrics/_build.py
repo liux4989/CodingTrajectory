@@ -315,8 +315,10 @@ def _usage_consistency_warnings(metrics: SessionMetrics) -> list[str]:
     if inconsistent == 0:
         return []
     return [
-        f"{inconsistent} token usage observations had inconsistent reported "
-        "totals; total_tokens was derived from processed token buckets"
+        (
+            f"{inconsistent} usage entries had reported totals that did not match "
+            "their token counts; the calculated total uses the separate token types"
+        )
     ]
 
 

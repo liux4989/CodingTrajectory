@@ -118,7 +118,7 @@ def build_session_graph_context_stats(
     if provider_usage_buckets:
         _record_context_warning(
             warnings,
-            "Provider usage buckets are reported separately from semantic context composition.",
+            "Provider input counts are reported separately from the visible context breakdown.",
             code="context.provider_buckets_separate",
             vendor=vendor.value,
         )

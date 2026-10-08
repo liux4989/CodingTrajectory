@@ -6,5 +6,5 @@
   {"path":"$.messages.assistant","expected":2,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.messages.reasoning","expected":1,"source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.model.name","expected":"glm-5.2","source_refs":["source/session.jsonl:2","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
-  {"path":"$.billed_token_usage.processed","expected":78815,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"}
+  {"path":"$.billed_token_usage.processed","expected":117563,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"}
 ]}

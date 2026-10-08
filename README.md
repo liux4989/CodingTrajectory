@@ -39,7 +39,7 @@ Remote publication and deployment are separate, explicitly authorized operations
 | [Architecture](docs/architecture.md) | Understand data flow and ownership |
 | [Operations](docs/operations.md) | Capture Amp logs, publish data, and deploy releases safely |
 | [Core protocol](docs/core-protocol.md) | Review and version public contracts |
-| [Token glossary](docs/token-usage-glossary.md) | Interpret token counts, costs, and throughput |
+| [Token glossary](docs/token-usage-glossary.md) | Interpret token counts, costs, and processing or output speed |
 | [Metrics validation](docs/metrics-validation-quality-gate.md) | Check changes against audited source evidence |
 
 Worker-specific commands are in the [Worker guide](cloudflare/control-plane/README.md).

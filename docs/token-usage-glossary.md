@@ -1,140 +1,176 @@
 # Token usage glossary
 
-Keep provider-reported values separate from derived values. Provider totals use
-different rules. Pi includes cached prompt tokens in `totalTokens`; Codex can
-report reasoning separately. Missing counters do not become zero consumption.
+Tokens are the units used to measure model input and output. A token can be a word,
+part of a word, or punctuation.
 
-## Buckets and totals
+Keep values reported by the AI provider separate from values calculated by this
+project. Providers count totals differently: Pi includes cached input in
+`totalTokens`, and Codex can report reasoning separately. A missing count means
+unknown, not zero.
 
-| Field | Meaning | CLI label |
-| --- | --- | --- |
-| `prompt_tokens` | Prompt/input bucket after source normalization | `prompt` |
-| `uncached_prompt_tokens` | Fresh input, excluding cache reads and writes | `input` |
-| `cached_prompt_tokens` | Input read from provider cache | `cached` |
-| `cache_write_tokens` | Input written to provider cache | `cache write` |
-| `completion_tokens` | Output bucket reported by the source | `output` |
-| `reasoning_tokens` | Separately reported reasoning/thinking | `reasoning` |
-| `reported_total_tokens` | Original provider/log total | `reported` |
-| `processed_tokens` | Normalized processed-token total | `processed` |
-| `prompt_completion_tokens` | Prompt plus completion | `prompt+completion` |
+## Common terms
 
-Processed tokens sum uncached input, cached input, cache writes, completion,
-and separately accounted reasoning. Normalization prevents counting an inclusive
-provider bucket twice. Preserve the provider total unchanged when it exists.
-The prompt bucket can include cache. Use `uncached_prompt_tokens` for fresh input.
-Compact CLI JSON can use `prompt_completion` for `prompt_completion_tokens`.
+| Term | Meaning | Field | CLI label |
+| --- | --- | --- | --- |
+| Prompt | Input sent to the model; may include cached input | `prompt_tokens` | `prompt` |
+| Fresh input | Input that is neither read from nor written to the cache | `uncached_prompt_tokens` | `fresh input` |
+| Cached input | Input reused from the provider's cache | `cached_prompt_tokens` | `cached input` |
+| Cache write | Input saved to the provider's cache | `cache_write_tokens` | `cache write` |
+| Output | Tokens produced by the model, as reported by the source | `completion_tokens` | `output` |
+| Reasoning | Thinking tokens reported separately by the source | `reasoning_tokens` | `reasoning` |
+| Reported total | The original total from the provider or log | `reported_total_tokens` | `reported total` |
+| Processed total | The project's total, adjusted to avoid counting tokens twice | `processed_tokens` | `processed total` |
+| Prompt + output | The project's prompt count plus output; cached input depends on the provider's counting rules | `prompt_completion_tokens` | JSON only |
 
-Codex input totals include cache reads and writes. Fresh input is
+The processed total adds fresh input, cached input, cache writes, output, and
+reasoning that is not already included in another count. Tokens already included
+in a provider's count are not added again. The reported total stays unchanged.
+Use `uncached_prompt_tokens` when you need fresh input only.
+Compact CLI JSON may shorten `prompt_completion_tokens` to `prompt_completion`.
+
+## How input and totals are counted
+
+Codex input totals include cached input and cache writes. Fresh input is
 `max(0, input_tokens - cached_input_tokens - cache_creation_input_tokens)`.
-The adapter maps `cache_write_input_tokens` to `cache_creation_input_tokens`,
-which public responses expose as `cache_write_tokens`. This applies to
-per-response and cumulative observations. All-cached input retains zero fresh input.
-Do not infer unreported cache writes from cache misses.
+The reader converts `cache_write_input_tokens` to `cache_creation_input_tokens`;
+public responses call this `cache_write_tokens`. This applies to both individual
+response counts and running totals. If all input is cached, fresh input is zero.
+A cache miss alone does not tell us how many tokens were written to the cache.
 
-CLI bucket lines omit zero cache and reasoning buckets. Allocation columns use
-the order `input/cached/cache write/output/reasoning`. Audit lines can also show
-the reported and prompt-plus-completion totals.
+The CLI hides cache and reasoning counts when they are zero. When fresh input is
+unknown, it shows the provider's `prompt` count instead; this may include cache.
+Estimated-share columns use the order
+`fresh input/cached input/cache write/output/reasoning`. Audit lines can also show
+the reported total and the prompt-plus-output total including cached input.
+The CLI calculates `prompt + output (including cache)` as:
 
-## Cost evidence and allocation
+```text
+fresh input + cached input + cache writes + output
+```
 
-Provider-reported cost is native evidence. Catalog-priced cost is an estimate.
-Do not price a total token count with one rate; use its component buckets.
+This differs from `prompt_completion_tokens`, whose cache inclusion depends on
+the provider.
+
+Claude usage includes every stream record with usage data, even when records
+share `message.id`. Repeated usage records each contribute to the total, so this
+measures recorded usage and may differ from billed usage. Assistant-response and
+tool counts still follow their existing rules for identifying distinct items.
+Session stats label category breakdowns as estimated shares and provider context
+counts as input for the latest request. Latest-request input is different from
+usage added up across the session.
+
+## Costs and estimated shares
+
+Reported cost comes directly from the provider. Estimated cost uses a price list.
+Calculate cost separately for each token type, since rates can differ.
 Each request estimate uses that request's pricing tier and prompt size.
-Turn, model, and session estimates sum request estimates, not aggregate-tier calculations.
+Turn, model, and session costs add up the request estimates; they do not choose
+a new pricing tier from the combined token count.
 
-`session.request_usage` provides the request ledger. `session.tool_usage`
-provides derived item/tool allocation. Each usage observation is allocated
-among visible items in the same turn, weighted by visible item tokens.
-Later turns cannot change earlier-turn allocation. Allocated slices use the
-source request's pricing tier and reconcile to that request's cost estimate.
-Allocation is attribution, not a replacement for observed provider totals.
+`session.request_usage` lists usage for each request. `session.tool_usage`
+estimates how that usage is shared among items and tools. Each usage record is
+split among visible items in the same turn, in proportion to their visible token
+counts. Later turns cannot change those shares. Each share uses the original
+request's pricing tier, and the shares add up to that request's estimated cost.
+These shares help explain usage; the provider's recorded totals remain the source
+for total usage.
 
-Request/tool-result links can associate observations by timestamp window.
-They do not prove that the provider received a linked result; input membership
-remains unknown when the source cannot establish it.
+Requests and tool results may be linked because their timestamps fall in the same
+time window. This does not prove the provider received that tool result. Whether
+it was part of the input stays unknown unless the source confirms it.
 
-## Model-active time
+## Model time
 
-`model_active_seconds` uses observed turn boundaries minus the union of completed
-tool intervals. Overlapping tool intervals are subtracted once.
-Claude uses a `turn_duration` record when available, not the next user prompt.
-This excludes inter-turn user idle time.
+`model_active_seconds` measures the recorded turn duration minus time spent
+running tools. Overlapping tool runs are subtracted only once.
+Claude uses a `turn_duration` record when available instead of waiting for the
+next user prompt. Time spent waiting for the user between turns is excluded.
 
-An unclosed tool interval makes the turn ineligible. A mixed-model turn cannot
-assign its full duration to the dominant model. An aggregate rate requires a
-reconstructable denominator. Model-active time is not provider decoder-busy time.
+If a tool run has no recorded end, the turn cannot be used for this measurement.
+If a turn uses several models, its full duration cannot be assigned to the most-used
+model. A combined speed requires enough evidence to calculate the total model
+time. Model time includes more than the time the provider spends generating tokens.
 
-### Processed throughput
+### Processing speed
 
 `processed_tokens_per_second` is `processed_tokens / model_active_seconds`.
-It excludes tool-output token estimates and tool monetary cost.
-A rate over full turn duration includes tool execution and must use a different label.
+It excludes estimated tool-result tokens and tool costs.
+A speed calculated from the full turn duration includes tool execution and must
+use a different label.
 
-### Output throughput
+### Output speed
 
 `output_tokens_per_second` is `completion_tokens / model_active_seconds`.
-Its denominator still includes prefill and first-token latency.
-Codex includes reasoning in its output bucket. Providers that report reasoning
-separately do not add it to this numerator.
+The time includes processing the prompt and waiting for the first output token.
+Codex includes reasoning in its output count. When a provider reports reasoning
+separately, it is not added to the output count used here.
 
-### Codex decode estimate
+### Codex tool-argument generation speed (estimate)
 
-`decode_tokens_per_second` estimates tool-argument decoding from gaps between
+`decode_tokens_per_second` estimates tool-argument generation speed from gaps between
 completed response items in the same response:
 
 ```text
-sum(tool-call input tokens) / sum(gap seconds)
+total tool-argument tokens / total gap seconds
 ```
 
-A tool completion between items discards the pair because it starts another request.
-Samples below 20 tokens or 0.5 seconds are excluded. Fewer than three qualifying
-samples produce no rate. The effective tokenizer supplies estimated counts.
-The estimate covers tool arguments, not message text or reasoning.
-Only single-model turns support model attribution.
+If a tool finishes between two items, that pair is excluded because it starts
+another request. Samples below 20 tokens or 0.5 seconds are excluded. At least
+three qualifying samples are needed to show a speed. The selected tokenizer
+estimates the token counts. This measures tool arguments only, excluding message
+text and reasoning. A speed can be assigned to a model only for single-model turns.
 
-### Amp observed throughput estimate
+### Amp output speed (estimate)
 
-`estimated_output_tokens_per_second` uses captured assistant content and live hooks:
+`estimated_output_tokens_per_second` uses saved assistant content and events
+recorded during the live run:
 
 ```text
-(estimated assistant text + thinking + tool-argument tokens)
-/ (live-observed turn seconds − union of live-observed tool windows)
+(estimated assistant text tokens + thinking tokens + tool-argument tokens)
+/ (recorded turn seconds − time spent running tools, counting overlaps once)
 ```
 
-Only completed turns with matched `agent.start` and successful `agent.end` qualify.
-Every tool needs terminal live call/result hooks. Tool windows must be ordered
-and inside the turn. Replayed snapshots, late revisions, interrupted/running
-turns, and nonpositive non-tool windows do not qualify.
+Only completed turns with matching `agent.start` and successful `agent.end` events
+qualify. Every tool needs live events for its call and final result. Tool start and
+end times must be in order and within the turn. Replayed snapshots, late edits,
+unfinished or interrupted turns, and turns with no positive time left after
+subtracting tool runs are excluded.
 
-Exclude user prompts, tool results, and inter-turn idle gaps.
-Count revisions once per message ID. Count distinct messages separately, even
-when text matches. Count captured thinking only, not hidden reasoning.
+Exclude user prompts, tool results, and time waiting between turns.
+Count edited versions once per message ID. Count separate messages separately,
+even when their text matches. Count only thinking saved in the log; hidden
+reasoning is unknown.
 
-Aggregate rates divide summed tokens by summed non-tool seconds. They do not
-average turn rates. If any included turn is ineligible, omit the aggregate;
-eligible turns can still show their rates. Runtime aggregates cover the root
-session, not overlapping subagents. Model usage covers the selected session's turns.
+Combined speed divides total tokens by total time excluding tool runs; it does
+not average the speeds of individual turns. If any included turn lacks the
+required evidence, omit the combined speed. Qualifying turns can still show their
+own speeds. Combined runtime measurements cover the main session and exclude
+overlapping subagents. Model usage covers the selected session's turns.
 
-Counts use the effective tokenizer, normally `cl100k_base` as an Amp proxy,
-with an offline fallback. Counts and live-timing provenance survive publication.
-Old artifacts without provenance do not gain a fabricated estimate.
+Counts use the selected tokenizer, normally `cl100k_base` to approximate Amp tokens,
+with a fallback that works offline. Published results retain the counts and the
+evidence for their live timing. Older saved results without that evidence cannot
+be given an estimate.
 
-The denominator includes prefill, first-token latency, plugin overhead, and other
-non-tool waiting. This is not provider-reported generation or pure decode speed.
-Do not attribute it to a guessed model. Amp provider usage, billed cost,
+The measured time includes prompt processing, waiting for the first token, plugin
+work, and other waiting outside tool runs. This estimate differs from
+provider-reported generation speed and token generation alone. Assign it to a
+model only when the source identifies that model. Amp provider usage, billed cost,
 `output_tokens_per_second`, and `decode_tokens_per_second` remain unavailable
 without separate evidence.
 
-Update matching readers, authority, and collectors before publishing new facts.
-Preparation version changes invalidate disposable caches. Existing remote
-artifacts require explicitly authorized republication to gain new source evidence.
+Before publishing new measurements, update the readers, code that determines
+which evidence to trust, and collectors together. Changing the preparation
+version makes existing reusable caches out of date. Adding new source evidence to
+existing remote results requires explicitly authorized republication.
 
 ## Visible tokens and images
 
-Item measurements estimate visible input/output text with a tokenizer.
-Inline base64 image bytes are replaced by an omission marker for sizing.
-Only retained metadata, such as media type and dimensions, contributes to visible
-tokens and context composition. This does not estimate provider image-token cost.
+Visible tokens are estimates of the input and output text we can read, counted
+with a tokenizer. For sizing, inline base64 image data is replaced by a marker
+saying the image was omitted. Only kept details, such as image type and dimensions,
+contribute to visible token counts and context breakdowns. These counts do not
+estimate the provider's image-token cost.
 
-Previously prepared graphs retain stored measurements until source content or
-the preparation version changes. A new reader alone does not rewrite artifacts.
+Saved graphs keep their existing measurements until the source content or
+preparation version changes. Updating a reader alone does not rewrite saved results.

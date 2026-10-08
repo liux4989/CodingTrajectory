@@ -81,18 +81,43 @@ Missing or expired views fail explicitly; do not silently continue on a newer vi
 | `session search SESSION_ID PATH --mode path` | Find retained path references locally |
 | `session items SESSION_ID --turn TURN_ID` | Retained item details within one turn |
 | `session events SESSION_ID --type usage` | Normalized event envelopes |
-| `session stats SESSION_ID` | Time, status, counts (including compactions), and context composition |
-| `session usage SESSION_ID --turn TURN_ID` | Observed token buckets and cost evidence |
-| `session request-usage SESSION_ID` | Provider-request ledger |
+| `session stats SESSION_ID` | Time, status, counts (including compactions), and visible context |
+| `session usage SESSION_ID --turn TURN_ID` | Recorded token usage and reported or estimated cost |
+| `session request-usage SESSION_ID` | Recorded usage and cost for each provider request |
 | `session graph overview SESSION_ID` | Orchestration topology |
 | `session graph stats SESSION_ID` | Graph totals and per-session statistics |
-| `session graph usage SESSION_ID` | Graph token accounting |
+| `session graph usage SESSION_ID` | Recorded token usage and costs across graph sessions |
 
 Session methods normally require an exact session ID. `turn_id` narrows that
 session; it is not a replacement session selector. Tree and graph commands can
 resolve an entry point in the same lineage or orchestration run.
 Ordinary conversation forks do not enter the parent's graph aggregate.
 
+Token reports use the [glossary's common terms](token-usage-glossary.md):
+`fresh input`, `cached input`, `cache write`, `output`, `reasoning`, and
+`processed total`. When fresh input is unknown, the label is `prompt`, which may
+include cache. Audit lines can also show `reported total` and
+`prompt + output (including cache)`. Costs are labeled `reported cost` or
+`estimated cost`.
+
+Context categories show estimated shares based on visible tokens. Provider input
+counts describe the latest request; recorded usage adds up usage entries across
+the session. Repeated Claude response IDs each contribute to recorded usage,
+so these totals may differ from billed usage. JSON field names stay stable;
+the glossary maps them to the display terms.
+
+`session stats` puts the model, latest-request context, recorded token usage,
+execution time, activity, and compaction count first. The full category tree
+uses a narrow table with estimated visible tokens and their share of the context.
+Use `--details` to include estimated usage shares, provider input breakdowns,
+message counts, and the compaction timeline:
+
+```sh
+uv run ct --source local session stats SESSION_ID --details
+uv run ct --source local session graph stats SESSION_ID --details
+```
+
+`--details` changes the Markdown report only; JSON keeps the full existing data.
 `session stats` always displays a compaction count, including zero. For Codex,
 outer `compacted` records and legacy `context_compacted` events both establish
 compaction boundaries. An event following a `compacted` record across only

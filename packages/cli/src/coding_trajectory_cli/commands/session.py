@@ -39,6 +39,16 @@ evidence is referenced through the owning item.
 
 CONTEXT_CATEGORY_WIDTH = 48
 CONTEXT_USAGE_WIDTH = 34
+CONTEXT_USAGE_HEADER = "Estimated shares"
+CATEGORY_USAGE_NOTE = (
+    "Estimated shares use fresh input / cached input / cache write / output / "
+    "reasoning, weighted by visible tokens. "
+    "Provider totals are reported separately."
+)
+RECORDED_USAGE_NOTE = (
+    "Usage adds up recorded usage entries. Repeated Claude response IDs each "
+    "contribute to the total, so it may differ from billed usage."
+)
 
 
 def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
@@ -436,9 +446,10 @@ def _render_context_category(
     *,
     indent: int = 0,
     include_allocated_usage: bool = False,
+    category_width: int = CONTEXT_CATEGORY_WIDTH,
 ) -> None:
     label = str(category.get("label") or category.get("key") or "-")
-    display_width = max(CONTEXT_CATEGORY_WIDTH - indent, 16)
+    display_width = max(category_width - indent, 16)
     label = one_line(label, limit=display_width)
     if include_allocated_usage:
         allocated_usage = category.get("allocated_usage")
@@ -461,6 +472,7 @@ def _render_context_category(
                 child,
                 indent=indent + 2,
                 include_allocated_usage=include_allocated_usage,
+                category_width=category_width,
             )
 
 
@@ -606,7 +618,120 @@ def _format_allocated_usage(value: Any) -> str:
     )
 
 
-def _render_session_stats_text(payload: dict[str, Any]) -> str:
+def _render_session_stats_text(
+    payload: dict[str, Any], args: argparse.Namespace | None = None
+) -> str:
+    if getattr(args, "details", False):
+        return _render_session_stats_details(payload)
+
+    sections = [
+        section
+        for section in payload.get("sessions") or []
+        if isinstance(section, dict)
+    ]
+    if len(sections) <= 1:
+        lines = ["# Session Stats", ""]
+        _append_stats_summary(lines, payload)
+    else:
+        lines = ["# Graph Stats", "", f"Sessions: {len(sections)}"]
+        context = payload.get("context_window") or {}
+        if context.get("used_tokens") is not None:
+            lines.append(
+                f"Visible context total: {format_tokens(context['used_tokens'])} tokens "
+                "(across sessions)"
+            )
+        _append_stats_usage(lines, payload)
+        _append_stats_activity(lines, payload.get("runtime") or {})
+        name_by_id, depth_by_id = _section_label_maps(sections)
+        for section in sections:
+            lines.extend(
+                [
+                    "",
+                    f"## {_session_section_label(section, name_by_id=name_by_id, depth_by_id=depth_by_id)}",
+                    "",
+                ]
+            )
+            _append_stats_summary(lines, section)
+
+    if payload.get("billed_token_usage") or any(
+        section.get("billed_token_usage") for section in sections
+    ):
+        lines.extend(["", "Recorded usage may differ from billed usage."])
+    for warning in payload.get("warnings") or []:
+        lines.append(f"Warning: {warning}")
+    return "\n".join(lines).rstrip()
+
+
+def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
+    model = payload.get("model") or {}
+    context = payload.get("context_window") or {}
+    runtime = payload.get("runtime") or {}
+    lines.append(f"Model: {model.get('name') or '-'}")
+    used = context.get("used_tokens")
+    capacity = model.get("context_window_tokens")
+    context_text = format_tokens(used) if used is not None else "unknown"
+    if capacity is not None:
+        context_text += f" / {format_tokens(capacity)}"
+    context_text += " tokens"
+    if context.get("used_percent") is not None:
+        context_text += f" {format_percent(context['used_percent'])}"
+    lines.append(f"Context (latest request): {context_text}")
+    _append_stats_usage(lines, payload)
+    timing = [f"{format_duration(runtime.get('execution_seconds'))} execution"]
+    if runtime.get("wait_seconds"):
+        timing.append(f"{format_duration(runtime['wait_seconds'])} waiting")
+    lines.append("Time: " + ", ".join(timing))
+    _append_stats_activity(lines, runtime)
+
+    categories = [
+        category
+        for category in context.get("categories") or []
+        if isinstance(category, dict)
+    ]
+    if categories:
+        lines.extend(
+            [
+                "",
+                "Visible context (estimated)",
+                "```",
+                f"{'Category':<32} {'Tokens':>7} {'Share':>8}",
+            ]
+        )
+        for category in categories:
+            _render_context_category(
+                lines, category, category_width=32
+            )
+        lines.append("```")
+
+
+def _append_stats_usage(lines: list[str], payload: dict[str, Any]) -> None:
+    usage = payload.get("billed_token_usage") or {}
+    if usage:
+        lines.append(f"Recorded tokens: {render_usage_buckets(usage)}")
+
+
+def _append_stats_activity(lines: list[str], runtime: dict[str, Any]) -> None:
+    turns = runtime.get("turns") or 0
+    tools = runtime.get("tool_calls") or 0
+    activity = [
+        f"{turns} turn{'s' if turns != 1 else ''}",
+        f"{tools} tool call{'s' if tools != 1 else ''}",
+    ]
+    if runtime.get("failed_tool_calls"):
+        activity[-1] += f" ({runtime['failed_tool_calls']} failed)"
+    for key, label in (
+        ("subagent_sessions", "subagent"),
+        ("interrupted_turns", "interrupted turn"),
+        ("rollbacks", "rollback"),
+    ):
+        count = runtime.get(key) or 0
+        if count:
+            activity.append(f"{count} {label}{'s' if count != 1 else ''}")
+    lines.append("Activity: " + ", ".join(activity))
+    lines.append(f"Compactions: {runtime.get('compactions') or 0}")
+
+
+def _render_session_stats_details(payload: dict[str, Any]) -> str:
     session_sections = [
         session
         for session in payload.get("sessions") or []
@@ -631,8 +756,8 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
         "",
         "```",
         (
-            f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
-            f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+            f"{'Visible context':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
+            f"{CONTEXT_USAGE_HEADER:>{CONTEXT_USAGE_WIDTH}} "
             f"{'Share':>8}"
         ),
     ]
@@ -642,12 +767,13 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
             _render_context_category(lines, category, include_allocated_usage=True)
 
     lines.append("```")
+    lines.append(CATEGORY_USAGE_NOTE)
 
     provider_buckets = payload.get("provider_usage_buckets") or []
     if provider_buckets:
-        lines.extend(["", "Provider usage buckets", "```"])
+        lines.extend(["", "Provider input (latest request)", "```"])
         lines.append(
-            f"{'Bucket':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}"
+            f"{'Input type':<{CONTEXT_CATEGORY_WIDTH}} {'Tokens':>7} {'Context':>8}"
         )
         for category in provider_buckets:
             if isinstance(category, dict):
@@ -675,8 +801,9 @@ def _render_session_stats_text(payload: dict[str, Any]) -> str:
     )
     if billed_token_usage:
         lines.append(
-            f"- Billed tokens (all API calls): {render_usage_line(billed_token_usage)}"
+            f"- Recorded tokens: {render_usage_line(billed_token_usage)}"
         )
+        lines.append(RECORDED_USAGE_NOTE)
     lines.append(f"- {runtime_line}")
     if runtime.get("interrupted_turns"):
         lines[-1] += f", {runtime['interrupted_turns']} interrupted"
@@ -735,8 +862,8 @@ def _render_session_stats_sections(
                 "",
                 "```",
                 (
-                    f"{'Observed composition':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
-                    f"{'Billed In/Cache/Write/Out/Reason':>{CONTEXT_USAGE_WIDTH}} "
+                    f"{'Visible context':<{CONTEXT_CATEGORY_WIDTH}} {'Est tokens':>10} "
+                    f"{CONTEXT_USAGE_HEADER:>{CONTEXT_USAGE_WIDTH}} "
                     f"{'Share':>8}"
                 ),
             ]
@@ -745,6 +872,7 @@ def _render_session_stats_sections(
             if isinstance(category, dict):
                 _render_context_category(lines, category, include_allocated_usage=True)
         lines.append("```")
+        lines.append(CATEGORY_USAGE_NOTE)
         used_tokens = context_window.get("used_tokens") or (
             section.get("usage") or {}
         ).get("prompt_tokens")
@@ -754,7 +882,8 @@ def _render_session_stats_sections(
             f"{format_percent(used_percent)} of context window"
         )
         if billed_token_usage:
-            lines.append(f"- Billed tokens: {render_usage_line(billed_token_usage)}")
+            lines.append(f"- Recorded tokens: {render_usage_line(billed_token_usage)}")
+            lines.append(RECORDED_USAGE_NOTE)
         lines.append(
             "- Runtime: "
             f"{runtime.get('turns') or 0} turns, "
@@ -766,13 +895,14 @@ def _render_session_stats_sections(
     graph_context = payload.get("context_window") or {}
     runtime = payload.get("runtime") or {}
     graph_billed = payload.get("billed_token_usage") or {}
-    lines.extend(["", "Graph aggregate", ""])
+    lines.extend(["", "Graph totals", ""])
     lines.append(
-        f"- Aggregate context composition: {format_tokens(graph_context.get('used_tokens'))} "
+        f"- Total visible context: {format_tokens(graph_context.get('used_tokens'))} "
         f"tokens {format_percent(graph_context.get('used_percent'))}"
     )
     if graph_billed:
-        lines.append(f"- Aggregate billed tokens: {render_usage_line(graph_billed)}")
+        lines.append(f"- Total recorded tokens: {render_usage_line(graph_billed)}")
+        lines.append(RECORDED_USAGE_NOTE)
     lines.append(
         "- Graph runtime: "
         f"{runtime.get('turns') or 0} turns, "
@@ -780,7 +910,7 @@ def _render_session_stats_sections(
         f"{runtime.get('tool_calls') or 0} tool calls, "
         f"{runtime.get('subagent_sessions') or 0} subagent sessions"
     )
-    lines.append(f"- Aggregate compaction count: {runtime.get('compactions') or 0}")
+    lines.append(f"- Total compaction count: {runtime.get('compactions') or 0}")
     for warning in payload.get("warnings") or []:
         lines.append(f"- Warning: {warning}")
     return "\n".join(lines).rstrip()
@@ -989,7 +1119,7 @@ def _render_token_cost_summary(
     indent: str,
     requests: int | None = None,
 ) -> str:
-    """Render the non-overlapping token buckets needed for cost review."""
+    """Show each token type and whether the cost is reported or estimated."""
     parts: list[str] = []
     if requests is not None:
         parts.append(f"requests {requests}")
@@ -997,7 +1127,7 @@ def _render_token_cost_summary(
 
     if cost.get("value_usd") is not None:
         confidence = cost.get("confidence", "estimated")
-        parts.append(f"cost {format_cost(cost['value_usd'])} ({confidence})")
+        parts.append(f"{confidence} cost {format_cost(cost['value_usd'])}")
     return indent + "  ".join(parts)
 
 
@@ -1220,10 +1350,15 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_stats = session_sub.add_parser(
         "stats",
         prog="ct session stats",
-        help="Show compact context/token usage composition.",
+        help="Show visible context, estimated usage shares, and recorded totals.",
         formatter_class=GhFormatter,
     )
     add_session_source(session_stats)
+    session_stats.add_argument(
+        "--details",
+        action="store_true",
+        help="Include estimated usage shares, provider input, messages, and timing details.",
+    )
     add_output_flags(session_stats)
     session_stats.set_defaults(
         _method="session.stats",
@@ -1235,7 +1370,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_usage = session_sub.add_parser(
         "usage",
         prog="ct session usage",
-        help="Show turn-level token usage and request-summed cost.",
+        help="Show recorded token usage and costs added up across requests.",
         formatter_class=GhFormatter,
     )
     add_session_source(session_usage)
@@ -1264,7 +1399,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_request_usage = session_sub.add_parser(
         "request-usage",
         prog="ct session request-usage",
-        help="Show exact provider-request usage and cost.",
+        help="Show recorded usage and cost for each provider request.",
         formatter_class=GhFormatter,
     )
     add_session_source(session_request_usage)

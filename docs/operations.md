@@ -24,7 +24,7 @@ complete cross-host graph.
 
 Amp capture does not report provider tokens, billed cost, or exact inference
 timing. Hook timestamps describe local observation. See the
-[Amp throughput estimate](token-usage-glossary.md#amp-observed-throughput-estimate).
+[Amp output speed estimate](token-usage-glossary.md#amp-output-speed-estimate).
 
 **Warning:** the plugin can launch a publication executable after reconciliation
 and completed turns. Set `CT_AMP_AUTO_PUBLISH=0` for capture-only operation.

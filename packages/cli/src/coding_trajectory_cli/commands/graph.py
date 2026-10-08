@@ -96,10 +96,15 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     graph_stats = graph_sub.add_parser(
         "stats",
         prog="ct session graph stats",
-        help="Show aggregate context and token statistics for a graph.",
+        help="Show visible context and recorded token totals across graph sessions.",
         formatter_class=GhFormatter,
     )
     add_session_source(graph_stats)
+    graph_stats.add_argument(
+        "--details",
+        action="store_true",
+        help="Include full context and usage breakdowns for each graph session.",
+    )
     add_output_flags(graph_stats)
     graph_stats.set_defaults(
         _method="graph.stats",
@@ -111,7 +116,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     graph_usage = graph_sub.add_parser(
         "usage",
         prog="ct session graph usage",
-        help="Show aggregate turn-level token usage for a graph.",
+        help="Show recorded token usage and costs across graph sessions.",
         formatter_class=GhFormatter,
     )
     add_session_source(graph_usage)

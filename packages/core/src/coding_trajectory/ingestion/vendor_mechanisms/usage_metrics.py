@@ -222,15 +222,15 @@ def context_usage_observation(
         category_specs = (
             (
                 "cached_context",
-                "Cached prefix (system + tools + prior turns)",
+                "Cached input (system + tools + prior turns)",
                 "cached_input_tokens",
             ),
             (
                 "new_cached_prefix",
-                "Newly cached this turn",
+                "Cache write (newly saved input)",
                 "cache_creation_input_tokens",
             ),
-            ("messages", "Messages (uncached input)", "input_tokens"),
+            ("messages", "Fresh input (messages)", "input_tokens"),
         )
         categories = [
             ContextCategoryObservation(

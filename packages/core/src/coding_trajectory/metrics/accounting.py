@@ -1,4 +1,4 @@
-"""Shared helpers for canonical usage accounting."""
+"""Shared helpers for token counts using the public glossary field names."""
 
 from __future__ import annotations
 
@@ -24,11 +24,13 @@ def glossary_usage_dict(
 ) -> dict[str, int]:
     """Map canonical token fields to the public glossary names.
 
-    Single source for the canonical→glossary correspondence
+    Shared mapping from source fields to glossary fields
     (input→prompt, uncached_input→uncached_prompt, cached_input→cached_prompt,
     cache_creation_input→cache_write, output→completion,
     reasoning_output→reasoning, processed→processed, plus the derived
-    prompt_completion sum). ``uncached_prompt_tokens`` is omitted when
+    prompt_completion sum). Output is called completion in the public fields;
+    uncached input means fresh input. Prompt + output follows the provider's
+    cache counting rules. ``uncached_prompt_tokens`` is omitted when
     ``uncached_input_tokens`` is ``None``; with ``drop_nonpositive`` only
     positive entries survive.
     """
