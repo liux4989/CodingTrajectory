@@ -50,3 +50,9 @@ assertion with that ordinal. No usage, cost, runtime or membership value changes
 ## Output token throughput
 
 The numerator is generated (output) tokens: `last_token_usage.output_tokens` is 937 at `source/parent.jsonl:5` (reasoning included). Over the same model-active denominator as above, the source-derived rate is `937 / 108.767` = 8.615 output tokens/second. It is an end-to-end model-active rate, so time to first token and prefill are included.
+
+## Execution split
+
+The root turn spans 108.767 seconds (source/parent.jsonl:2,6) with no tool calls. Its split is therefore 108.767 seconds of estimated LLM time and zero tool seconds. The separate fork (source/fork.jsonl:2,5) spans 0.827 seconds with no tools or usage; execution timing remains measurable even without token usage.
+
+These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.

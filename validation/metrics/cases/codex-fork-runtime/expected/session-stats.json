@@ -7,6 +7,8 @@
     {"path": "$.runtime.execution_seconds", "expected": 109, "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#session-scope"},
     {"path": "$.runtime.average_ttft_ms", "expected": 3392, "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#graph-and-runtime"},
     {"path": "$.model.name", "expected": "gpt-5.5", "source_refs": ["source/parent.jsonl:3"], "audit_ref": "audit.md#usage-arithmetic"},
-    {"path": "$.billed_token_usage.processed", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"}
-  ]
+    {"path": "$.billed_token_usage.processed", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.runtime.llm_seconds", "expected": 108.767, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.runtime.tool_seconds", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"}
+]
 }

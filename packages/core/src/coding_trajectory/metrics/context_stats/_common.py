@@ -36,6 +36,7 @@ from coding_trajectory.metrics.models import (
     TokenUsage,
 )
 from coding_trajectory.metrics.throughput import (
+    aggregate_execution_timing,
     decode_tokens_per_second,
     estimated_output_tokens_per_second,
     output_tokens_per_second,
@@ -119,6 +120,7 @@ def runtime_stats(
     )
     wait_seconds = sum(_turn_wait_seconds(primary))
     model_active = primary_metrics.model_active_seconds
+    timing = aggregate_execution_timing(primary.turns)
     processed_tokens = primary_metrics.token_usage.processed_token_total()
     output_tokens = primary_metrics.token_usage.output_tokens
     first_token_durations = [
@@ -132,6 +134,8 @@ def runtime_stats(
         started_at=started,
         ended_at=ended,
         execution_seconds=execution_seconds,
+        llm_seconds=timing.llm_seconds if timing is not None else None,
+        tool_seconds=timing.tool_seconds if timing is not None else None,
         model_active_seconds=model_active,
         processed_tokens_per_second=processed_tokens_per_second(
             processed_tokens or 0,

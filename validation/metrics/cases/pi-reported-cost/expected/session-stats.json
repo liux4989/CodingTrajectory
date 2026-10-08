@@ -4,5 +4,7 @@
   {"path":"$.runtime.execution_seconds","expected":91,"source_refs":["source/session.jsonl:4","source/session.jsonl:13"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.messages.assistant","expected":5,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.model.name","expected":"glm-5.2","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
-  {"path":"$.billed_token_usage.processed","expected":17282,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"}
+  {"path":"$.billed_token_usage.processed","expected":17282,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"},
+    {"path": "$.runtime.llm_seconds", "expected": 91.227, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.runtime.tool_seconds", "expected": 0.234, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#execution-split"}
 ]}

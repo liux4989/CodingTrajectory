@@ -33,3 +33,9 @@ unavailable; the historical display omission described above is no longer used.
 ## Output token throughput
 
 The numerator is recorded output tokens: both response-1 stream fragments (47 each, `source/session.jsonl:2,3`) plus response-2 (323, `source/session.jsonl:5`) = 417 output tokens. Over the same model-active denominator as above, the source-derived rate is `417 / 73.718` = 5.657 output tokens/second. Repeated usage is included, so this is not deduplicated generation throughput. It is an end-to-end model-active rate, so time to first token and prefill are included.
+
+## Execution split
+
+The turn spans 75.245 seconds (source/session.jsonl:1,5). The tool spans 1.527 seconds (lines 3–4), leaving 73.718 seconds of estimated LLM time.
+
+These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.

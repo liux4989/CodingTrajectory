@@ -428,6 +428,8 @@ def compact_usage_turn(turn: Any) -> Any:
                     "execution_seconds": (turn.get("runtime") or {}).get(
                         "execution_seconds"
                     ),
+                    "llm_seconds": (turn.get("runtime") or {}).get("llm_seconds"),
+                    "tool_seconds": (turn.get("runtime") or {}).get("tool_seconds"),
                     "model_active_seconds": (turn.get("runtime") or {}).get(
                         "model_active_seconds"
                     ),
@@ -480,6 +482,8 @@ def compact_usage_session(session: Any) -> Any:
                     "start": runtime.get("started_at"),
                     "end": runtime.get("ended_at"),
                     "execution_seconds": runtime.get("execution_seconds"),
+                    "llm_seconds": runtime.get("llm_seconds"),
+                    "tool_seconds": runtime.get("tool_seconds"),
                     "model_active_seconds": runtime.get("model_active_seconds"),
                     "processed_tokens_per_second": runtime.get(
                         "processed_tokens_per_second"
@@ -598,6 +602,8 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     "start": runtime.get("started_at"),
                     "end": runtime.get("ended_at"),
                     "execution_seconds": runtime.get("execution_seconds"),
+                    "llm_seconds": runtime.get("llm_seconds"),
+                    "tool_seconds": runtime.get("tool_seconds"),
                     "model_active_seconds": runtime.get("model_active_seconds"),
                     "processed_tokens_per_second": runtime.get(
                         "processed_tokens_per_second"
@@ -705,6 +711,8 @@ def compact_payload(method: str, payload: Any) -> Any:
                         "start": runtime.get("started_at"),
                         "end": runtime.get("ended_at"),
                         "execution_seconds": runtime.get("execution_seconds"),
+                        "llm_seconds": runtime.get("llm_seconds"),
+                        "tool_seconds": runtime.get("tool_seconds"),
                         "model_active_seconds": runtime.get("model_active_seconds"),
                         "processed_tokens_per_second": runtime.get(
                             "processed_tokens_per_second"

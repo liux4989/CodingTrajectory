@@ -165,6 +165,7 @@ class TurnMetrics(BaseModel):
     completed_at: datetime | None = None
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     model_active_seconds: float | None = None
+    tool_seconds: float | None = Field(default=None, ge=0)
     estimated_output_tokens: int | None = Field(default=None, exclude=True)
     # Raw decode evidence (see ``throughput.decode_samples``); internal inputs to
     # the model-level ``decode_tokens_per_second``, not serialized.
@@ -248,6 +249,8 @@ class RuntimeStatsFlat(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     execution_seconds: int | None = None
+    llm_seconds: float | None = Field(default=None, ge=0)
+    tool_seconds: float | None = Field(default=None, ge=0)
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
     output_tokens_per_second: float | None = None
@@ -272,6 +275,8 @@ class RuntimeStatsFlat(BaseModel):
             "started_at",
             "ended_at",
             "execution_seconds",
+            "llm_seconds",
+            "tool_seconds",
             "model_active_seconds",
             "processed_tokens_per_second",
             "output_tokens_per_second",
@@ -288,6 +293,8 @@ class TurnRuntimeFlat(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     execution_seconds: int | None = None
+    llm_seconds: float | None = Field(default=None, ge=0)
+    tool_seconds: float | None = Field(default=None, ge=0)
     model_active_seconds: float | None = None
     processed_tokens_per_second: float | None = None
     output_tokens_per_second: float | None = None

@@ -10,6 +10,10 @@
     {"path": "$.runtime.model_active_seconds", "expected": 108.767, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#model-throughput"},
     {"path": "$.runtime.processed_tokens_per_second", "expected": 727.997, "source_refs": ["source/parent.jsonl:5", "source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#model-throughput"},
     {"path": "$.runtime.output_tokens_per_second", "expected": 8.615, "source_refs": ["source/parent.jsonl:5", "source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#model-throughput"},
-    {"path": "$.cost", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"}
-  ]
+    {"path": "$.cost", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5", "../../../pricing/pinned-model-prices.json"], "audit_ref": "audit.md#usage-arithmetic"},
+    {"path": "$.runtime.llm_seconds", "expected": 108.767, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.runtime.tool_seconds", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.turns[0].runtime.llm_seconds", "expected": 108.767, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.turns[0].runtime.tool_seconds", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"}
+]
 }

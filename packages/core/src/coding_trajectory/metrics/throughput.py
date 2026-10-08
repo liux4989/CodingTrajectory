@@ -39,8 +39,15 @@ class DecodeSample(NamedTuple):
     seconds: float
 
 
-def model_active_seconds(turn: Turn) -> float | None:
-    """Return model time: recorded turn duration minus completed tool runs.
+class ExecutionTiming(NamedTuple):
+    """Non-overlapping portions of recorded turn execution, in seconds."""
+
+    llm_seconds: float
+    tool_seconds: float
+
+
+def execution_timing(turn: Turn) -> ExecutionTiming | None:
+    """Split recorded turn duration into estimated LLM time and tool time.
 
     This includes prompt processing and waiting for the first token. Provider
     logs usually do not reveal the exact time spent generating tokens. A turn
@@ -58,7 +65,7 @@ def model_active_seconds(turn: Turn) -> float | None:
     for item in turn.items:
         if not is_tool_shaped_item(item):
             continue
-        if item.completed_at is None:
+        if item.completed_at is None or item.completed_at < item.started_at:
             return None
         start = max(item.started_at, turn_start)
         end = min(item.completed_at, turn_end)
@@ -69,7 +76,27 @@ def model_active_seconds(turn: Turn) -> float | None:
     for start, end in _merge_intervals(intervals):
         tool_seconds += (end - start).total_seconds()
     total_seconds = (turn_end - turn_start).total_seconds()
-    return round(max(total_seconds - tool_seconds, 0.0), 3)
+    return ExecutionTiming(
+        round(max(total_seconds - tool_seconds, 0.0), 3),
+        round(tool_seconds, 3),
+    )
+
+
+def model_active_seconds(turn: Turn) -> float | None:
+    """Return estimated model time when the turn has complete timing."""
+    timing = execution_timing(turn)
+    return timing.llm_seconds if timing is not None else None
+
+
+def aggregate_execution_timing(turns: Iterable[Turn]) -> ExecutionTiming | None:
+    """Sum execution portions only when every turn has complete timing."""
+    values = [execution_timing(turn) for turn in turns]
+    if not values or any(value is None for value in values):
+        return None
+    return ExecutionTiming(
+        round(sum(value.llm_seconds for value in values if value is not None), 3),
+        round(sum(value.tool_seconds for value in values if value is not None), 3),
+    )
 
 
 def aggregate_model_active_seconds(turns: Iterable[Turn]) -> float | None:

@@ -76,3 +76,9 @@ status assertion becomes that ordinal. Root identity and turns move to
 `root_session_id` and `turns`; orchestration moves to the top level. The three
 source turns already reconstructed above are `totals.source_turns`. Numeric
 usage, cost, runtime and graph membership expectations are unchanged.
+
+## Execution split
+
+The root turn spans 108.767 seconds (source/parent.jsonl:2,6) with no tool calls. Root runtime reports 108.767 estimated LLM seconds and zero tool seconds. The child spans 60 + 30 = 90 seconds (source/fork.jsonl:5,10,11,16); its tool intervals total 0.100 + 0.500 = 0.600 seconds (lines 7–8,13–14), leaving 59.900 + 29.500 = 89.400 estimated LLM seconds. Graph runtime retains the root split and the child section retains the child split.
+
+These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.

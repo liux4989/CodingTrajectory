@@ -50,3 +50,9 @@ source and visibility rule, not regenerated command output.
 ## Output token throughput
 
 The numerator is generated (output) tokens: the five assistant messages (`source/session.jsonl:5,7,9,11,13`) report 65+47+52+53+50 = 267 output tokens. Over the same model-active denominator as above, the source-derived rate is `267 / 91.227` = 2.927 output tokens/second. It is an end-to-end model-active rate, so time to first token and prefill are included.
+
+## Execution split
+
+The turn spans 91.461 seconds (source/session.jsonl:4,13). The four tool intervals (lines 5–12) total 0.081 + 0.056 + 0.023 + 0.074 = 0.234 seconds, leaving 91.227 seconds of estimated LLM time.
+
+These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.

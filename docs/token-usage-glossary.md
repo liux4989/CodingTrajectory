@@ -81,6 +81,20 @@ it was part of the input stays unknown unless the source confirms it.
 
 ## Model time
 
+Session stats and usage expose execution time as `runtime.llm_seconds` and
+`runtime.tool_seconds`. Tool time is the union of completed tool intervals,
+clipped to each turn's boundaries, so parallel tools count once. LLM time is
+the remaining turn time, including request overhead and waiting for output;
+it estimates model activity rather than measuring provider inference directly.
+Both fields are unavailable if any turn boundary or tool completion is missing
+or invalid. Time waiting for the user between turns is separate.
+
+The split covers all turns, including turns without recorded token usage.
+`model_active_seconds` at session scope covers only turns with recorded usage
+and remains the denominator for token throughput. Graph runtime shows the root
+session's split; each subagent has its own session section. Execution totals
+round each turn to whole seconds, while split fields retain millisecond precision.
+
 `model_active_seconds` measures the recorded turn duration minus time spent
 running tools. Overlapping tool runs are subtracted only once.
 Claude uses a `turn_duration` record when available instead of waiting for the

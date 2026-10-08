@@ -662,6 +662,29 @@ def _render_session_stats_text(
     return "\n".join(lines).rstrip()
 
 
+def _format_execution_time(runtime: dict[str, Any]) -> str:
+    """Show the execution split, preserving unavailable timing as unknown."""
+
+    def duration(value: Any) -> str:
+        if value is None:
+            return "unknown"
+        hours, remainder = divmod(float(value), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        parts = []
+        if hours:
+            parts.append(f"{int(hours)}h")
+        if minutes or hours:
+            parts.append(f"{int(minutes)}m")
+        parts.append(f"{seconds:.3f}".rstrip("0").rstrip(".") + "s")
+        return " ".join(parts)
+
+    execution = duration(runtime.get("execution_seconds"))
+    llm = duration(runtime.get("llm_seconds"))
+    tools = duration(runtime.get("tool_seconds"))
+    llm_label = f"~{llm}" if runtime.get("llm_seconds") is not None else llm
+    return f"{execution} execution (LLM {llm_label}, tools {tools})"
+
+
 def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
     model = payload.get("model") or {}
     context = payload.get("context_window") or {}
@@ -677,7 +700,7 @@ def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
         context_text += f" {format_percent(context['used_percent'])}"
     lines.append(f"Context (latest request): {context_text}")
     _append_stats_usage(lines, payload)
-    timing = [f"{format_duration(runtime.get('execution_seconds'))} execution"]
+    timing = [_format_execution_time(runtime)]
     if runtime.get("wait_seconds"):
         timing.append(f"{format_duration(runtime['wait_seconds'])} waiting")
     lines.append("Time: " + ", ".join(timing))
@@ -785,7 +808,7 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
     tool_calls_total = runtime.get("tool_calls") or 0
     failed_tool_calls = runtime.get("failed_tool_calls") or 0
     runtime_line = (
-        f"Execution: {format_duration(runtime.get('execution_seconds'))}, "
+        f"Time: {_format_execution_time(runtime)}, "
         f"wait {format_duration(runtime.get('wait_seconds'))}, "
         f"{runtime.get('turns') or 0} turns, "
         f"{runtime.get('items') or 0} items, "
@@ -945,7 +968,7 @@ def _render_session_usage_text(
     runtime = payload.get("runtime") or {}
     if runtime:
         lines.append(
-            f"  execution {format_duration(runtime.get('execution_seconds'))}  "
+            f"  {_format_execution_time(runtime)}  "
             f"wait {format_duration(runtime.get('wait_seconds'))}"
         )
 
@@ -972,7 +995,7 @@ def _render_session_usage_text(
             timing_parts = []
             if runtime.get("execution_seconds") is not None:
                 timing_parts.append(
-                    f"execution {format_duration(runtime.get('execution_seconds'))}"
+                    _format_execution_time(runtime)
                 )
             if runtime.get("wait_before_seconds") is not None:
                 timing_parts.append(
@@ -1018,7 +1041,7 @@ def _render_session_usage_sections(
     runtime = payload.get("runtime") or {}
     if runtime:
         lines.append(
-            f"  execution {format_duration(runtime.get('execution_seconds'))}  "
+            f"  {_format_execution_time(runtime)}  "
             f"wait {format_duration(runtime.get('wait_seconds'))}"
         )
     lines.append("```")
@@ -1054,7 +1077,7 @@ def _render_session_usage_sections(
         section_runtime = section.get("runtime") or {}
         if section_runtime:
             lines.append(
-                f"  execution {format_duration(section_runtime.get('execution_seconds'))}  "
+                f"  {_format_execution_time(section_runtime)}  "
                 f"wait {format_duration(section_runtime.get('wait_seconds'))}"
             )
         turns = section.get("turns") or []

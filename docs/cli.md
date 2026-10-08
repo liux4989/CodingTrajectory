@@ -107,8 +107,9 @@ so these totals may differ from billed usage. JSON field names stay stable;
 the glossary maps them to the display terms.
 
 `session stats` puts the model, latest-request context, recorded token usage,
-execution time, activity, and compaction count first. The full category tree
-uses a narrow table with estimated visible tokens and their share of the context.
+execution time with estimated LLM and tool time, activity, and compaction count
+first. The full category tree uses a narrow table with estimated visible tokens
+and their share of the context.
 The `Recorded tokens` line shows `input`, `output`, `processed tokens`, and
 `cache hit ratio`. The ratio is cached input divided by cache-inclusive input,
 weighted by tokens across recorded usage entries. Cache writes count in the

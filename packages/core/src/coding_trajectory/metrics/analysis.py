@@ -612,6 +612,8 @@ def _turn_runtime(
         started_at=turn.started_at,
         ended_at=turn.completed_at,
         execution_seconds=execution_seconds,
+        llm_seconds=turn.model_active_seconds,
+        tool_seconds=turn.tool_seconds,
         model_active_seconds=turn.model_active_seconds,
         processed_tokens_per_second=processed_tokens_per_second(
             turn.token_usage.processed_token_total(),
