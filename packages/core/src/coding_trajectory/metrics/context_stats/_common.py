@@ -455,6 +455,8 @@ def token_usage_from_mapping(value: dict[str, Any] | None) -> TokenUsage:
             value.get("cache_creation_input_tokens")
             or value.get("cacheCreationInputTokens")
         ),
+        cache_creation_5m_input_tokens=_as_int(value.get("cache_creation_5m_input_tokens")),
+        cache_creation_1h_input_tokens=_as_int(value.get("cache_creation_1h_input_tokens")),
         output_tokens=_as_int(value.get("output_tokens") or value.get("outputTokens")),
         reasoning_output_tokens=_as_int(
             value.get("reasoning_output_tokens") or value.get("reasoningOutputTokens")

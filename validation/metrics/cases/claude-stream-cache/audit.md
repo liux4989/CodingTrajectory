@@ -39,3 +39,8 @@ The numerator is recorded output tokens: both response-1 stream fragments (47 ea
 The turn spans 75.245 seconds (source/session.jsonl:1,5). The tool spans 1.527 seconds (lines 3–4), leaving 73.718 seconds of estimated LLM time.
 
 These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.
+
+
+## Recorded cost and net cache savings
+
+The committed usage counts at `source/session.jsonl:2-3,5` and the pinned pricing artifact produce `total_cost = 0.1122136` USD (estimated). Repricing the same input without cache reads yields `0.1658392` USD, with output and separately counted reasoning unchanged. There are no cache writes in this case. Net savings is `0.1658392 - 0.1122136 = 0.0536256` USD. The summary includes 3 recorded usage entries; repeated Claude stream records remain repeated recorded evidence. Existing expected metrics are unchanged.

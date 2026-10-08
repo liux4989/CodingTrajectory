@@ -39,6 +39,8 @@ class TokenUsage(BaseModel):
     input_tokens: int = 0
     cached_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    cache_creation_5m_input_tokens: int = Field(default=0, ge=0)
+    cache_creation_1h_input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
     total_tokens: int = 0
@@ -87,6 +89,10 @@ class TokenUsage(BaseModel):
             processed_tokens=self.processed_token_total(),
         )
         data["total_confidence"] = self.total_confidence
+        if self.cache_creation_5m_input_tokens:
+            data["cache_write_5m_tokens"] = self.cache_creation_5m_input_tokens
+        if self.cache_creation_1h_input_tokens:
+            data["cache_write_1h_tokens"] = self.cache_creation_1h_input_tokens
         if self.reported_total_tokens is not None:
             data["reported_total_tokens"] = self.reported_total_tokens
         if self.cost_usd is not None:
@@ -99,6 +105,10 @@ class TokenUsage(BaseModel):
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
             cache_creation_input_tokens=self.cache_creation_input_tokens
             + other.cache_creation_input_tokens,
+            cache_creation_5m_input_tokens=self.cache_creation_5m_input_tokens
+            + other.cache_creation_5m_input_tokens,
+            cache_creation_1h_input_tokens=self.cache_creation_1h_input_tokens
+            + other.cache_creation_1h_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             reasoning_output_tokens=self.reasoning_output_tokens
             + other.reasoning_output_tokens,
@@ -432,6 +442,25 @@ class CacheAttributionEvidenceFlat(BaseModel):
     context_resets: list[CacheContextResetFlat] = Field(default_factory=list)
 
 
+class CacheSavingsEvidenceFlat(CostEvidenceFlat):
+    """Signed net savings; cache-write premiums can exceed read discounts."""
+
+    value_usd: float
+    confidence: Literal["estimated"] = "estimated"
+
+
+class CostSummaryFlat(BaseModel):
+    requests: int = 0
+    priced_requests: int = 0
+    total_cost: CostEvidenceFlat | None = None
+    cache_savings: CacheSavingsEvidenceFlat | None = None
+    no_cache_cost: CostEvidenceFlat | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        return _drop_none(handler(self))
+
+
 class SessionContextStatsFlat(BaseModel):
     root_session_id: UUID
     vendor: str
@@ -444,6 +473,7 @@ class SessionContextStatsFlat(BaseModel):
     compaction: CompactionStatsFlat | None = None
     messages: MessageStatsFlat = Field(default_factory=MessageStatsFlat)
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    cost_summary: CostSummaryFlat | None = None
     warnings: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -451,6 +481,8 @@ class SessionContextStatsFlat(BaseModel):
         data = handler(self)
         if data.get("compaction") is None:
             data.pop("compaction", None)
+        if data.get("cost_summary") is None:
+            data.pop("cost_summary", None)
         return data
 
 

@@ -233,6 +233,8 @@ def _token_usage_from_mapping(
         input_tokens=input_tokens,
         cached_input_tokens=cached_input_tokens,
         cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_creation_5m_input_tokens=_as_int(value.get("cache_creation_5m_input_tokens")),
+        cache_creation_1h_input_tokens=_as_int(value.get("cache_creation_1h_input_tokens")),
         output_tokens=output_tokens,
         reasoning_output_tokens=reasoning_output_tokens,
         total_tokens=total_tokens,

@@ -8,5 +8,11 @@
   {"path":"$.model.name","expected":"glm-5.2","source_refs":["source/session.jsonl:2","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
   {"path":"$.billed_token_usage.processed","expected":117563,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#usage-arithmetic"},
     {"path": "$.runtime.llm_seconds", "expected": 73.718, "source_refs": ["source/session.jsonl:1", "source/session.jsonl:3-5"], "audit_ref": "audit.md#execution-split"},
-    {"path": "$.runtime.tool_seconds", "expected": 1.527, "source_refs": ["source/session.jsonl:1", "source/session.jsonl:3-5"], "audit_ref": "audit.md#execution-split"}
+    {"path": "$.runtime.tool_seconds", "expected": 1.527, "source_refs": ["source/session.jsonl:1", "source/session.jsonl:3-5"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.cost_summary.requests", "expected": 3, "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.priced_requests", "expected": 3, "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.total_cost.value_usd", "expected": 0.1122136, "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.total_cost.confidence", "expected": "estimated", "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.no_cache_cost.value_usd", "expected": 0.1658392, "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.0536256, "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"}
 ]}

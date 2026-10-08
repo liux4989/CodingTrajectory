@@ -152,6 +152,7 @@ def _estimate_cost_from_ints(
     provider: str | None,
     pricing_input_tokens: int | None = None,
     pricing_rule: PriceRule | None | object = _PRICING_RULE_UNSET,
+    cache_creation_1h_input_tokens: int = 0,
 ) -> tuple[float, str, str] | None:
     """Fast-path cost estimate returning (amount_usd, pricing_source, effective_date).
 
@@ -186,6 +187,21 @@ def _estimate_cost_from_ints(
         rule.cache_creation_input_per_mtok,
         rule.cache_creation_input_per_mtok_above_threshold,
     )
+    if cached_input_tokens and cached_rate is None:
+        return None
+    if not 0 <= cache_creation_1h_input_tokens <= cache_creation_input_tokens:
+        return None
+    claude_model = rule.model.startswith("claude-")
+    if cache_creation_rate is None and claude_model:
+        cache_creation_rate = input_rate * 1.25
+    one_hour_rate = rule.cache_creation_1h_input_per_mtok
+    if one_hour_rate is None and claude_model:
+        one_hour_rate = input_rate * 2
+    five_minute_tokens = cache_creation_input_tokens - cache_creation_1h_input_tokens
+    if (five_minute_tokens and cache_creation_rate is None) or (
+        cache_creation_1h_input_tokens and one_hour_rate is None
+    ):
+        return None
     output_rate = _threshold_rate(
         above_threshold, rule.output_per_mtok, rule.output_per_mtok_above_threshold
     )
@@ -197,7 +213,8 @@ def _estimate_cost_from_ints(
     amount = _round_usd(
         _price(standard_input_tokens, input_rate)
         + _price(cached_input_tokens, cached_rate)
-        + _price(cache_creation_input_tokens, cache_creation_rate)
+        + _price(five_minute_tokens, cache_creation_rate)
+        + _price(cache_creation_1h_input_tokens, one_hour_rate)
         + _price(output_tokens, output_rate)
         + _price(reasoning_output_tokens, rule.reasoning_output_per_mtok)
     )
@@ -300,15 +317,33 @@ def cost_evidence_from_usage(
                 source="session log",
             )
         return None
+    prompt = _usage_int(usage, "prompt_tokens", "input")
+    cached = _usage_int(usage, "cached_prompt_tokens", "cached")
+    writes = _usage_int(usage, "cache_write_tokens", "cache_creation")
+    uncached = usage.get("uncached_prompt_tokens")
+    if isinstance(uncached, int) and not isinstance(uncached, bool):
+        total_input = uncached + cached + writes
+        # Canonical uncached evidence takes precedence over provider aliases.
+        prompt = uncached if _uses_net_input_convention(provider, model) else total_input
+    else:
+        total_input = (
+            prompt + cached + writes if _uses_net_input_convention(provider, model)
+            else prompt
+        )
     estimate = _estimate_cost_from_ints(
-        _usage_int(usage, "prompt_tokens", "input"),
-        _usage_int(usage, "cached_prompt_tokens", "cached"),
-        _usage_int(usage, "cache_write_tokens", "cache_creation"),
+        prompt,
+        cached,
+        writes,
         _usage_int(usage, "completion_tokens", "output"),
         _usage_int(usage, "reasoning_tokens", "reasoning"),
         model=model,
         provider=provider,
-        pricing_input_tokens=pricing_input_tokens,
+        pricing_input_tokens=(
+            total_input if pricing_input_tokens is None else pricing_input_tokens
+        ),
+        cache_creation_1h_input_tokens=_usage_int(
+            usage, "cache_write_1h_tokens", "cache_creation_1h_input_tokens"
+        ),
     )
     if estimate is None:
         if reported is not None:
@@ -334,6 +369,7 @@ class PriceRule:
     output_per_mtok: float
     cached_input_per_mtok: float | None = None
     cache_creation_input_per_mtok: float | None = None
+    cache_creation_1h_input_per_mtok: float | None = None
     reasoning_output_per_mtok: float | None = None
     threshold_tokens: int | None = None
     input_per_mtok_above_threshold: float | None = None
@@ -363,6 +399,18 @@ def _preindexed_price_rules() -> dict[str, PriceRule]:
         rule.model: rule
         for rule in [
             # --- Claude (Anthropic) ---
+            _preindexed_rule(
+                "claude-opus-5-5", input_rate=4.0, cached_rate=0.2,
+                cache_creation_rate=5.0, output_rate=20.0,
+                pricing_source="https://platform.claude.com/docs/en/about-claude/pricing",
+                pricing_effective_date="2026-10-08",
+            ),
+            _preindexed_rule(
+                "claude-sonnet-5-5", input_rate=2.0, cached_rate=0.1,
+                cache_creation_rate=2.5, output_rate=10.0,
+                pricing_source="https://platform.claude.com/docs/en/about-claude/pricing",
+                pricing_effective_date="2026-10-08",
+            ),
             _preindexed_rule("claude-opus-4-8", input_rate=5.0, cached_rate=0.5, cache_creation_rate=6.25, output_rate=25.0),
             _preindexed_rule("claude-opus-4-7", input_rate=5.0, cached_rate=0.5, cache_creation_rate=6.25, output_rate=25.0),
             _preindexed_rule("claude-opus-4-6", input_rate=5.0, cached_rate=0.5, cache_creation_rate=6.25, output_rate=25.0),
@@ -425,6 +473,7 @@ def _preindexed_rule(
     cached_rate_above_threshold: float | None = None,
     output_rate_above_threshold: float | None = None,
     pricing_source: str = MODELS_DEV_SOURCE,
+    pricing_effective_date: str = _PREINDEXED_PRICING_EFFECTIVE_DATE,
 ) -> PriceRule:
     return PriceRule(
         model=model,
@@ -437,7 +486,7 @@ def _preindexed_rule(
         output_per_mtok_above_threshold=output_rate_above_threshold,
         cached_input_per_mtok_above_threshold=cached_rate_above_threshold,
         pricing_source=pricing_source,
-        pricing_effective_date=_PREINDEXED_PRICING_EFFECTIVE_DATE,
+        pricing_effective_date=pricing_effective_date,
     )
 
 

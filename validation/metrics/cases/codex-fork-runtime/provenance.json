@@ -26,5 +26,5 @@
   "audit_date": "2026-07-15",
   "auditor": "Codex source-evidence arithmetic pass",
   "reviewer": "Codex artifact and projection cross-check",
-  "last_contract_migration": "Additive runtime.llm_seconds and runtime.tool_seconds assertions derived in audit.md#execution-split; existing metric expectations unchanged."
+  "last_contract_migration": "Additive runtime.llm_seconds and runtime.tool_seconds assertions derived in audit.md#execution-split; existing metric expectations unchanged. Additive cost_summary assertions reconstructed from committed source counts and pinned rates in audit.md#recorded-cost-and-net-cache-savings; existing values unchanged."
 }

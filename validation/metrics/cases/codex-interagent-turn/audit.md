@@ -82,3 +82,10 @@ usage, cost, runtime and graph membership expectations are unchanged.
 The root turn spans 108.767 seconds (source/parent.jsonl:2,6) with no tool calls. Root runtime reports 108.767 estimated LLM seconds and zero tool seconds. The child spans 60 + 30 = 90 seconds (source/fork.jsonl:5,10,11,16); its tool intervals total 0.100 + 0.500 = 0.600 seconds (lines 7–8,13–14), leaving 59.900 + 29.500 = 89.400 estimated LLM seconds. Graph runtime retains the root split and the child section retains the child split.
 
 These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.
+
+
+## Recorded cost and net cache savings
+
+The committed usage counts at `source/parent.jsonl:5` and the pinned pricing artifact produce `total_cost = 0.0047` USD (estimated). Repricing the same input without cache reads yields `0.0083` USD, with output and separately counted reasoning unchanged. There are no cache writes in this case. Net savings is `0.0083 - 0.0047 = 0.0036` USD. The summary includes 1 recorded usage entries; repeated Claude stream records remain repeated recorded evidence. Existing expected metrics are unchanged.
+
+The three graph observations at `source/parent.jsonl:5` and `source/fork.jsonl:9,15` report total input 4,500, output 230, reasoning 23, and cached input 4,000. No-cache cost is `(4500 * 5 + (230 + 23) * 30) / 1,000,000 = 0.03009` USD. Subtracting the previously audited cached cost `0.01209` gives graph net cache savings `0.018` USD. Graph assertions remain separate from root-session assertions.

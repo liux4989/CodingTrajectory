@@ -62,6 +62,24 @@ usage added up across the session.
 ## Costs and estimated shares
 
 Reported cost comes directly from the provider. Estimated cost uses a price list.
+Stats `cost_summary.total_cost` adds these request-level costs, preferring reported
+evidence. `cost_summary.cache_savings` is always estimated: it compares list-price
+cost with caching against the same token usage without cache discounts or cache
+creation. It includes the write premium, so a write without enough later reads can
+produce negative savings. `no_cache_cost` includes the unchanged output costs.
+The comparison preserves each request's model and cache-inclusive input-length
+pricing tier; it does not reprice an aggregate session at a larger tier. Missing
+prices leave the affected total absent rather than producing a partial total.
+`requests` and `priced_requests` expose total-cost pricing coverage.
+
+Claude five-minute writes cost 1.25 times the input price; one-hour writes cost
+twice the input price. Recorded duration breakdowns are preserved as
+`cache_write_5m_tokens` and `cache_write_1h_tokens` (compact CLI JSON uses
+`cache_write_5m` and `cache_write_1h`). They are subsets of `cache_write_tokens`,
+not additional tokens. One-hour writes use their higher rate; writes without a
+duration breakdown use the five-minute estimate.
+Source: [Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching).
+
 Calculate cost separately for each token type, since rates can differ.
 Each request estimate uses that request's pricing tier and prompt size.
 Turn, model, and session costs add up the request estimates; they do not choose

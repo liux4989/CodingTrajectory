@@ -56,3 +56,8 @@ The numerator is generated (output) tokens: `last_token_usage.output_tokens` is 
 The root turn spans 108.767 seconds (source/parent.jsonl:2,6) with no tool calls. Its split is therefore 108.767 seconds of estimated LLM time and zero tool seconds. The separate fork (source/fork.jsonl:2,5) spans 0.827 seconds with no tools or usage; execution timing remains measurable even without token usage.
 
 These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.
+
+
+## Recorded cost and net cache savings
+
+The committed usage counts at `source/parent.jsonl:5` and the pinned pricing artifact produce `total_cost = 0.079969` USD (estimated). Repricing the same input without cache reads yields `0.420385` USD, with output and separately counted reasoning unchanged. There are no cache writes in this case. Net savings is `0.420385 - 0.079969 = 0.340416` USD. The summary includes 1 recorded usage entries; repeated Claude stream records remain repeated recorded evidence. Existing expected metrics are unchanged.

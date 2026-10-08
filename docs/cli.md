@@ -121,6 +121,18 @@ count; processed tokens retains the canonical total, including separately counte
 reasoning. Input is shown as unknown when the cache-inclusive count cannot be derived.
 Use `session usage` or `session request-usage` for the individual cache and reasoning
 buckets. JSON field names and recorded totals stay unchanged.
+Stats also shows `Total cost` and `Cache savings` in USD. Total cost sums
+request-level reported costs when available, otherwise token-price estimates.
+Cache savings is an estimate of the same requests at ordinary input prices minus
+their estimated cost with cache reads and writes. It includes cache-write premiums
+and can be negative. Each request keeps its own model and input-length pricing tier;
+output prices are unchanged in the comparison. Incomplete pricing shows as unknown.
+JSON retains detailed token buckets and adds `cost_summary` with total cost,
+net cache savings, no-cache cost, and request pricing coverage.
+Claude writes use the recorded one-hour count when available; other writes use
+the five-minute rate. See [Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing#prompt-caching).
+Estimates use standard token rates and recorded usage, rather than subscription
+charges or an invoice; unrecorded service modifiers and server-tool fees are excluded.
 Use `--details` to include estimated usage shares, provider input breakdowns,
 message counts, and the compaction timeline:
 

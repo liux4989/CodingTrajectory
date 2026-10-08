@@ -298,6 +298,8 @@ def compact_usage(
                 "uncached_prompt": usage.get("uncached_prompt_tokens"),
                 "cached_prompt": usage.get("cached_prompt_tokens"),
                 "cache_write": usage.get("cache_write_tokens"),
+                "cache_write_5m": usage.get("cache_write_5m_tokens"),
+                "cache_write_1h": usage.get("cache_write_1h_tokens"),
                 "completion": usage.get("completion_tokens"),
                 "reasoning": usage.get("reasoning_tokens"),
                 "reported_total": usage.get("reported_total_tokens"),
@@ -680,6 +682,7 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "billed_token_usage": compact_usage(
                 payload.get("billed_token_usage"), include_cost=False
             ),
+            "cost_summary": payload.get("cost_summary"),
             "warnings": payload.get("warnings") or None,
         }
     )

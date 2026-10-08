@@ -18,6 +18,7 @@ from coding_trajectory.metrics.context_stats.composition import (
     build_context_composition,
     context_composition_anchor_outcome,
 )
+from coding_trajectory.metrics.cost_summary import cost_summary_from_metrics
 from coding_trajectory.metrics.models import (
     ContextCategoryFlat,
     ContextModelStatsFlat,
@@ -48,6 +49,7 @@ def build_session_graph_context_stats(
 
     vendor = next(iter(vendors))
     full = precomputed_metrics or _build_full_metrics(session_graph)
+    cost_summary = cost_summary_from_metrics(full)
     runtime = runtime_stats(
         session_graph,
         session_metrics=(
@@ -86,6 +88,7 @@ def build_session_graph_context_stats(
             runtime=runtime,
             compaction=compaction,
             messages=messages,
+            cost_summary=cost_summary,
             warnings=warnings,
         ).model_dump(mode="json")
         return _project_composition(payload, include=include_composition)
@@ -153,6 +156,7 @@ def build_session_graph_context_stats(
         compaction=compaction,
         messages=messages,
         usage=token_usage_from_mapping(observation.usage),
+        cost_summary=cost_summary,
         warnings=warnings,
     ).model_dump(mode="json")
     return _project_composition(payload, include=include_composition)

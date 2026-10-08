@@ -56,3 +56,8 @@ The numerator is generated (output) tokens: the five assistant messages (`source
 The turn spans 91.461 seconds (source/session.jsonl:4,13). The four tool intervals (lines 5–12) total 0.081 + 0.056 + 0.023 + 0.074 = 0.234 seconds, leaving 91.227 seconds of estimated LLM time.
 
 These additive assertions derive from committed timestamps, not command output. Existing execution and throughput expectations remain unchanged. Execution uses whole-second rounding per turn; split fields retain millisecond precision. The arithmetic extends the source audit and does not constitute independent organizational sign-off.
+
+
+## Recorded cost and net cache savings
+
+The committed usage counts at `source/session.jsonl:5,7,9,11,13` and the pinned pricing artifact produce `total_cost = 0.01081964` USD (reported). Repricing the same input without cache reads yields `0.0273086` USD, with output and separately counted reasoning unchanged. There are no cache writes in this case. Net savings is `0.0273086 - 0.01081964 = 0.01648896` USD. The summary includes 5 recorded usage entries; repeated Claude stream records remain repeated recorded evidence. Existing expected metrics are unchanged.

@@ -6,5 +6,11 @@
   {"path":"$.model.name","expected":"glm-5.2","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
   {"path":"$.billed_token_usage.processed","expected":17282,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#usage-arithmetic"},
     {"path": "$.runtime.llm_seconds", "expected": 91.227, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#execution-split"},
-    {"path": "$.runtime.tool_seconds", "expected": 0.234, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#execution-split"}
+    {"path": "$.runtime.tool_seconds", "expected": 0.234, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.cost_summary.requests", "expected": 5, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.priced_requests", "expected": 5, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.total_cost.value_usd", "expected": 0.01081964, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.total_cost.confidence", "expected": "reported", "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.no_cache_cost.value_usd", "expected": 0.0273086, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.01648896, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"}
 ]}

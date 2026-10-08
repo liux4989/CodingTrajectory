@@ -9,6 +9,12 @@
     {"path": "$.model.name", "expected": "gpt-5.5", "source_refs": ["source/parent.jsonl:3"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.billed_token_usage.processed", "expected": 79182, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.runtime.llm_seconds", "expected": 108.767, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"},
-    {"path": "$.runtime.tool_seconds", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"}
+    {"path": "$.runtime.tool_seconds", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#execution-split"},
+    {"path": "$.cost_summary.requests", "expected": 1, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.priced_requests", "expected": 1, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.total_cost.value_usd", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.total_cost.confidence", "expected": "estimated", "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.no_cache_cost.value_usd", "expected": 0.420385, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.340416, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"}
 ]
 }

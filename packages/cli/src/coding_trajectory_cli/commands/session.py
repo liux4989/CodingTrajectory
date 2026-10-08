@@ -731,6 +731,28 @@ def _append_stats_usage(lines: list[str], payload: dict[str, Any]) -> None:
     usage = payload.get("billed_token_usage") or {}
     if usage:
         lines.append(f"Recorded tokens: {render_recorded_tokens(usage)}")
+    _append_stats_cost(lines, payload)
+
+
+def _append_stats_cost(
+    lines: list[str], payload: dict[str, Any], *, prefix: str = ""
+) -> None:
+    summary = payload.get("cost_summary") or {}
+    if not summary:
+        return
+
+    def cost_label(key: str) -> str:
+        cost = summary.get(key) or {}
+        value = cost.get("value_usd")
+        if value is None:
+            return "unknown"
+        amount = f"-{format_cost(-value)}" if value < 0 else format_cost(value)
+        return f"{amount} ({cost.get('confidence') or 'estimated'})"
+
+    lines.append(
+        f"{prefix}Total cost: {cost_label('total_cost')}  "
+        f"Cache savings: {cost_label('cache_savings')}"
+    )
 
 
 def _append_stats_activity(lines: list[str], runtime: dict[str, Any]) -> None:
@@ -827,6 +849,7 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
             f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}"
         )
         lines.append(RECORDED_USAGE_NOTE)
+    _append_stats_cost(lines, payload, prefix="- ")
     lines.append(f"- {runtime_line}")
     if runtime.get("interrupted_turns"):
         lines[-1] += f", {runtime['interrupted_turns']} interrupted"
@@ -907,6 +930,7 @@ def _render_session_stats_sections(
         if billed_token_usage:
             lines.append(f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}")
             lines.append(RECORDED_USAGE_NOTE)
+        _append_stats_cost(lines, section, prefix="- ")
         lines.append(
             "- Runtime: "
             f"{runtime.get('turns') or 0} turns, "
@@ -926,6 +950,7 @@ def _render_session_stats_sections(
     if graph_billed:
         lines.append(f"- Total recorded tokens: {render_recorded_tokens(graph_billed)}")
         lines.append(RECORDED_USAGE_NOTE)
+    _append_stats_cost(lines, payload, prefix="- ")
     lines.append(
         "- Graph runtime: "
         f"{runtime.get('turns') or 0} turns, "
