@@ -110,6 +110,17 @@ the glossary maps them to the display terms.
 execution time with estimated LLM and tool time, activity, and compaction count
 first. The full category tree uses a narrow table with estimated visible tokens
 and their share of the context.
+When recorded timing is available, `TTFT avg` shows the average time to first
+token across completed turns with a TTFT observation, in seconds. Turns without
+that observation are excluded; sessions without any observations omit the line.
+Graph sections show each session's own average. Session stats JSON retains
+`runtime.average_ttft_ms` in milliseconds; the API field remains
+`runtime.average_time_to_first_token_ms`.
+`TPS` shows recorded output tokens divided by model-active seconds, excluding
+tool execution but including prompt processing and waiting for output. It uses
+`runtime.output_tokens_per_second`; Amp's available output estimate uses
+`runtime.estimated_output_tokens_per_second` and is labeled `TPS (estimated)`.
+Sessions without a rate omit the line; graph sections show each session's rate.
 The `Recorded tokens` line shows `input`, `output`, `processed tokens`, and
 `cache hit ratio`. The ratio is cached input divided by cache-inclusive input,
 weighted by tokens across recorded usage entries. Cache writes count in the

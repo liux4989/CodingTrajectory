@@ -685,6 +685,21 @@ def _format_execution_time(runtime: dict[str, Any]) -> str:
     return f"{execution} execution (LLM {llm_label}, tools {tools})"
 
 
+def _append_stats_response_metrics(
+    lines: list[str], runtime: dict[str, Any], *, prefix: str = ""
+) -> None:
+    average_ms = runtime.get("average_time_to_first_token_ms")
+    if average_ms is not None:
+        lines.append(f"{prefix}TTFT avg: {average_ms / 1000:.2f}s")
+    tps = runtime.get("output_tokens_per_second")
+    label = "TPS"
+    if tps is None:
+        tps = runtime.get("estimated_output_tokens_per_second")
+        label = "TPS (estimated)"
+    if tps is not None:
+        lines.append(f"{prefix}{label}: {tps:.2f} tokens/s")
+
+
 def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
     model = payload.get("model") or {}
     context = payload.get("context_window") or {}
@@ -704,6 +719,7 @@ def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
     if runtime.get("wait_seconds"):
         timing.append(f"{format_duration(runtime['wait_seconds'])} waiting")
     lines.append("Time: " + ", ".join(timing))
+    _append_stats_response_metrics(lines, runtime)
     _append_stats_activity(lines, runtime)
 
     categories = [
@@ -863,11 +879,7 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
         if compaction_line:
             lines.append(compaction_line)
     _render_compaction_timeline(lines, compaction)
-    if runtime.get("average_time_to_first_token_ms") is not None:
-        lines.append(
-            f"- Average time to first token: "
-            f"{runtime['average_time_to_first_token_ms'] / 1000:.2f}s"
-        )
+    _append_stats_response_metrics(lines, runtime, prefix="- ")
     if tool_calls_total:
         success_rate = round(
             ((tool_calls_total - failed_tool_calls) / tool_calls_total) * 100, 1
@@ -938,6 +950,7 @@ def _render_session_stats_sections(
             f"{runtime.get('tool_calls') or 0} tool calls"
         )
         lines.append(f"- Compaction count: {runtime.get('compactions') or 0}")
+        _append_stats_response_metrics(lines, runtime, prefix="- ")
 
     graph_context = payload.get("context_window") or {}
     runtime = payload.get("runtime") or {}
