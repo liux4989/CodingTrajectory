@@ -11,7 +11,7 @@ from coding_trajectory.runtime import ServiceRuntime
 
 def main() -> None:
     request = json.load(sys.stdin)
-    with ServiceRuntime(global_scope=True, current_dir=Path.cwd()) as core:
+    with ServiceRuntime(global_scope=True, current_dir=Path.cwd(), source="local") as core:
         result = core.execute(request)
     json.dump(result, sys.stdout)
 

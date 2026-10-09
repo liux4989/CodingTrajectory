@@ -286,7 +286,7 @@ function App() {
           <MonitorHome route={monitorRoute} />
         ) : reference ? (
           <InvestigationView
-            key={`${reference.session_id}:${reference.view_manifest_sha256 ?? ""}:${savedView?.id ?? ""}`}
+            key={`${reference.session_id}:${savedView?.id ?? ""}`}
             reference={reference}
             onSave={loadSaved}
             savedView={savedView}
@@ -419,7 +419,7 @@ function Explore({
               </div>
               <h3>
                 <a
-                  href={referenceLink({ session_id: session.root_session_id, view_manifest_sha256: session.view_manifest_sha256 })}
+                  href={referenceLink({ session_id: session.root_session_id })}
                 >
                   {session.title || `Session ${short(session.root_session_id)}`}
                   <ArrowUpRight size={18} />
@@ -430,15 +430,12 @@ function Explore({
                 <code>{session.root_session_id}</code> ·{" "}
                 {session.session_ids?.length ?? 1} observed member(s)
               </p>
-              {session.warnings?.map((warning) => (
-                <p key={warning}>{warning}</p>
-              ))}
               {(session.session_ids?.length ?? 0) > 1 && (
                 <details>
                   <summary>Open a member session</summary>
                   {session.session_ids?.map((id) => (
                     <p key={id}>
-                      <EvidenceLink reference={{ session_id: id, view_manifest_sha256: session.view_manifest_sha256 }}>
+                      <EvidenceLink reference={{ session_id: id }}>
                         Session {short(id)}
                       </EvidenceLink>
                     </p>
@@ -447,7 +444,7 @@ function Explore({
               )}
             </div>
             <Button asChild variant="outline">
-              <a href={referenceLink({ session_id: session.root_session_id, view_manifest_sha256: session.view_manifest_sha256 })}>
+              <a href={referenceLink({ session_id: session.root_session_id })}>
                 Investigate
                 <ArrowUpRight data-icon="inline-end" />
               </a>
@@ -492,24 +489,17 @@ function InvestigationView({
     savedView?.title ?? `Session ${short(reference.session_id)}`,
   );
   const [turnCursors, setTurnCursors] = useState<string[]>([]);
-  const [viewHash, setViewHash] = useState(reference.view_manifest_sha256);
   const overview = useCore<SessionOverviewResponse>("session.overview", {
     session_id: reference.session_id,
-    view_manifest_sha256: viewHash,
     limit: 5,
     ...(turnCursors.length
       ? { cursor: turnCursors.at(-1) }
       : {}),
   });
-  useEffect(() => {
-    if (overview.data?.meta?.identity?.view_manifest_sha256) setViewHash(overview.data.meta.identity.view_manifest_sha256);
-  }, [overview.data]);
-  const pinnedReference = { ...reference, view_manifest_sha256: viewHash };
   const summary = useCore<SessionSummaryResponse>("session.summary", {
     session_id: reference.session_id,
-    view_manifest_sha256: viewHash,
     ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
-  }, Boolean(viewHash));
+  });
   const brief = summary.data?.result;
   const overviewTurns = overview.data?.result.turns ?? [];
   const nextTurnCursor = overview.data?.result.page.next_cursor;
@@ -519,7 +509,7 @@ function InvestigationView({
       await request("/api/investigations", {
         id,
         title,
-        reference: pinnedReference,
+        reference,
         source: "host_local",
         revision: "latest",
       });
@@ -538,7 +528,7 @@ function InvestigationView({
         </a>
         <div className="section-heading">
           <h1>Investigation</h1>
-          <Badge variant="outline">{viewHash ? "Pinned prepared evidence" : "Loading evidence identity"}</Badge>
+          <Badge variant="outline">Live retained evidence</Badge>
         </div>
         <code className="session-id">{reference.session_id}</code>
         <div className="save-toolbar">
@@ -605,7 +595,7 @@ function InvestigationView({
                     "No objective retained in this scope."}
                 </p>
                 {brief.objective && (
-                  <EvidenceLink reference={{ ...cite(brief.objective.references), view_manifest_sha256: viewHash }}>
+                  <EvidenceLink reference={cite(brief.objective.references)}>
                     Inspect objective evidence
                   </EvidenceLink>
                 )}
@@ -624,7 +614,7 @@ function InvestigationView({
                     {values.length > 0 && <h3>{String(label)}</h3>}
                     {values.map((claim, i) => (
                       <p key={i}>
-                        <EvidenceLink reference={{ ...cite(claim.references), view_manifest_sha256: viewHash }}>
+                        <EvidenceLink reference={cite(claim.references)}>
                           {claim.text}
                         </EvidenceLink>
                       </p>
@@ -634,7 +624,7 @@ function InvestigationView({
                 {!!brief.changes?.length && <h3>Changes</h3>}
                 {brief.changes?.map((change, i) => (
                   <p key={i}>
-                    <EvidenceLink reference={{ ...cite(change.references), view_manifest_sha256: viewHash }}>
+                    <EvidenceLink reference={cite(change.references)}>
                       {change.path} · {change.operations?.join(", ")}
                     </EvidenceLink>
                   </p>
@@ -649,7 +639,7 @@ function InvestigationView({
                     {values.length > 0 && <h3>{String(label)}</h3>}
                     {values.map((entry, i) => (
                       <p key={i}>
-                        <EvidenceLink reference={{ ...cite(entry.references), view_manifest_sha256: viewHash }}>
+                        <EvidenceLink reference={cite(entry.references)}>
                           {entry.label} · {entry.status}
                         </EvidenceLink>
                       </p>
@@ -671,8 +661,8 @@ function InvestigationView({
             )}
           </section>
           <ToolMix
-            reference={pinnedReference}
-            enabled={Boolean(viewHash) && !summary.loading}
+            reference={reference}
+            enabled={!summary.loading}
           />
           <section>
             <div className="section-heading">
@@ -685,7 +675,7 @@ function InvestigationView({
               </span>
             </div>
             <ErrorNotice message={overview.error} />
-            {overview.error && <a href={referenceLink({ session_id: reference.session_id })} onClick={() => { setTurnCursors([]); setViewHash(undefined); }}>Open latest available view</a>}
+            {overview.error && <a href={referenceLink({ session_id: reference.session_id })} onClick={() => setTurnCursors([])}>Open latest available view</a>}
             {overview.loading && <Loading />}
             {overview.data?.result.sessions.map((session, i) => (
               <div key={string(session.session_id) || i}>
@@ -719,7 +709,6 @@ function InvestigationView({
                               session_id: string(session.session_id),
                               turn_id: string(turn.turn_id),
                               item_id,
-                              view_manifest_sha256: viewHash,
                             }}
                           >
                             Item {short(item_id)}
@@ -731,7 +720,6 @@ function InvestigationView({
                       reference={{
                         session_id: string(session.session_id),
                         turn_id: string(turn.turn_id),
-                        view_manifest_sha256: viewHash,
                       }}
                     >
                       Inspect turn items
@@ -765,11 +753,11 @@ function InvestigationView({
             )}
           </section>
           <Items
-            key={`${reference.session_id}:${reference.turn_id}:${viewHash}`}
-            reference={pinnedReference}
+            key={`${reference.session_id}:${reference.turn_id}`}
+            reference={reference}
           />
         </div>
-        <Evidence reference={pinnedReference} />
+        <Evidence reference={reference} />
       </div>
     </div>
   );
@@ -794,7 +782,6 @@ function Items({ reference }: { reference: CanonicalReference }) {
           method: "session.items",
           params: {
             session_id: reference.session_id,
-            view_manifest_sha256: reference.view_manifest_sha256,
             ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
             limit: 20,
             ...(cursor ? { cursor } : {}),
@@ -835,7 +822,6 @@ function Items({ reference }: { reference: CanonicalReference }) {
               session_id: item.session_id,
               turn_id: item.turn_id,
               item_id: item.item_id,
-              view_manifest_sha256: reference.view_manifest_sha256,
             }}
           >
             {item.operation ?? item.kind} · {short(item.item_id)}
@@ -846,7 +832,7 @@ function Items({ reference }: { reference: CanonicalReference }) {
         </article>
       ))}
       {cursor !== null && (
-        <Button variant="outline" disabled={loading || !reference.view_manifest_sha256} onClick={load}>
+        <Button variant="outline" disabled={loading} onClick={load}>
           {loading
             ? "Loading items…"
             : cursor
@@ -866,13 +852,12 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
     isEvent ? "session.events" : "session.items",
     {
       session_id: reference.session_id,
-      view_manifest_sha256: reference.view_manifest_sha256,
       ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
       ...(isEvent
         ? { event_ids: [reference.event_id], limit: 1 }
         : { item_ids: [reference.item_id], limit: 1 }),
     },
-    selected && Boolean(reference.view_manifest_sha256),
+    selected,
   );
   const item = isEvent ? undefined : detail.data?.result.items?.[0];
   const event = isEvent ? detail.data?.result.events?.[0] : undefined;
@@ -880,7 +865,7 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
   const record =
     candidate &&
     Object.entries(reference).every(
-      ([key, value]) => key === "view_manifest_sha256" || !value || candidate[key] === value,
+      ([key, value]) => !value || candidate[key] === value,
     )
       ? candidate
       : undefined;
@@ -1003,7 +988,6 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
                   session_id: event.session_id,
                   turn_id: event.turn_id ?? undefined,
                   item_id: event.item_id,
-                  view_manifest_sha256: reference.view_manifest_sha256,
                 }}
               >
                 Resolve owning item evidence
@@ -1021,7 +1005,6 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
                       turn_id: item.turn_id,
                       item_id: item.item_id,
                       event_id,
-                      view_manifest_sha256: reference.view_manifest_sha256,
                     }}
                   >
                     Event {short(event_id)}
@@ -1051,8 +1034,8 @@ function Evidence({ reference }: { reference: CanonicalReference }) {
         />
       </details>
       <p className="muted small">
-        Links pin this prepared view while it remains available. If it expires,
-        open the latest view to restart; raw transcripts are not archived here.
+        Links resolve live retained evidence on this host. Evidence can change
+        or become unavailable; raw transcripts are not archived here.
       </p>
       <Button
         className="reading-jump"

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import type { CanonicalReference } from "./generated/investigation";
 
-export type CoreResult<T> = { result: T; meta?: { identity?: { view_manifest_sha256: string } | null } };
+export type CoreResult<T> = {
+  result: T;
+  meta?: { source: "local"; freshness: "live"; content_scope: "retained" };
+};
 
 export async function request<T>(
   path: string,
@@ -20,7 +23,9 @@ export async function request<T>(
     throw new Error(
       typeof data.error === "string"
         ? data.error
-        : JSON.stringify(data.error ?? "Local query failed"),
+        : typeof data.error?.message === "string"
+          ? data.error.message
+          : "Local query failed",
     );
   return data;
 }
@@ -72,8 +77,10 @@ export function referenceLink(
   investigationId?: string | null,
 ) {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(reference))
+  for (const key of ["session_id", "turn_id", "item_id", "event_id"] as const) {
+    const value = reference[key];
     if (value) params.set(key, value);
+  }
   if (investigationId) params.set("investigation_id", investigationId);
   return `#${params}`;
 }
@@ -87,7 +94,6 @@ export function readReference(): CanonicalReference | null {
     turn_id: query.get("turn_id"),
     item_id: query.get("item_id"),
     event_id: query.get("event_id"),
-    view_manifest_sha256: query.get("view_manifest_sha256"),
   };
 }
 

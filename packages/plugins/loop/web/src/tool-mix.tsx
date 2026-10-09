@@ -155,7 +155,6 @@ function useToolCalls(reference: CanonicalReference, enabled: boolean) {
             method: "session.items",
             params: {
               session_id: reference.session_id,
-              view_manifest_sha256: reference.view_manifest_sha256,
               types: TOOL_KINDS,
               limit: PAGE,
               ...(cursor ? { cursor } : {}),
@@ -174,7 +173,7 @@ function useToolCalls(reference: CanonicalReference, enabled: boolean) {
         setState({ error: String(error.message) });
     });
     return () => controller.abort();
-  }, [reference.session_id, reference.view_manifest_sha256, enabled]);
+  }, [reference.session_id, enabled]);
   return state;
 }
 
@@ -206,7 +205,6 @@ export function ToolMix({
     "session.stats",
     {
       session_id: reference.session_id,
-      view_manifest_sha256: reference.view_manifest_sha256,
     },
     started,
   );
@@ -215,7 +213,6 @@ export function ToolMix({
     session_id: call.item.session_id,
     turn_id: call.item.turn_id,
     item_id: call.item.item_id,
-    view_manifest_sha256: reference.view_manifest_sha256,
   });
   const focused = (calls ?? []).filter(
     (call) => !focus || call.group === focus,
@@ -565,7 +562,6 @@ function Sequence({
                 {
                   session_id: turn.sessionId,
                   turn_id: turn.turnId,
-                  view_manifest_sha256: reference.view_manifest_sha256,
                 },
                 investigationId,
               )}

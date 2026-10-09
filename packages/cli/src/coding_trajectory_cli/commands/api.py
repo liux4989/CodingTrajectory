@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 from coding_trajectory.contracts import command_schema
-from coding_trajectory.control_plane.http_service import (
-    RemoteRuntimeFactory,
-    serve_http,
-)
 from coding_trajectory.runtime import ServiceRuntime
 
 from coding_trajectory_cli._shared import GhFormatter, add_params_flag
@@ -49,48 +43,12 @@ def _read_batch_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 
 def _runtime(args: argparse.Namespace) -> ServiceRuntime:
-    """Build a local-first runtime with a lazy remote Chronicles fallback."""
-
-    from coding_trajectory.control_plane.connections import query_source
-
-    source = query_source(
-        source=getattr(args, "source", None),
-        profile_name=getattr(args, "credential_profile", None),
-    )
-    if source == "shared":
-        return _remote_runtime(args)
+    """Build an explicitly selected local-only runtime."""
     return ServiceRuntime(
         global_scope=getattr(args, "global_scope", False),
         current_dir=Path.cwd(),
-        fallback_factory=(lambda: _remote_runtime(args)) if source == "auto" else None,
+        source=getattr(args, "source", None) or "auto",
     )
-
-
-def _remote_runtime(args: argparse.Namespace) -> ServiceRuntime:
-    """Resolve the same connection used by collectors, only when required."""
-    from coding_trajectory.control_plane.connections import resolve_credentials
-
-    credentials = resolve_credentials(
-        profile_name=getattr(args, "credential_profile", None),
-        url=getattr(args, "cloudflare_url", None),
-        access_token=getattr(args, "access_token", None),
-        workspace_id=getattr(args, "remote_workspace_id", None),
-    )
-    factory = RemoteRuntimeFactory(
-        url=str(credentials.profile.cloudflare_url),
-        workspace_id=credentials.profile.workspace_id,
-    )
-    return factory.build(
-        credentials.access_token,
-        current_dir=Path.cwd(),
-    )
-
-
-def _remote_service_config(args: argparse.Namespace) -> str:
-    url = args.cloudflare_url or os.environ.get("CT_CLOUDFLARE_URL")
-    if not url:
-        raise ValueError("remote API requires CT_CLOUDFLARE_URL")
-    return str(url)
 
 
 def _handle_api_call(args: argparse.Namespace) -> dict[str, Any]:
@@ -108,29 +66,13 @@ def _handle_api_schema(args: argparse.Namespace) -> dict[str, Any]:
     return command_schema(args.method, command=f"ct api call {args.method}")
 
 
-def _handle_api_serve(args: argparse.Namespace) -> None:
-    url = _remote_service_config(args)
-    serve_http(
-        factory=RemoteRuntimeFactory(url=url, workspace_id=args.remote_workspace_id),
-        host=args.host,
-        port=args.port,
-    )
-
-
-def _add_remote_flags(parser: argparse.ArgumentParser) -> None:
+def _add_source_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--profile", dest="credential_profile", default=argparse.SUPPRESS
+        "--source",
+        choices=("local", "shared", "remote", "auto"),
+        default=argparse.SUPPRESS,
+        help="Query source: auto is local only; shared and remote are unavailable.",
     )
-    parser.add_argument(
-        "--source", choices=("local", "shared", "auto"), default=argparse.SUPPRESS
-    )
-    parser.add_argument(
-        "--remote-workspace-id",
-        type=UUID,
-        help="Select the fallback Chronicles workspace (defaults to environment or credential profile).",
-    )
-    parser.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
-    parser.add_argument("--access-token", help="Defaults to CT_ACCESS_TOKEN.")
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -162,7 +104,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Use global discovery for requests without a session entry point.",
     )
     add_params_flag(call)
-    _add_remote_flags(call)
+    _add_source_flag(call)
     call.set_defaults(
         _plugin_handler=_handle_api_call,
         _default_output="json",
@@ -180,7 +122,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         default="-",
         help="Read request array from a file, or '-' for stdin.",
     )
-    _add_remote_flags(batch)
+    _add_source_flag(batch)
     batch.add_argument(
         "--requests",
         dest="requests_json",
@@ -208,15 +150,3 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         _plugin_handler=_handle_api_schema,
         _default_output="json",
     )
-
-    serve = api_sub.add_parser(
-        "serve",
-        prog="ct api serve",
-        help="Proxy the authenticated new-version /v1/api endpoint.",
-        formatter_class=GhFormatter,
-    )
-    serve.add_argument("--remote-workspace-id", type=UUID, required=True)
-    serve.add_argument("--cloudflare-url", help="Defaults to CT_CLOUDFLARE_URL.")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8765)
-    serve.set_defaults(_plugin_handler=_handle_api_serve, _default_output="json")

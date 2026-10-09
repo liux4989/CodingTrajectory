@@ -8,24 +8,15 @@ provider exports, pricing guesses, or expected-metric regeneration.
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from coding_trajectory.analysis.measurements import attach_measurements
-from coding_trajectory.control_plane.fact_projection import build_published_fact_set
-from coding_trajectory.control_plane.graph_preparation import prepare_graph
-from coding_trajectory.control_plane.published_facts import (
-    FactIndex,
-    PublishedFactSet,
-    compute_row_hash,
-    session_graph_from_fact_index,
-)
 from coding_trajectory.discovery import discover_store, stabilize_session
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
-from coding_trajectory.ingestion.common import canonical_json
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
 from coding_trajectory.ingestion.incremental import (
     SourceSnapshot,
@@ -33,9 +24,10 @@ from coding_trajectory.ingestion.incremental import (
     rebuild_affected_session_graphs_from_files,
 )
 from coding_trajectory.ingestion.models import Vendor
+from coding_trajectory.ingestion.retained import retain_session_graph
 from coding_trajectory.query import DocumentStore
 from coding_trajectory.service.handlers import dispatch
-from coding_trajectory.service.store import IndexCache
+from coding_trajectory.service.store import IndexCache, resolve_store
 from coding_trajectory_cli._shared import compact_payload
 
 PARENT = "T-00000000-0000-4000-8000-000000000001"
@@ -188,8 +180,9 @@ def qualify_result_formats(source: Path) -> None:
         )
         assert not replay.extensions.amp.spawn_links, name
         graph = assemble_project_session_graphs("amp-example", [session])[0]
-        publication = build_published_fact_set(graph).model_dump_json()
-        assert "PRIVATE output" not in publication, name
+        retained = retain_session_graph(graph)
+        assert "PRIVATE output" not in retained.model_dump_json(), name
+        assert retain_session_graph(retained) == retained, name
     print(
         "PASS Amp result formats: 7 legacy/structured/ambiguous variants, dedup, live-only edges, no raw tool output"
     )
@@ -264,37 +257,9 @@ def qualify_throughput(source: Path) -> None:
     )
     attach_measurements(measured, graph.sessions[0])
     measured_graph = assemble_project_session_graphs("amp-example", [measured])[0]
-    facts = build_published_fact_set(graph)
-    replay = session_graph_from_fact_index(
-        FactIndex.from_fact_sets([facts]), facts.graph_id
-    )
-    assert "Let us reason." not in facts.model_dump_json()
-    # Reconstruct pre-v7 wire spelling and hashes BEFORE parsing with new models.
-    # Default injection into an old hashed row must fail this round trip.
-    legacy = facts.model_dump(mode="json", exclude_none=True)
-    for row in legacy["rows"]:
-        if row["kind"] == "turn":
-            row["payload"].pop("timing_source", None)
-        if row["kind"] == "item":
-            row["payload"]["measurements"].pop("thinking_tokens", None)
-        row.pop("row_hash")
-        row["row_hash"] = compute_row_hash(row)
-    basis = {
-        "schema_version": legacy["schema_version"],
-        "graph_id": legacy["graph_id"],
-        "rows": [
-            [row["kind"], row["fact_id"], row["row_hash"]] for row in legacy["rows"]
-        ],
-    }
-    legacy["fact_set_digest"] = hashlib.sha256(
-        canonical_json(basis).encode()
-    ).hexdigest()
-    old_facts = PublishedFactSet.model_validate(legacy)
-    assert old_facts.model_dump(mode="json", exclude_none=True) == legacy
-    old_replay = session_graph_from_fact_index(
-        FactIndex.from_fact_sets([old_facts]), old_facts.graph_id
-    )
-    assert field not in call(old_replay, "session.model_usage")
+    replay = retain_session_graph(graph)
+    assert "Let us reason." not in replay.model_dump_json()
+    assert retain_session_graph(replay) == replay
     for variant in (graph, measured_graph, replay):
         for method in ("session.stats", "session.usage", "session.model_usage"):
             result = call(variant, method)
@@ -330,29 +295,64 @@ def qualify_throughput(source: Path) -> None:
                     assert selected[field] == 2.833
                 assert len(selected["turns"]) == 1
 
-    # Prepared reads and the disposable cache retain the estimate's primitives.
-    prepared = prepare_graph(graph, cache_path=source.parent / "throughput.sqlite")
-    cached = prepare_graph(graph, cache_path=source.parent / "throughput.sqlite")
-    assert cached == prepared
-    for descriptor in prepared.api.methods:
-        if descriptor.method not in {
-            "session.stats",
-            "session.usage",
-            "session.model_usage",
-        }:
-            continue
-        index = json.loads(prepared.api.objects[descriptor.index.sha256])
-        data = json.loads(prepared.api.objects[index["result"]["sha256"]])["data"]
-        if descriptor.method == "session.model_usage":
-            assert data[field] == (
-                2.3
-                if descriptor.turn_id is None
-                else 2.833
-                if descriptor.turn_id == str(graph.sessions[0].turns[0].turn_id)
-                else 1.5
+    # Exercise the real disposable SQLite path, including a fresh cache instance.
+    throughput_source = source.parent / "throughput" / source.name
+    throughput_source.parent.mkdir()
+    throughput_source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    previous_logs = os.environ["CT_AMP_LOG_DIR"]
+    os.environ["CT_AMP_LOG_DIR"] = str(throughput_source.parent)
+    try:
+        cache_path = source.parent / "throughput.sqlite"
+        for cache in (IndexCache(db_path=cache_path), IndexCache(db_path=cache_path)):
+            store, _ = resolve_store(
+                {"session_id": PARENT[2:]},
+                global_scope=True,
+                current_dir=source.parent,
+                cache=cache,
             )
-        else:
-            assert data["runtime"][field] == 2.3
+            cached_graph = store.get_session_graph_for_session(replay.root_session_id)
+            for method in ("session.stats", "session.usage", "session.model_usage"):
+                actual, expected = call(cached_graph, method), call(replay, method)
+                # Turn UUIDs include the source path; the separate cache fixture
+                # has the same evidence, not the same filesystem identity.
+                actual_runtime = (
+                    actual if method == "session.model_usage" else actual["runtime"]
+                )
+                expected_runtime = (
+                    expected if method == "session.model_usage" else expected["runtime"]
+                )
+                assert actual_runtime[field] == expected_runtime[field] == 2.3
+                if method != "session.stats":
+                    usage_key = (
+                        "usage" if method == "session.model_usage" else "total_usage"
+                    )
+                    assert actual[usage_key] == expected[usage_key]
+                    assert len(actual["turns"]) == len(expected["turns"]) == 2
+                    for actual_turn, expected_turn in zip(
+                        actual["turns"], expected["turns"]
+                    ):
+                        assert actual_turn["usage"] == expected_turn["usage"]
+                        actual_rate = (
+                            actual_turn
+                            if method == "session.model_usage"
+                            else actual_turn["runtime"]
+                        )
+                        expected_rate = (
+                            expected_turn
+                            if method == "session.model_usage"
+                            else expected_turn["runtime"]
+                        )
+                        assert actual_rate[field] == expected_rate[field]
+        assert cache.counters["graph_hits"] == 1
+        assert cache.counters["graph_builds"] == 0
+        with sqlite3.connect(cache_path) as db:
+            retained_json = db.execute("SELECT graph FROM graphs").fetchone()[0]
+            assert "Let us reason." not in retained_json
+            assert "PRIVATE output" not in retained_json
+    finally:
+        os.environ["CT_AMP_LOG_DIR"] = previous_logs
+        throughput_source.unlink()
+        throughput_source.parent.rmdir()
 
     scenarios = {
         "replay": [row for row in first_turn_rows if row["type"] != "observation"],
@@ -416,7 +416,7 @@ def qualify_throughput(source: Path) -> None:
             assert field not in mixed, name
             assert mixed["turns"][-1][field] == 1.5, name
     print(
-        "PASS Amp throughput: source-derived rates, parallel-window union, revisions, thinking, idle exclusion, weighted aggregation, CLI, body-free replay/cache, legacy hashes, 10 unavailable cases"
+        "PASS Amp throughput: source-derived rates, parallel-window union, revisions, thinking, idle exclusion, weighted aggregation, CLI, retained idempotence/SQLite cache, 10 unavailable cases"
     )
 
 
@@ -465,19 +465,18 @@ def main() -> None:
             )
             assert len(start_only.turns) == 1
             assert start_only.turns[0].status.value == "running"
-            publication = build_published_fact_set(graph)
-            publication_bytes = publication.model_dump_json(exclude_none=True).encode()
-            assert b"PRIVATE task" in publication_bytes
-            assert b"PRIVATE final" in publication_bytes
-            assert b"PRIVATE output" not in publication_bytes
-            assert publication.kind_counts["graph"] == 1
-            assert publication.kind_counts["session"] == 2
+            replay = retain_session_graph(graph)
+            retained_bytes = replay.model_dump_json(exclude_none=True).encode()
+            assert b"PRIVATE task" in retained_bytes
+            assert b"PRIVATE final" in retained_bytes
+            assert b"PRIVATE output" not in retained_bytes
+            assert len(replay.sessions) == 2
+            assert retain_session_graph(replay) == replay
             assert all(
-                "body" not in row.model_dump(mode="json", exclude_none=True)["payload"]
-                for row in publication.rows
-            )
-            replay = session_graph_from_fact_index(
-                FactIndex.from_fact_sets([publication]), publication.graph_id
+                not getattr(item, "text", None) and not getattr(item, "output", None)
+                for session in replay.sessions
+                for turn in session.turns
+                for item in turn.items
             )
             assert replay.edges == graph.edges
             assert replay.sessions[0].vendor == Vendor.AMP and len(replay.edges) == 1
@@ -502,10 +501,10 @@ def main() -> None:
                 for p in paths
             ]
             assert (
-                build_published_fact_set(
+                retain_session_graph(
                     assemble_project_session_graphs(graph.project_identifier, full)[0]
-                ).fact_set_digest
-                == publication.fact_set_digest
+                )
+                == replay
             )
             snapshots = [
                 SourceSnapshot(
@@ -562,7 +561,7 @@ def main() -> None:
                 result = dispatch(
                     method,
                     params,
-                    store=FactIndex.from_fact_sets([publication]),
+                    store=DocumentStore.from_session_graphs([replay]),
                     global_scope=True,
                     current_dir=directory,
                     discovery_note="",
@@ -594,12 +593,17 @@ def main() -> None:
                         for section in sections
                     ) == [0.2, 1.571]
                 if method == "project.sessions":
-                    assert result["items"][0]["usage"]["availability"] == "unavailable"
+                    # Inventory is source metadata, never eager metric materialization.
+                    assert result["items"][0]["root_session_id"] == str(
+                        graph.root_session_id
+                    )
+                    assert result["items"][0]["vendors"] == ["amp"]
+                    assert "usage" not in result["items"][0]
             print(
                 "PASS Amp live: discovery, dedup, observed timing, failed tools, spawn provenance,"
             )
             print(
-                "  compact identity parity, full replay parity, local narrative, bounded fact publication, child-seeded rebuild, 13 shared APIs"
+                "  compact identity parity, retained replay parity/privacy, local narrative, child-seeded rebuild, 13 public APIs"
             )
         finally:
             if old is None:

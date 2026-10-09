@@ -24,10 +24,8 @@ from pydantic import BaseModel, Field
 
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.adapters.base import BaseAdapter
-from coding_trajectory.ingestion.adapters.claude_code import (
-    ClaudeCodeAdapter,
-    _subagent_input,
-)
+from coding_trajectory.ingestion.adapters.claude_code import ClaudeCodeAdapter
+from coding_trajectory.ingestion.adapters.claude_identity import _subagent_input
 from coding_trajectory.ingestion.adapters.codex import CodexAdapter
 from coding_trajectory.ingestion.adapters.pi import PiAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
@@ -698,18 +696,16 @@ def _file_source_header(snapshot: SourceSnapshot) -> _SourceHeader | None:
     vendor = _snapshot_vendor(snapshot) or _detect_vendor(snapshot.path, ())
     if vendor is None:
         raise ValueError("unable to identify source vendor")
-    if vendor == Vendor.AMP:
-        return _amp_source_header(
-            snapshot.path, AmpAdapter()._iter_records(Path(snapshot.path))
-        )
     adapter_cls: type[BaseAdapter]
-    if vendor == Vendor.CODEX_CLI:
+    if vendor == Vendor.AMP:
+        adapter_cls = AmpAdapter
+    elif vendor == Vendor.CODEX_CLI:
         adapter_cls = CodexAdapter
     elif vendor == Vendor.CLAUDE_CODE:
         adapter_cls = ClaudeCodeAdapter
     else:
         adapter_cls = PiAdapter
-    header = adapter_cls().scan_header(Path(snapshot.path))
+    header = adapter_cls().scan_topology(Path(snapshot.path))
     if header is None:
         return None
     return _SourceHeader(
@@ -717,31 +713,21 @@ def _file_source_header(snapshot: SourceSnapshot) -> _SourceHeader | None:
         vendor=vendor,
         session_id=header.session_id,
         parent_session_id=header.parent_session_id,
+        child_session_ids=tuple(header.children),
     )
 
 
 def _amp_source_header(
     path: str, records: Iterable[dict[str, Any]]
 ) -> _SourceHeader | None:
-    # Amp spawn evidence is in tool results, not the first metadata record.
-    rows = list(records)
-    adapter = AmpAdapter()
-    header = adapter.scan_identity_records(Path(path), rows)
+    header = AmpAdapter().scan_topology_records(Path(path), records)
     if header is None:
         return None
-    try:
-        session = adapter.build_canonical_session(Path(path), rows)
-    except ValueError as exc:
-        if str(exc) != "Amp journal has no captured activity":
-            raise
-        children = ()
-    else:
-        children = tuple(UUID(child) for child in session.extensions.amp.spawn_links)
     return _SourceHeader(
         path=path,
         vendor=Vendor.AMP,
         session_id=header.session_id,
-        child_session_ids=children,
+        child_session_ids=tuple(header.children),
     )
 
 
@@ -967,9 +953,15 @@ def _source_header(
             parent_session_id=metadata_parent,
         )
 
-    records = _header_records(snapshot.path, messages_for_path(snapshot.path), vendor)
     if vendor == Vendor.AMP:
-        return _amp_source_header(snapshot.path, records)
+        return _amp_source_header(
+            snapshot.path,
+            (
+                _validated_message(snapshot.path, raw).payload
+                for raw in messages_for_path(snapshot.path)
+            ),
+        )
+    records = _header_records(snapshot.path, messages_for_path(snapshot.path), vendor)
     if vendor == Vendor.CODEX_CLI:
         for record in records:
             if record.get("type") != "session_meta":

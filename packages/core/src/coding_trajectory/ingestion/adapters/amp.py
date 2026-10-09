@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
@@ -12,7 +12,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.adapters.base import (
+    BaseAdapter,
+    SessionHeader,
+    SourceTopology,
+)
 from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
 from coding_trajectory.ingestion.models import (
     AmpExtensions,
@@ -76,7 +80,84 @@ class AmpAdapter(BaseAdapter):
     vendor = Vendor.AMP
 
     def scan_header(self, source: Path) -> SessionHeader | None:
-        return self.scan_identity_records(source, self._iter_records(source))
+        return self.scan_identity_records(source, self._iter_topology_records(source))
+
+    def scan_topology(self, source: Path) -> SourceTopology | None:
+        return self.scan_topology_records(source, self._iter_topology_records(source))
+
+    def scan_topology_records(
+        self, source: Path, records: Iterable[dict]
+    ) -> SourceTopology | None:
+        header = None
+        observations: dict[
+            tuple[str, str], tuple[str | None, str | None, UUID | None]
+        ] = {}
+        messages: dict[str, tuple[tuple[str, str | None, int | None], ...]] = {}
+        for raw in records:
+            if raw.get("type") == "thread":
+                current = self.scan_identity_records(source, (raw,))
+                if header and current and header.session_id != current.session_id:
+                    raise ValueError("Amp journal contains multiple thread identities")
+                header = current
+            elif raw.get("type") == "observation":
+                event = raw.get("event")
+                if event not in {"tool.call", "tool.result"}:
+                    continue
+                call_id = str(raw.get("tool_use_id") or raw.get("message_id"))
+                child = None
+                if event == "tool.result":
+                    creation = _object(raw.get("output"))
+                    try:
+                        child = amp_session_id(creation.get("threadID", ""))
+                    except (ValueError, AttributeError):
+                        pass
+                observations.setdefault(
+                    (event, call_id), (raw.get("tool_name"), raw.get("status"), child)
+                )
+            elif raw.get("type") == "message":
+                message = raw.get("message") or {}
+                facts = []
+                for block in message.get("content", []):
+                    if block.get("type") == "tool_result":
+                        output = _object(block.get("output"))
+                        exit_code = output.get("exitCode", output.get("exit_code"))
+                        facts.append(
+                            (
+                                str(block.get("toolUseID")),
+                                block.get("status"),
+                                exit_code if isinstance(exit_code, int) else None,
+                            )
+                        )
+                key = str(message.get("id") or raw.get("message_id"))
+                messages[key] = tuple(facts)
+        if header is None:
+            return None
+        results = {}
+        for facts in messages.values():
+            for call_id, status, exit_code in facts:
+                results[call_id] = (status, exit_code)
+        claims: dict[UUID, set[str]] = {}
+        for (event, call_id), (name, status, child) in observations.items():
+            if event != "tool.result" or status != "done" or child is None:
+                continue
+            call = observations.get(("tool.call", call_id))
+            if not call or call[0] != "create_thread" or child == header.session_id:
+                continue
+            result_status, exit_code = results.get(call_id, (status, None))
+            if result_status != "done" or (exit_code is not None and exit_code != 0):
+                continue
+            claims.setdefault(child, set()).add(call_id)
+        return SourceTopology(
+            session_id=header.session_id,
+            vendor=self.vendor,
+            children={child: "spawn" for child, ids in claims.items() if len(ids) == 1},
+            cwd=header.cwd,
+            project=Path(header.cwd).name if header.cwd else None,
+            modified=datetime.fromtimestamp(source.stat().st_mtime, tz=UTC)
+            if source.exists()
+            else datetime.fromtimestamp(0, tz=UTC),
+            title=header.title[:280] if header.title else None,
+        )
 
     def scan_identity_records(
         self, source: Path, records: Iterable[dict]

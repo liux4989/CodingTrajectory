@@ -1,11 +1,11 @@
 """Contracts for the project.*, session.*, and graph.* service methods.
 
-Clean-break historical contract revision (published-facts authority):
+Live retained canonical contract revision:
 
 - Graph methods require ``root_session_id``; session methods require
   ``session_id``; ``turn_id`` is a subordinate filter within a session scope.
 - ``num_turns``/``drop_turns`` are replaced by deterministic pagination:
-  ``session.overview``/``graph.overview`` take signed ``cursor`` + ``limit``;
+  ``session.overview``/``graph.overview`` take opaque ``cursor`` + ``limit``;
   ``session.items``/``session.events``/``session.search`` take ``cursor`` +
   ``limit``.
 - Inventory filters keep one absolute ``modified_since`` timestamp; relative
@@ -25,24 +25,24 @@ from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
 
-from coding_trajectory.contracts.base import ContractModel
-from coding_trajectory.contracts.prepared_api import ImmutableRequest, OverviewResponse
+from coding_trajectory.contracts.base import ContractModel, RequestModel
+from coding_trajectory.contracts.overview import OverviewResponse
 
 
-class SessionScopedRequest(ImmutableRequest):
+class SessionScopedRequest(RequestModel):
     """Session entry point: ``session_id``; ``turn_id`` is subordinate only."""
 
     session_id: str
     turn_id: str | None = None
 
 
-class GraphScopedRequest(ImmutableRequest):
+class GraphScopedRequest(RequestModel):
     """Graph entry point: ``root_session_id`` is required."""
 
     root_session_id: str
 
 
-class ProjectListRequest(ImmutableRequest):
+class ProjectListRequest(RequestModel):
     project_id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
     project_name: str | None = None
     modified_since: datetime | None = None
@@ -66,7 +66,7 @@ class ProjectSessionsRequest(ProjectListRequest):
     pass
 
 
-class SessionOverviewRequest(ImmutableRequest):
+class SessionOverviewRequest(RequestModel):
     session_id: str
     limit: int = Field(default=20, ge=1, le=200)
     cursor: str | None = Field(default=None, min_length=1, max_length=4096)
@@ -95,7 +95,7 @@ DEFAULT_SEARCH_KINDS: list[SearchKind] = [
 #: The complete set of retained fields session.search can match against. Raw
 #: tool input/output, command stdout/stderr, file/patch bodies, full prompts,
 #: transcripts, and reasoning are never searchable because they are never
-#: retained in the published facts authority.
+#: retained in the canonical store.
 SEARCHABLE_FIELDS: list[str] = [
     "text_preview",
     "path",
@@ -126,7 +126,7 @@ class SessionSearchRequest(SessionScopedRequest):
         return normalized
 
 
-class SessionTreeRequest(ImmutableRequest):
+class SessionTreeRequest(RequestModel):
     session_id: str
 
 
@@ -135,7 +135,7 @@ class GraphOverviewRequest(GraphScopedRequest):
     cursor: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
-class SessionStatsRequest(ImmutableRequest):
+class SessionStatsRequest(RequestModel):
     session_id: str
 
 
@@ -203,7 +203,6 @@ class ProjectListResponse(PagedResponse):
 class SessionGraphSummary(ContractModel):
     graph_id: str | None = None
     root_session_id: str
-    view_manifest_sha256: str | None = None
     lineage_root_session_id: str | None = None
     project_id: str | None = None
     project: str | None = None
@@ -212,9 +211,6 @@ class SessionGraphSummary(ContractModel):
     vendors: list[str] = Field(default_factory=list)
     session_ids: list[str] = Field(default_factory=list)
     modified: datetime | None = None
-    runtime: dict[str, Any] | None = None
-    usage: dict[str, Any] | None = None
-    warnings: list[str] | None = None
 
 
 class ProjectSessionsResponse(PagedResponse):
@@ -629,9 +625,6 @@ class CliSessionGraphSummary(ContractModel):
     title: str | None = None
     vendors: list[str] = Field(default_factory=list)
     sessions: list[str] = Field(default_factory=list)
-    runtime: dict[str, Any] | None = None
-    usage: dict[str, Any] | None = None
-    warnings: list[str] | None = None
 
 
 class CliProjectSessionsResponse(ContractModel):

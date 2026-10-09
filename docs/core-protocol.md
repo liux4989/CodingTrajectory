@@ -4,8 +4,21 @@
 
 [`validation/core-protocol.json`](../validation/core-protocol.json) freezes the
 public Core boundary. It records all 18 methods, method versions, request/result
-JSON Schemas, `ct.core.v1` envelopes, and the `ct.published_facts.v2` schema.
+JSON Schemas, and the local API envelopes. The retired published-facts schema
+is not a public dependency of local canonical queries.
 CLI projections and plugin protocols are separate consumer contracts.
+
+The local-only revision increments every method version by one. Local success
+envelopes contain `result`, not the parked remote envelope's `data`. Transport
+metadata is `local` / `live` / `retained`, with no saved-view or snapshot identity.
+Remote delivery is unavailable for all 18 methods through one capability declaration.
+
+Collection pagination uses opaque unsigned count-keyset cursors bound to query
+and method version. Inventory order is identity-based; content uses canonical
+source order and ID tie-breakers. Determinism applies per call, not across live
+changes. Published-view references and stale-view errors are retired. Method
+request/result schemas remain frozen and reviewed; removing a storage protocol
+does not authorize arbitrary changes to those schemas.
 
 Run the gate from the repository root:
 

@@ -41,9 +41,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
 
-from coding_trajectory.analysis.projection_utils import truncate_text_preview  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.analysis.request_lineage import extract_user_request  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.analysis.session_retrieval import (  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.analysis.projection_utils import (
+    truncate_text_preview,
+)
+from coding_trajectory.analysis.request_lineage import (
+    extract_user_request,
+)
+from coding_trajectory.analysis.session_retrieval import (
     _SEARCH_SNIPPET_LIMIT,
     _SUMMARY_LIMITS,
     _SUMMARY_TEXT_LIMIT,
@@ -52,16 +56,26 @@ from coding_trajectory.analysis.session_retrieval import (  # noqa: E402 - repos
     _low_value_request,
     _search_documents,
 )
-from coding_trajectory.discovery import discover_store_from_files, locate_session_files  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.ingestion.indexes import build_session_graph_index  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.ingestion.models import (  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.discovery import (
+    discover_store_from_files,
+    locate_session_files,
+)
+from coding_trajectory.ingestion.indexes import (
+    build_session_graph_index,
+)
+from coding_trajectory.ingestion.models import (
     CommandExecutionItem,
     FileChangeItem,
     ReasoningItem,
     Session,
 )
-from coding_trajectory.query import DocumentStore  # noqa: E402 - repository-local imports after sys.path setup
-from coding_trajectory.service import IndexCache, dispatch  # noqa: E402 - repository-local imports after sys.path setup
+from coding_trajectory.query import (
+    DocumentStore,
+)
+from coding_trajectory.service import (
+    IndexCache,
+    dispatch,
+)
 
 BENCHMARK_NAME = "session-retrieval-local"
 SCHEMA_VERSION = 1
@@ -542,11 +556,10 @@ def evaluate_summary(
     coverage = summary["coverage"]
     checks.record(
         "summary.coverage_consistent",
-        (
-            coverage["retention"]
-            == ("trajectory" if coverage["content_complete"] else "measurements")
-        )
-        and bool(summary["warnings"]) == (not coverage["content_complete"]),
+        coverage["retention"] in {"complete", "preview", "not_retained"}
+        and coverage["measurement"] == "complete"
+        and "content_complete" not in coverage
+        and bool(summary["warnings"]) == (coverage["retention"] != "complete"),
         f"{sid}: coverage={coverage} warnings={summary['warnings']}",
     )
 
@@ -573,7 +586,7 @@ def evaluate_summary(
         "first_ms": first_ms,
         "summary_bytes": summary_bytes,
         "canonical_bytes": canonical_bytes,
-        "content_complete": coverage["content_complete"],
+        "coverage": coverage,
     }
 
 
@@ -835,7 +848,7 @@ def evaluate_search(
                 "source_found": source_found,
                 "first_ms": first_ms,
                 "response_bytes": len(_canonical_json(response).encode()),
-                "content_complete": response["coverage"]["content_complete"],
+                "coverage": response["coverage"],
             }
         )
 

@@ -19,18 +19,14 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid4
 
 from coding_trajectory.contracts import SERVICE_CONTRACTS
-from coding_trajectory.control_plane.prepared_api import prepare_inventory_api
-from coding_trajectory.control_plane.prepared_api_reader import (
-    decode_cursor,
-    load_local_view,
-    local_signing_key,
-    read_prepared,
-    save_local_view,
-)
-from coding_trajectory.service.store import session_browser_metadata
 from pydantic import ValidationError
 
-from loop_plugin.models import PROTOCOL, CoreQuery, Investigation
+from loop_plugin.models import (
+    PROTOCOL,
+    CoreQuery,
+    Investigation,
+    migrate_live_references,
+)
 from loop_plugin.monitor.models import (
     FindingStatusEvent,
     FindingStatusRequest,
@@ -133,6 +129,13 @@ class LoopServer(ThreadingHTTPServer):
             db.execute(
                 "CREATE TABLE IF NOT EXISTS investigations (id TEXT PRIMARY KEY, state TEXT NOT NULL)"
             )
+            for ident, record in db.execute(
+                "SELECT id, state FROM investigations WHERE state LIKE '%view_manifest_sha256%'"
+            ).fetchall():
+                db.execute(
+                    "UPDATE investigations SET state = ? WHERE id = ?",
+                    (json.dumps(migrate_live_references(json.loads(record))), ident),
+                )
         state.chmod(0o600)
         super().__init__(address, Handler)
 
@@ -416,41 +419,18 @@ class Handler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == "/api/core":
                 query = CoreQuery.model_validate(body)
-                if query.method not in SERVICE_CONTRACTS:
-                    self.fail(400, "Unknown Core method")
-                    return
                 result = self.core_read(query)
                 if result is not None:
-                    self.reply(200, result)
+                    self.reply(200 if query.method in SERVICE_CONTRACTS else 400, result)
             elif path == "/api/session-browser":
-                from coding_trajectory.contracts import service_contract
-
                 if not isinstance(body, dict) or not body.get("project_id"):
                     raise ValueError("project_id is required")
-                params = service_contract("project.sessions").validate_request(body)
-                signing_key = local_signing_key()
-                if params.get("cursor"):
-                    cursor = decode_cursor(params["cursor"], signing_key)
-                    api, identity = load_local_view(cursor["view_manifest_sha256"])
-                else:
-                    cards = session_browser_metadata(
-                        current_dir=Path.cwd(),
-                        project_id=params["project_id"],
-                        cancelled=self.disconnected,
-                    )
-                    api, source = prepare_inventory_api([], cards)
-                    identity = save_local_view(api, source)
-                descriptor = next(
-                    item for item in api.methods if item.method == "project.sessions"
-                )
-                result = read_prepared(
-                    descriptor,
-                    params,
-                    identity=identity,
-                    fetch=lambda digest: api.objects[digest].encode(),
-                    signing_key=signing_key,
-                )
-                self.reply(200, {"protocol": PROTOCOL, "result": result})
+                reply = self.core_read(CoreQuery(method="project.sessions", params=body))
+                if reply is not None:
+                    if reply["ok"]:
+                        self.reply(200, {"protocol": PROTOCOL, "result": reply["result"]})
+                    else:
+                        self.reply(400, {"protocol": PROTOCOL, "error": reply["error"]})
             elif path == "/api/investigations":
                 investigation = Investigation.model_validate(body)
                 with closing(sqlite3.connect(self.server.state)) as db, db:

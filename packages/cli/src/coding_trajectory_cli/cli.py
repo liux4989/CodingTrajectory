@@ -24,35 +24,48 @@ from coding_trajectory_cli._shared import (
 )
 from coding_trajectory_cli.commands import REGISTRARS, dispatch_plugin_argv
 from coding_trajectory_cli.commands.api import _runtime
-from coding_trajectory_cli.outcome import command_path, normalize_handler_result
+from coding_trajectory_cli.outcome import (
+    CommandOutcome,
+    command_path,
+    normalize_handler_result,
+)
 from coding_trajectory_cli.telemetry import write_invocation_record
 
 EPILOG = """\
 NOTE
   Use `ct project sessions` to choose the SESSION_ID required by session and
-  session graph analysis commands. Local sources are preferred; missing
-  targeted records can fall back to configured remote Chronicles history.
+  session graph analysis commands. Reads are local only, including auto.
+  Shared and remote sources fail explicitly; there is no remote fallback.
 """
 
 
-def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
+def _dispatch(args: argparse.Namespace) -> Any:
     method: str = args._method
     params: dict[str, Any] = args._params(args)
     with _runtime(args) as runtime:
-        return runtime.call(method, params)
+        reply = runtime.execute({"method": method, "params": params})
+    if not reply["ok"]:
+        error = reply["error"]
+        print(json.dumps({"error": error}, indent=2), file=sys.stderr)
+        return CommandOutcome.failed(error=error["message"])
+    return reply["result"]
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ct",
-        description="Inspect coding sessions from an explicit local or shared source.",
+        description="Inspect coding sessions from live local retained evidence.",
         usage="ct <command> [args]",
         epilog=EPILOG,
         formatter_class=GhFormatter,
     )
 
-    parser.add_argument("--profile", dest="credential_profile", help="Shared connection profile.")
-    parser.add_argument("--source", choices=("local", "shared", "auto"), help="Query authority.")
+    parser.add_argument(
+        "--source",
+        choices=("local", "shared", "remote", "auto"),
+        default="auto",
+        help="Query source: auto is local only; shared and remote are unavailable.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for register in REGISTRARS:
         register(subparsers)

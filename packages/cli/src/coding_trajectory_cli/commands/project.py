@@ -57,7 +57,7 @@ def _render_project_list_markdown(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                f"Next page: repeat the same filters and limit with `--cursor {payload['next_cursor']}`.",
+                f"Next page: repeat the same scope and filters with `--cursor {payload['next_cursor']}`.",
             ]
         )
     return "\n".join(lines)
@@ -79,7 +79,7 @@ def _render_project_sessions_markdown(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                f"Next page: repeat the same filters and limit with `--cursor {payload['next_cursor']}`.",
+                f"Next page: repeat the same scope and filters with `--cursor {payload['next_cursor']}`.",
             ]
         )
     return "\n".join(lines)
@@ -125,12 +125,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     project_sessions.add_argument(
         "--project-id",
-        help="Stable project ID returned by project list for the selected authority.",
+        help="Stable local project ID returned by project list.",
     )
     for parser in (project_list, project_sessions):
         parser.add_argument(
             "--cursor",
-            help="Opaque next_cursor from the previous page; keep filters unchanged.",
+            help="Query-bound next_cursor for live pages; keep scope and filters unchanged. Page size may change.",
         )
         parser.add_argument(
             "--limit", type=positive_int, help="Requested page count, up to 200."

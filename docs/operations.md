@@ -1,8 +1,8 @@
 # Operations guide
 
-Capture, publication, and deployment are separate operations. A local query or
-build does not authorize remote writes. Use reviewed source and matching Worker,
-reader, and collector contracts.
+Core reads local coding-agent logs. It does not publish data, manage remote
+connections, or serve a remote API. Remote storage and deployment are deferred.
+The parked Cloudflare tree is unsupported and is not built by Core CI.
 
 ## Capture Amp logs
 
@@ -10,6 +10,11 @@ The Amp project plugin is `.amp/plugins/coding-trajectory/index.ts`.
 It writes private append-only journals to
 `~/.coding-trajectory/amp/sessions/T-<thread-id>.jsonl`.
 `CT_AMP_LOG_DIR` selects another directory.
+
+**Warning:** the legacy plugin can still launch an external publication executable
+after reconciliation and completed turns. Set `CT_AMP_AUTO_PUBLISH=0` before capture.
+Legacy auto-publication is unsupported until deliberately redesigned. Do not
+install or enable a collector for this local-only Core. Never upload raw journals.
 
 Journals contain thread metadata, message revisions, and live observations.
 Ingestion uses the latest revision for each stable ID. The plugin reconciles
@@ -19,19 +24,11 @@ journals; files do not synchronize between orbs.
 Use only these versioned journals as Amp ingestion input. `amp threads export`
 uses different IDs and is not interchangeable. Successful, matched live
 `create_thread` evidence can establish a spawn. Read, message, and wait references
-do not establish parentage. Separate cross-orb publications do not merge into a
-complete cross-host graph.
+do not establish parentage. Local ingestion does not invent cross-host graph links.
 
 Amp capture does not report provider tokens, billed cost, or exact inference
 timing. Hook timestamps describe local observation. See the
 [Amp output speed estimate](token-usage-glossary.md#amp-output-speed-estimate).
-
-**Warning:** the plugin can launch a publication executable after reconciliation
-and completed turns. Set `CT_AMP_AUTO_PUBLISH=0` for capture-only operation.
-The default executable is `~/.coding-trajectory/bin/run-chronicle-collector`;
-`CT_AMP_PUBLISH_COMMAND` can select another absolute executable path.
-Installing or enabling that executable requires separate publication authorization.
-Never upload the raw journals.
 
 Offline capture qualification:
 
@@ -39,161 +36,76 @@ Offline capture qualification:
 uv run python scripts/validate-amp-live.py
 ```
 
-## Publish a complete project inventory
+## Read local evidence
 
-**Warning:** publication writes private retained content to the selected workspace.
-Read the [privacy boundary](architecture.md#evidence-and-privacy) first.
-Do not run overlapping collectors for the same project.
+Install the locked workspace from the repository root:
 
-The repeatable runner requires an existing project, a clean reviewed checkout,
-and a matching deployed Worker. The collector needs `collect`; verification
-needs `read` in the same workspace and endpoint. One combined profile can serve both.
-Configure profiles through the [connection commands](cli.md#configure-a-connection).
+```sh
+uv sync --all-packages --frozen
+uv run ct --source local project list
+uv run ct --source local project sessions --project-id PROJECT_ID
+```
 
-Choose a new private `$RUN_DIR` outside the checkout, for example under
-`~/.coding-trajectory/publications/`. Keep it for all recovery actions.
-Set each variable below to the reviewed source, authority, and project values.
+Replace `PROJECT_ID` with an ID from the inventory. `auto` also selects local
+sources; it never falls back to remote. If no supported source exists on the
+host, queries report local source unavailability rather than reading a remote copy.
+See [CLI](cli.md) for scoped detail queries and [Loop](loop-design.md) for browser access.
 
-1. Install the locked dependencies:
+Inventory streams adapter-owned relationship metadata. Detail queries lazily
+ingest requested runs through the canonical reconstruction pipeline. One disposable
+`~/.coding-trajectory/local.sqlite` caches source fingerprints, topology, ownership,
+and retained graphs. It needs no upfront preparation or manual publication.
+An incompatible cache can be rebuilt from local logs. Do not remove vendor logs
+as a cache-cleanup action; they remain the evidence authority.
 
-   ```sh
-   uv sync --all-packages --frozen
-   ```
+Metrics are computed on request. Pricing keeps the existing live catalog path;
+catalog estimates remain separate from provider-reported cost. Living query
+behavior and its existing storage are unchanged by the graph-cache refactor.
 
-2. Freeze and inspect the inventory:
+Pages are count-bounded. Treat their unsigned query- and version-bound cursors
+as opaque. Ordering is deterministic per call; a multi-page read is not a saved
+snapshot of changing logs. Old published-view references are not supported.
 
-   ```sh
-   uv run --frozen --no-sync ct collector publish plan \
-     --run-dir "$RUN_DIR" --source-sha "$REVIEWED_COLLECTOR_SHA" \
-     --worker-version "$DEPLOYED_WORKER_VERSION" \
-     --credential-profile "$COLLECTOR_PROFILE" --reader-profile "$READER_PROFILE" \
-     --workspace-id "$WORKSPACE_ID" --project-id "$PROJECT_ID" \
-     --project-name "$PROJECT_NAME" --project-root "$LOCAL_PROJECT_ROOT"
-   ```
+## Validate local operation
 
-3. After explicit authorization, start delivery:
+Core CI runs Python/contract checks and the Loop web/integration checks. It does
+not build, qualify, prepare, or deploy the parked remote runtime.
 
-   ```sh
-   uv run --frozen --no-sync ct collector publish start --run-dir "$RUN_DIR"
-   ```
+```sh
+uv run python scripts/check-core-protocol.py
+uv run python scripts/validate-local-first-source-selection.py
+uv run python scripts/benchmark-session-retrieval.py --command-activity-only --no-write
+scripts/check-metrics-quality-gate.sh
+uv run python scripts/validate-metrics-baselines.py
+uv run python scripts/validate-amp-live.py
+bun run --cwd packages/plugins/loop/web check
+bun run --cwd packages/plugins/loop/web build
+uv run python scripts/check-loop.py
+```
 
-4. Inspect progress from a separate terminal:
+The focused synthetic qualification covers command activity and retained replay.
+The full retrieval benchmark (`--no-write` without `--command-activity-only`) is
+diagnostic, not a CI gate: its pre-existing summary/search expectations do not
+all hold on retained evidence. Neither workflow needs private logs or remote
+credentials. Metric baselines use committed source evidence; do not replace
+expected values with fresh output.
+See [metrics validation](metrics-validation-quality-gate.md) for audit requirements.
 
-   ```sh
-   uv run --frozen --no-sync ct collector publish status --run-dir "$RUN_DIR"
-   ```
+## Release marker validation
 
-`plan` makes authenticated reads only. It freezes complete-line source prefixes,
-hashes, file identities, and discovery membership. It has no age, vendor, or
-session subset filter. `start` checks source SHA/tree, Python version, and frozen
-input. Later appends belong to the next run.
+[RELEASE.md](../RELEASE.md) retains the batch release marker. Advance `release_id`
+by exactly one for an intentional reviewed batch. A target change requires that
+increment. Release 0 remains the baseline.
 
-Staged artifact bytes and requests remain in the run database. Resume does not
-discover or prepare newer sources. Directories use mode 0700; databases use 0600.
-**Do not share the plan or database:** they contain private paths and content.
-Audit receipts exclude request bodies and tokens.
+```sh
+uv run python scripts/check-release.py validate
+uv run python scripts/check-release.py change --base-ref BASE --head-ref HEAD
+```
 
-### Publication recovery
-
-After any interruption, preserve the run directory.
-
-1. Reconcile the retained run against remote state:
-
-   ```sh
-   uv run --frozen --no-sync ct collector publish reconcile --run-dir "$RUN_DIR"
-   ```
-
-2. After reviewing the report, resume with its fresh digest:
-
-   ```sh
-   uv run --frozen --no-sync ct collector publish resume --run-dir "$RUN_DIR" \
-     --reconciliation-sha "$DIGEST_FROM_RECONCILE"
-   ```
-
-Reconciliation makes remote reads and leaves the collector database unchanged.
-Its report binds to current database and audit hashes. Resume rejects stale
-reports, rechecks authority before writes, and settles accepted checkpoints.
-A committed publication is verified against its exact manifest; it is not resubmitted.
-Version, sequence, watermark, or manifest disagreement stops the run for review.
-
-Object readiness is not a lease. Publication revalidates references after expiry
-or pruning. A successful local PUT receipt alone cannot justify skipping upload.
-Missing objects use bounded transfers; mixed outcomes stop manifest submission.
-Requests have a 120-second per-operation timeout, not a total-transfer deadline.
-
-Current artifact limits are 16 MiB per facts object, 4 MiB per summary, and
-512 graphs per publication. Prepared API requests allow 64 KiB; responses allow
-448 KiB. Oversize or unsupported results fail explicitly, not by silent truncation.
-Publication preflight checks request and stored-manifest bounds before artifact upload.
-Accepted source registration or checkpoints can precede that check.
-
-Do not import legacy/ad-hoc run directories into this runner. Recover them with
-their original pinned tooling. Pending legacy SQL publications remain in the
-outbox with an error; they are not deleted or converted automatically.
+Core CI validates marker transitions, but no longer prepares a remote candidate
+or activates a Worker. The marker is not a deployment authorization or receipt.
 
 ## Prepare and deploy a release
 
-**Warning:** deployment changes shared code. Obtain explicit authorization for the
-target environment. Pause publishers during activation to prevent manifest drift.
-Deployment does not upload, reset, or delete application data.
-
-[RELEASE.md](../RELEASE.md) controls CI candidate preparation. Advance `release_id`
-by exactly one in a reviewed final commit. Release 0 never deploys.
-Both Core CI jobs must pass before marker-driven preparation.
-CI qualification is build-only; it does not activate a Worker.
-
-Use a clean reviewed checkout. Install the root and Worker locked environments
-and the Worker's Node dependencies as described in the
-[Worker guide](../cloudflare/control-plane/README.md#local-development).
-Choose a private, backed-up `$RELEASE_DIR` outside disposable worktrees.
-Set `$TARGET` to `staging` or `production` explicitly.
-
-1. Prepare and seal the reviewed source:
-
-   ```sh
-   uv run python scripts/deploy-release.py prepare \
-     --run-dir "$RELEASE_DIR" --source-sha "$REVIEWED_SOURCE_SHA"
-   ```
-
-2. After authorization, activate the sealed release:
-
-   ```sh
-   uv run python scripts/deploy-release.py deploy --environment "$TARGET" \
-     --run-dir "$RELEASE_DIR" --reader-profile "$READER_PROFILE"
-   ```
-
-Preparation seals source/tree, locks, configuration, tool versions, qualification
-logs, Python modules, and WebAssembly dependencies. Completed phases verify
-their receipts instead of rerunning. Preserve damaged evidence; do not edit receipts.
-Verification requires the original pinned toolchain. This is exact-byte identity,
-not a promise of identical rebuilds on other machines.
-
-Deploy runs compatibility preflight, one activation, and smoke reads.
-Repeat `--reader-profile` for every affected workspace. Preflight checks all
-current project manifests in supplied workspaces and rejects incompatible data.
-Deploy repeats these reads and rejects drift. An empty workspace needs no data bootstrap.
-
-For separate approval, run `preflight` with the same environment, run directory,
-and reader profiles. Then use `deploy --approve-activation DIGEST`.
-The digest identifies reviewed state; it is not an authorization credential.
-
-### Release recovery
-
-- `status` reports recorded progress, not current remote health.
-- `stop` drains the active command and blocks the next phase. It cannot cancel
-  a remote commit. Wait for the active owner/child to exit.
-- `resume --source-sha SAME_SHA` resumes local preparation only.
-- After any deployment invocation, timeout, or lost response, run `reconcile`
-  with the same environment and run directory. Do not replay deployment.
-- If activation succeeded but readback failed, run `smoke` to retry reads.
-  Do not redeploy to repair a smoke failure.
-
-Activation intent is durable before invocation. A job never retries activation,
-including after a spawn failure or nonzero exit. Unmatched outcomes stay unknown.
-If another release superseded the target, inspect version history before
-authorizing another job. There is no automatic rollback.
-
-Prepare once to promote the same sealed release to another environment.
-Each environment has its own preflight, activation intent, and receipts.
-Code rollback does not roll back SQLite or R2 writes.
-Routine releases never reset data; temporary reset and cleanup endpoints are retired.
+Remote preparation and deployment are unsupported. Marker validation above is
+the supported operation; there is no deployment procedure in this local-only Core.

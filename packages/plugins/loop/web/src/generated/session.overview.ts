@@ -235,7 +235,7 @@ export interface OverviewTurn {
  * One semantic activity cell, not one canonical item.
  *
  * Fields mirror build_overview_flows; descriptions and evidence membership
- * belong to that projector. Prepared object/response byte limits still apply.
+ * belong to that projector. Per-turn caps are semantic display bounds.
  */
 export interface OverviewActivity {
   cmd?: Cmd;

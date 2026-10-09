@@ -7,9 +7,12 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from coding_trajectory.ingestion.models import Session, Vendor
 from coding_trajectory.ingestion.provenance import (
@@ -32,6 +35,22 @@ class SessionHeader:
     parent_session_id: UUID | None = None
     title: str | None = None
     cwd: str | None = None
+
+
+class SourceTopology(BaseModel):
+    """Body-free adapter identity and explicit source relationships."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    session_id: UUID
+    vendor: Vendor
+    parent_session_id: UUID | None = None
+    parent_kind: Literal["spawn", "fork"] | None = None
+    children: dict[UUID, Literal["spawn", "fork"]] = Field(default_factory=dict)
+    cwd: str | None = None
+    project: str | None = None
+    modified: datetime
+    title: str | None = Field(default=None, max_length=280)
+    preview: str | None = Field(default=None, max_length=280)
 
 
 class BaseAdapter(ABC):
@@ -62,6 +81,32 @@ class BaseAdapter(ABC):
     def _iter_records(self, path: Path) -> Iterator[dict]:
         for record, _span in self._iter_record_spans(path):
             yield record
+
+    def _iter_topology_records(self, path: Path) -> Iterator[dict]:
+        """Stream JSON objects without retaining bodies or occurrence provenance."""
+        with path.open("rb") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if isinstance(record, dict):
+                    yield record
+
+    def scan_topology(self, source: Path) -> SourceTopology | None:
+        header = self.scan_header(source)
+        if header is None:
+            return None
+        return SourceTopology(
+            session_id=header.session_id,
+            vendor=header.vendor,
+            parent_session_id=header.parent_session_id,
+            parent_kind="spawn" if header.parent_session_id else None,
+            cwd=header.cwd,
+            project=Path(header.cwd).name if header.cwd else None,
+            modified=datetime.fromtimestamp(source.stat().st_mtime, tz=UTC),
+            title=header.title[:280] if header.title else None,
+        )
 
     def _iter_record_spans(self, path: Path) -> Iterator[tuple[dict, RecordSpan]]:
         """Yield parsed records with their raw byte spans and digests.

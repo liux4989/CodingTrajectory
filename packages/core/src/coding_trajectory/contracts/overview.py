@@ -1,4 +1,4 @@
-"""The single supported direct API and its self-contained overview records."""
+"""Self-contained live overview display records."""
 
 from __future__ import annotations
 
@@ -8,73 +8,6 @@ from typing import Any, Literal
 from pydantic import Field, field_serializer
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
-
-API_PROTOCOL = "ct.api.v1"
-PREPARED_API_SCHEMA = "ct.prepared-api.v1"
-MAX_API_REQUEST_BYTES = 64 * 1024
-MAX_API_RESPONSE_BYTES = 448 * 1024
-MAX_API_INDEX_BYTES = 64 * 1024
-MAX_API_TOPOLOGY_BYTES = 128 * 1024
-MAX_API_PACK_BYTES = 256 * 1024
-MAX_API_TURN_BYTES = 320 * 1024
-API_ENVELOPE_RESERVE = 8 * 1024
-MAX_API_FETCH_BYTES = 768 * 1024
-
-# Methods served by the remote authority. Versions come from SERVICE_CONTRACTS;
-# both the Worker and release preflight use this boundary.
-REMOTE_API_METHODS = (
-    "project.list",
-    "project.sessions",
-    "session.overview",
-    "session.summary",
-    "session.tree",
-    "session.stats",
-    "session.usage",
-    "session.model_usage",
-    "session.request_usage",
-    "session.tool_usage",
-    "graph.stats",
-    "graph.usage",
-    "graph.overview",
-    "session.items",
-    "session.events",
-    "living.sessions",
-)
-
-
-class ApiRequest(RequestModel):
-    protocol: Literal["ct.api.v1"] = API_PROTOCOL
-    id: str | None = Field(default=None, max_length=128)
-    method: str = Field(min_length=1, max_length=128)
-    method_version: int = Field(ge=1)
-    params: dict[str, Any]
-
-
-class ViewIdentity(RequestModel):
-    workspace_id: str
-    source_snapshot_sequence: int | None
-    source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    view_snapshot_sequence: int | None
-    view_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
-class ImmutableRequest(RequestModel):
-    view_manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-
-
-class PreparedObject(RequestModel):
-    kind: Literal["api"] = "api"
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    bytes: int = Field(ge=1, le=MAX_API_RESPONSE_BYTES)
-
-
-class PreparedMethod(RequestModel):
-    method: str
-    method_version: int
-    scope: str
-    turn_id: str | None = None
-    index: PreparedObject | None = None
-    error: Literal["remote_result_too_large"] | None = None
 
 
 class OverviewPage(RequestModel):
@@ -141,7 +74,7 @@ class OverviewActivity(RequestModel):
     """One semantic activity cell, not one canonical item.
 
     Fields mirror build_overview_flows; descriptions and evidence membership
-    belong to that projector. Prepared object/response byte limits still apply.
+    belong to that projector. Per-turn caps are semantic display bounds.
     """
 
     tool: str

@@ -11,7 +11,6 @@ export type SessionId = string;
 export type TurnId = string | null;
 export type ItemId = string | null;
 export type EventId = string | null;
-export type ViewManifestSha256 = string | null;
 export type State = "completed" | "unavailable" | "pending" | "errored";
 export type Result = ("pass" | "breach") | null;
 export type Measure = string;
@@ -59,7 +58,6 @@ export interface CanonicalReference {
   turn_id?: TurnId;
   item_id?: ItemId;
   event_id?: EventId;
-  view_manifest_sha256?: ViewManifestSha256;
 }
 /**
  * Explicit condition record: measure, observed value, threshold, outcome.

@@ -18,6 +18,24 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def assert_local_fields(value):
+    """Retired transport/authority identity must be absent, not JSON null."""
+    if isinstance(value, dict):
+        assert not {
+            "view_manifest_sha256",
+            "snapshot_sequence",
+            "workspace_id",
+            "authority",
+            "content_complete",
+            "fact_set_digest",
+        }.intersection(value), value
+        for child in value.values():
+            assert_local_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            assert_local_fields(child)
+
+
 def main():
     assert not (ROOT / "packages/plugins/datahub/plugin.toml").exists()
     assert not (ROOT / "docs/datahub-design.md").exists()
@@ -90,12 +108,19 @@ def main():
                 headers={"Content-Type": "application/json", **(headers or {})},
             )
             with urlopen(request, timeout=30) as response:
-                return json.load(response)
+                result = json.load(response)
+                assert_local_fields(result)
+                return result
 
         def core(method, params):
             reply = call("/api/core", {"method": method, "params": params})
             assert reply["ok"], reply
-            assert reply["meta"]["source"] == "local"
+            assert reply["meta"] == {
+                "source": "local",
+                "freshness": "live",
+                "content_scope": "retained",
+            }
+            assert reply["availability"] == {"state": "complete", "missing": []}
             return reply["result"]
 
         try:
@@ -120,10 +145,8 @@ def main():
             )
             assert any(value["project_id"] == project_id for value in projects["items"])
             browser = call("/api/session-browser", {"project_id": project_id})["result"]
-            assert (
-                browser["items"]
-                and browser["items"][0].get("view_manifest_sha256") is None
-            )
+            assert browser["items"]
+            assert all("view_manifest_sha256" not in item for item in browser["items"])
             sessions = core("project.sessions", {"project_id": project_id})["items"]
             assert (
                 sessions
@@ -169,6 +192,22 @@ def main():
             assert (
                 first_event["events"][0]["event_id"]
                 != next_event["events"][0]["event_id"]
+            )
+            # Preserve the frozen living-session snapshot continuation protocol.
+            live_first = core("living.sessions", {"limit": 1})
+            assert live_first["page_kind"] == "snapshot" and live_first["has_more"]
+            live_next = core(
+                "living.sessions",
+                {
+                    "limit": 1,
+                    "after": live_first["next_cursor"],
+                    "through": live_first["through"],
+                },
+            )
+            assert live_next["through"] == live_first["through"]
+            assert (
+                live_first["changes"][0]["path"]["session_id"]
+                != live_next["changes"][0]["path"]["session_id"]
             )
             reference = {
                 "session_id": session_id,
@@ -216,6 +255,21 @@ def main():
                 {"method": "session.items", "params": {"session_id": "does-not-exist"}},
             )
             assert missing["ok"] is False
+            assert missing["error"]["code"] == "invalid_request", missing
+            for params in (
+                {**scope, "cursor": "malformed"},
+                {
+                    "session_id": "019faa00-0000-7000-8000-0000000000b0",
+                    "cursor": first["next_cursor"],
+                },
+            ):
+                invalid = call(
+                    "/api/core", {"method": "session.items", "params": params}
+                )
+                assert (
+                    invalid["ok"] is False
+                    and invalid["error"]["code"] == "invalid_cursor"
+                ), invalid
             monitor(call, core, monitor_state, home)
             print(
                 "Loop integration: PASS — local discovery, summary/overview, cursor continuation, exact item/event references, reference-only persistence, invalid scope, origin/host rejection, no remote fallback"
@@ -249,11 +303,11 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
     assert [item["strategy_id"] for item in strategies] == ["turn-token-budget"]
     manifest = strategies[0]
     assert manifest["required_core_methods"] == {
-        "project.list": 3,
-        "project.sessions": 3,
-        "session.usage": 3,
-        "session.request_usage": 3,
-        "living.sessions": 2,
+        "project.list": 6,
+        "project.sessions": 6,
+        "session.usage": 5,
+        "session.request_usage": 7,
+        "living.sessions": 4,
     }
     assert manifest["evaluator"]["type"] == "deterministic"
     assert any(

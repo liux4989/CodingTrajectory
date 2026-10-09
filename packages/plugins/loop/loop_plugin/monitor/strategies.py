@@ -25,11 +25,11 @@ from loop_plugin.monitor.models import (
 
 # Frozen Core methods this strategy consumes, with minimum method versions.
 REQUIRED_CORE_METHODS: dict[str, int] = {
-    "project.list": 3,
-    "project.sessions": 3,
-    "session.usage": 3,
-    "session.request_usage": 3,
-    "living.sessions": 2,
+    "project.list": 6,
+    "project.sessions": 6,
+    "session.usage": 5,
+    "session.request_usage": 7,
+    "living.sessions": 4,
 }
 
 

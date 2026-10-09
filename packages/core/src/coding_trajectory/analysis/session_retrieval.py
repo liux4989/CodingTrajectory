@@ -304,8 +304,8 @@ def build_session_summary(
     warnings = []
     if not content_complete:
         warnings.append(
-            "Raw transcript bodies are not retained in the published facts "
-            "authority; the summary uses retained measurements, semantic facts, "
+            "Raw transcript bodies are not retained in the canonical store; "
+            "the summary uses retained measurements, semantic facts, "
             "and bounded previews and may omit text-derived facts."
         )
     return {
@@ -1241,4 +1241,8 @@ def _path_from_value(value: Any) -> str | None:
 def _is_retrieval_item(item: Item) -> bool:
     if not isinstance(item, CommandExecutionItem):
         return False
-    return bool(_RETRIEVAL_COMMAND_RE.search(_stringify(item.command)))
+    # Retention removes raw command input, but keeps its bounded tool target.
+    command = item.command
+    if command is None and item.measurements and item.measurements.tool_summary:
+        command = item.measurements.tool_summary.get("description")
+    return bool(_RETRIEVAL_COMMAND_RE.search(_stringify(command)))

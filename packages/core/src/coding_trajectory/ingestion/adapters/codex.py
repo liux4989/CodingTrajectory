@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -24,7 +24,11 @@ from coding_trajectory.ingestion.adapters._shared import (
     non_empty_str,
     preview_text,
 )
-from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.adapters.base import (
+    BaseAdapter,
+    SessionHeader,
+    SourceTopology,
+)
 from coding_trajectory.ingestion.adapters.codex_context import (
     _codex_prompt_block_name,
     _codex_user_prompt_block_name,
@@ -474,7 +478,31 @@ class CodexAdapter(BaseAdapter):
     def scan_identity(self, source: Path) -> SessionHeader | None:
         """Read the leading ``session_meta`` without searching for a title."""
 
-        return self._identity_from_records(self._iter_records(source))
+        return self._identity_from_records(self._iter_topology_records(source))
+
+    def scan_topology(self, source: Path) -> SourceTopology | None:
+        for record in self._iter_topology_records(source):
+            if record.get("type") != "session_meta":
+                continue
+            header = self._identity_from_records((record,))
+            if header is None:
+                return None
+            meta = record.get("payload") or {}
+            spawn = _extract_nested_map(meta.get("source"), "subagent", "thread_spawn")
+            kind = "spawn" if spawn and spawn.get("parent_thread_id") else "fork"
+            preview = meta.get("preview")
+            return SourceTopology(
+                session_id=header.session_id,
+                vendor=self.vendor,
+                parent_session_id=header.parent_session_id,
+                parent_kind=kind if header.parent_session_id else None,
+                cwd=header.cwd,
+                project=Path(header.cwd).name if header.cwd else None,
+                modified=datetime.fromtimestamp(source.stat().st_mtime, tz=UTC),
+                title=header.title[:280] if header.title else None,
+                preview=preview[:280] if isinstance(preview, str) else None,
+            )
+        return None
 
     def _identity_from_records(self, records: Iterable[dict]) -> SessionHeader | None:
         for record in records:

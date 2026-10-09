@@ -165,7 +165,7 @@ class PiAdapter(BaseAdapter):
             return HeaderFacts(session_id=session_id, title=title, cwd=cwd)
 
         facts = scan_header_records(
-            self._iter_records(source),
+            self._iter_topology_records(source),
             extract=extract,
             lookahead=self._TITLE_LOOKAHEAD,
         )

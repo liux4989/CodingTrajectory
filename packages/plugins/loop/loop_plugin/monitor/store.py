@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+from loop_plugin.models import migrate_live_references
 from loop_plugin.monitor.models import Evaluation, Finding, MonitorRun, Watch
 
 SCHEMA = """
@@ -73,6 +74,19 @@ class MonitorStore:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with closing(sqlite3.connect(path)) as db, db:
             db.executescript(SCHEMA)
+            for table, id_column in (
+                ("evaluations", "evaluation_id"),
+                ("findings", "finding_id"),
+                ("runs", "run_id"),
+            ):
+                for ident, record in db.execute(
+                    f"SELECT {id_column}, record FROM {table} "
+                    "WHERE record LIKE '%view_manifest_sha256%'"
+                ).fetchall():
+                    db.execute(
+                        f"UPDATE {table} SET record = ? WHERE {id_column} = ?",
+                        (json.dumps(migrate_live_references(json.loads(record))), ident),
+                    )
         path.chmod(0o600)
 
     def _connect(self) -> sqlite3.Connection:

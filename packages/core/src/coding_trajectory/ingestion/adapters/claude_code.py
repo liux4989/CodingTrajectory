@@ -9,20 +9,21 @@ from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 from coding_trajectory.ingestion.adapters._shared import (
     SHARED_FILE_TOOL_NAMES,
-    HeaderFacts,
     ToolTaxonomy,
     content_block_field_texts,
     content_block_texts,
     content_blocks,
     int_or_none,
     non_empty_str,
-    scan_header_records,
 )
-from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.adapters.base import (
+    BaseAdapter,
+    SessionHeader,
+    SourceTopology,
+)
 from coding_trajectory.ingestion.adapters.claude_context import (
     _claude_context_usage,
     _ClaudeStartingContextScan,
@@ -31,8 +32,6 @@ from coding_trajectory.ingestion.adapters.claude_context import (
 )
 from coding_trajectory.ingestion.adapters.claude_identity import (
     _ClaudeRecordScan,
-    _record_title,
-    _subagent_input,
     _subagent_input_from_scan,
 )
 from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
@@ -226,44 +225,56 @@ class ClaudeCodeAdapter(BaseAdapter):
     _TITLE_LOOKAHEAD = 50
 
     def scan_header(self, source: Path) -> SessionHeader | None:
-        scanned: list[dict] = []
-        id_resolved = False
-
-        def extract(record: dict) -> HeaderFacts:
-            nonlocal id_resolved
-            scanned.append(record)
-            session_id: UUID | None = None
-            cwd: str | None = None
-            if not id_resolved:
-                session_id_str = record.get("sessionId")
-                if session_id_str:
-                    try:
-                        session_id = UUID(session_id_str)
-                    except (ValueError, AttributeError):
-                        session_id = None
-                    else:
-                        cwd = _as_non_empty_str(record.get("cwd"))
-                        id_resolved = True
-            return HeaderFacts(
-                session_id=session_id, title=_record_title(record), cwd=cwd
-            )
-
-        facts = scan_header_records(
-            self._iter_records(source),
-            extract=extract,
-            lookahead=self._TITLE_LOOKAHEAD,
-        )
-        if facts.session_id is None:
+        scan = _ClaudeRecordScan()
+        # Identity includes agentName/slug from the first session record. Keep
+        # only scalar metadata, never that record's message or lastPrompt body.
+        keys = {
+            "sessionId",
+            "cwd",
+            "agentId",
+            "agentName",
+            "slug",
+            "teamName",
+            "isSidechain",
+            "permissionMode",
+            "parentUuid",
+            "uuid",
+            "title",
+            "sessionTitle",
+            "conversationTitle",
+            "threadName",
+            "aiTitle",
+        }
+        for record in self._iter_topology_records(source):
+            scan.observe_meta({key: record[key] for key in keys if key in record})
+        if scan.raw_session_id is None:
             return None
-        mechanism = _subagent_input(source, scanned, facts.session_id)
+        mechanism = _subagent_input_from_scan(source, scan, scan.raw_session_id)
         session_id, parent_session_id = canonical_session_ids(mechanism)
         return SessionHeader(
             session_id=session_id,
             vendor=Vendor.CLAUDE_CODE,
             parent_session_id=parent_session_id,
             title=mechanism.title,
-            cwd=facts.cwd,
+            cwd=_as_non_empty_str((scan.first_session_record or {}).get("cwd")),
         )
+
+    def scan_topology(self, source: Path) -> SourceTopology | None:
+        topology = super().scan_topology(source)
+        if topology is None:
+            return None
+        # Match discovery's authoritative encoded-project spelling. Import
+        # lazily because discovery itself imports the adapters.
+        from coding_trajectory.discovery import _decode_claude_encoded_path
+
+        try:
+            encoded = source.relative_to(Path.home() / ".claude" / "projects").parts[0]
+        except ValueError:
+            return topology
+        decoded = _decode_claude_encoded_path(encoded)
+        if decoded:
+            return topology.model_copy(update={"project": Path(decoded).name})
+        return topology
 
     def _build_session(
         self,

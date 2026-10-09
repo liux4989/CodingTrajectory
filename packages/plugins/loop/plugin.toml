@@ -3,16 +3,16 @@ description = "CodingTrajectory Loop — explore local sessions, investigate evi
 entry = "loop_plugin/main.py"
 
 [requires]
-"project.list" = 3
-"project.sessions" = 3
-"session.summary" = 2
-"session.overview" = 3
-"session.items" = 6
-"session.events" = 4
-"session.usage" = 3
-"session.request_usage" = 3
-"session.stats" = 4
-"living.sessions" = 2
+"project.list" = 6
+"project.sessions" = 6
+"session.summary" = 4
+"session.overview" = 6
+"session.items" = 7
+"session.events" = 6
+"session.usage" = 5
+"session.request_usage" = 7
+"session.stats" = 5
+"living.sessions" = 4
 
 [[tools]]
 name = "web"

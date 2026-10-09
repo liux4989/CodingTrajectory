@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the frozen public Core and published-fact protocol schemas."""
+"""Check the frozen public local Core protocol schemas."""
 
 from __future__ import annotations
 
@@ -16,10 +16,6 @@ from coding_trajectory.contracts.envelope import (
     ApiSuccessResponse,
 )
 from coding_trajectory.contracts.registry import ServiceContract
-from coding_trajectory.control_plane.published_facts import (
-    FACT_SET_SCHEMA_VERSION,
-    PublishedFactSet,
-)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = ROOT / "validation" / "core-protocol.json"
@@ -88,7 +84,7 @@ def build_snapshot() -> dict[str, Any]:
         for method, contract in sorted(SERVICE_CONTRACTS.items())
     }
     snapshot = {
-        "snapshot_version": 2,
+        "snapshot_version": 3,
         "registry_schema_version": ServiceContract.schema_version,
         "method_count": len(methods),
         "methods": methods,
@@ -98,10 +94,6 @@ def build_snapshot() -> dict[str, Any]:
                 ApiSuccessResponse[Any].model_json_schema(), shared_defs
             ),
             "error": compact_schema(ApiErrorResponse.model_json_schema(), shared_defs),
-        },
-        "published_facts": {
-            "schema_version": FACT_SET_SCHEMA_VERSION,
-            "schema": compact_schema(PublishedFactSet.model_json_schema(), shared_defs),
         },
     }
     snapshot["$defs"] = shared_defs
@@ -149,7 +141,7 @@ def main() -> int:
     if expected == current:
         print(
             "Core protocol freeze: PASS "
-            f"({len(SERVICE_CONTRACTS)} methods, {FACT_SET_SCHEMA_VERSION})"
+            f"({len(SERVICE_CONTRACTS)} methods, local retained queries)"
         )
         return 0
     print("Core protocol freeze: FAIL\n")

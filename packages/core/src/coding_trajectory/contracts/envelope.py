@@ -6,8 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coding_trajectory.contracts.prepared_api import API_PROTOCOL, ViewIdentity
-
+API_PROTOCOL = "ct.api.v1"
 CORE_PROTOCOL = "ct.core.v1"
 
 
@@ -15,13 +14,20 @@ class ApiEnvelopeModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ApiTransportMetadata(ApiEnvelopeModel):
-    """Authority and snapshot facts carried outside versioned method results."""
+class ApiRequest(ApiEnvelopeModel):
+    protocol: Literal["ct.api.v1"] = API_PROTOCOL
+    id: str | None = Field(default=None, max_length=128)
+    method: str = Field(min_length=1, max_length=128)
+    method_version: int = Field(ge=1)
+    params: dict[str, Any]
 
-    identity: ViewIdentity | None = None
-    source: Literal["local", "remote"]
-    freshness: Literal["authoritative"]
-    content_scope: Literal["facts"]
+
+class ApiTransportMetadata(ApiEnvelopeModel):
+    """Local live retention policy outside versioned method results."""
+
+    source: Literal["local"] = "local"
+    freshness: Literal["live"] = "live"
+    content_scope: Literal["retained"] = "retained"
 
 
 class ApiAvailability(ApiEnvelopeModel):
@@ -35,7 +41,7 @@ class ApiSuccessResponse[ResultT](ApiEnvelopeModel):
     method: str
     method_version: int
     ok: Literal[True]
-    data: ResultT
+    result: ResultT
     availability: ApiAvailability = Field(
         default_factory=lambda: ApiAvailability(state="complete", missing=[])
     )
@@ -54,7 +60,7 @@ class ApiErrorResponse(ApiEnvelopeModel):
     method: Any
     method_version: int | None = None
     ok: Literal[False]
-    data: None = None
+    result: None = None
     availability: ApiAvailability
     error: ApiErrorDetail
     meta: ApiTransportMetadata | None = None

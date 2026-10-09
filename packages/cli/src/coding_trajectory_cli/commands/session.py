@@ -1407,7 +1407,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     session_search.add_argument(
         "--cursor",
-        help="Continue after the cursor returned by a previous search page.",
+        help="Continue a query-bound live search page; keep selectors and filters unchanged. Page size may change.",
     )
     add_output_flags(session_search)
     session_search.set_defaults(
@@ -1484,7 +1484,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         "--limit", type=int, default=200, help="Maximum request rows per page (1–1000)."
     )
     session_request_usage.add_argument(
-        "--cursor", default=None, help="Continue with the previous page's next_cursor."
+        "--cursor", default=None, help="Continue a query-bound live page; keep selectors unchanged. Page size may change."
     )
     add_json_output_flag(session_request_usage)
     session_request_usage.set_defaults(
@@ -1496,7 +1496,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_events = session_sub.add_parser(
         "events",
         prog="ct session events",
-        help="Lazily load local events within a published session or turn.",
+        help="Lazily load retained local events within a session or turn.",
         epilog=EVENT_SCAN_EPILOG,
         formatter_class=GhFormatter,
     )
@@ -1554,7 +1554,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     session_events.add_argument(
         "--cursor",
-        help="Continue after the source-order key returned by a previous page.",
+        help="Continue a query-bound live page in source order; keep selectors and filters unchanged. Page size may change.",
     )
     session_events.set_defaults(
         _method="session.events",
@@ -1593,7 +1593,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     session_items.add_argument(
         "--cursor",
-        help="Continue after the source-order key returned by a previous page.",
+        help="Continue a query-bound live page in source order; keep selectors and filters unchanged. Page size may change.",
     )
     add_json_output_flag(session_items)
     session_items.set_defaults(

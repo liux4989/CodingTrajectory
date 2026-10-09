@@ -21,65 +21,46 @@ Graph identity is the root session ID.
 
 ## Data flow
 
-```diagram
-┌────────────────────┐
-│ Local vendor logs  │
-└─────────┬──────────┘
-          ▼
-┌────────────────────┐
-│ Canonical graphs   │
-└─────────┬──────────┘
-          ▼
-┌────────────────────┐        ┌────────────┐
-│ Graph preparation  │───────▶│ Local API  │
-└─────────┬──────────┘        └────────────┘
-          │ authorized publication
-          ▼
-┌────────────────────┐
-│ Collector          │
-└─────────┬──────────┘
-          ▼
-┌────────────────────┐
-│ R2 artifacts       │
-│ DO manifests       │
-└─────────┬──────────┘
-          ▼
-┌────────────────────┐
-│ Prepared remote API│
-└────────────────────┘
+```text
+Local vendor logs
+  → adapter-owned streamed relationship metadata
+  → project/session/topology inventory
+  → lazy requested runs through existing canonical ingestion
+  → publication-independent retained canonical graphs
+  → direct contextual handlers and on-request metrics
 ```
 
+Inventory reads discover identities and relationships without constructing every
+run. Detail reads reconstruct only requested runs and their canonical dependencies.
 Vendor adapters preserve source identity and order before normalization.
 Ingestion owns revision reconciliation, inherited-history classification,
 deduplication, relationships, and accounting before retention removes content.
-Publication must not repair incorrect reconstruction or invent missing values.
 
-Graph preparation produces validated facts, summaries, and bounded API objects.
-Local reads and the collector share this computation. A disposable SQLite cache
-uses one automatic key derived from canonical graph content and Core Python
-source code. Each new CLI process detects code edits without a manual version
-bump. Long-running services load a new code identity when restarted. Local
-reads use this SQLite cache directly; a batch reuses its already prepared graphs.
-Its default path is `~/.coding-trajectory/prepared-graphs.sqlite`; its payload
-budget is 128 MiB. Discovery, parsing, and hashing still detect changed sources.
+One disposable cache, `~/.coding-trajectory/local.sqlite`, stores source
+fingerprints, topology, ownership, and retained canonical graphs. Source changes
+invalidate affected dependencies. An incompatible cache can be rebuilt from logs.
+It is not an evidence authority or a public persistence contract.
 
-## Remote authority
+No upfront preparation, publication packs, manifests, saved snapshots, signatures,
+or byte-budget pages are required. Display projections and metrics are computed
+on request, not stored as canonical history. Pricing uses the existing live
+catalog path and remains distinct from provider-reported cost.
 
-The Python Cloudflare Worker stores immutable artifacts in R2. One SQLite
-Durable Object (DO) per workspace stores manifests, checkpoints, receipts,
-inventory, upload claims, and living state.
+## Local query boundary
 
-The collector computes historical facts and prepared responses. The Worker
-authenticates requests, validates publication, selects snapshots, checks object
-integrity, and serves bounded prepared results. It does not run ingestion or
-recalculate historical metrics on each read.
+Chronicle is the local canonical query layer. The public Core registry has 18
+methods. One per-method capability declaration allows local execution and marks
+remote execution unavailable. `auto` selects local sources, with no remote fallback.
+The parked Cloudflare runtime is unsupported and is not built by Core CI.
 
-Remote clients use `/v1/api` with `ct.api.v1`. Collector and authority operations
-use `/v1/core` with `ct.core.v1`. Retired SQL fact read/stage/publish methods
-return 404. There is no SQL fallback or automatic import of pending legacy batches.
+Collection pages use opaque, unsigned count-keyset cursors bound to the query
+and method version. Inventory uses identity ordering; content uses canonical
+source order with ID tie-breakers. Results are deterministic within each call,
+not frozen across calls as logs change. There are no published-view references
+or stale-view errors. Living queries keep their existing behavioral storage.
 
-The public Core registry has 18 methods. Remote delivery supports 16;
-`session.search` and `living.events` return `method_unavailable` remotely.
+Local envelopes use `result`, not the parked remote envelope's `data`.
+Transport metadata states `local` / `live` / `retained`, without snapshot identity.
 Method versions and exact schemas are in the [frozen protocol](core-protocol.md).
 
 ## Evidence and privacy
@@ -88,15 +69,14 @@ Original logs remain the evidence authority on their host. Standard queries
 return retained canonical evidence, not arbitrary raw vendor payloads.
 Coverage fields distinguish observed, derived, partial, and unavailable data.
 
-Publication targets an authenticated internal workspace. It retains bounded
-message previews, semantic tool descriptions, command arguments, and target paths.
-It excludes full transcripts, reasoning bodies, raw tool input/output objects,
-stdout/stderr, file or patch bodies, and arbitrary event payloads.
+Retention is independent of publication. Standard queries retain bounded previews,
+semantic tool descriptions, operational evidence, provenance, and measurements.
+They do not expose arbitrary raw vendor payloads as canonical history.
 
-**Warning:** bounded content is not necessarily safe to share publicly.
-Description redaction handles common explicit credentials and strips sensitive
-URL components. It is not a complete secret scanner. Preview truncation is not
-credential redaction. Review the intended content before authorizing publication.
+**Warning:** retained content and local logs can contain private information.
+Bounded previews and description redaction are not a complete secret scanner.
+The legacy Amp capture plugin can still auto-publish externally; that path is
+unsupported. Set `CT_AMP_AUTO_PUBLISH=0` for local capture.
 
 ## Ownership
 
@@ -104,14 +84,14 @@ Paths below are relative to `packages/core/src/coding_trajectory/`, unless state
 
 | Boundary | Owner |
 | --- | --- |
-| Source discovery and reconstruction | `discovery.py`, `ingestion/` |
-| Retained facts and evidence policy | `control_plane/fact_projection.py`, `control_plane/published_facts.py` |
-| Reusable preparation | `control_plane/graph_preparation.py`, `control_plane/prepared_api.py` |
-| Local reads | `control_plane/fact_repository.py`, `service/` |
-| Remote client | `control_plane/remote_api.py` |
-| Publication and recovery | `control_plane/collector.py`, `control_plane/publication_run.py` |
+| Source inventory and relationships | `discovery.py`, `discovery_metadata.py`, vendor adapters in `ingestion/` |
+| Canonical reconstruction and retention | `ingestion/` |
+| Disposable local graph cache and ownership | `service/store.py` |
+| Local execution and source capabilities | `runtime.py` |
+| Direct contextual queries and pagination | `service/` |
+| Native metrics and live pricing | `metrics/` |
+| Living behavior and storage | `living_sessions.py`, `living_events.py`, `living_events_store.py` |
 | Public contracts | `contracts/` and `validation/core-protocol.json` at the repository root |
-| Workspace and artifact authority | `cloudflare/control-plane/src/` at the repository root |
 | Product state and judgments | `packages/plugins/loop/` at the repository root |
 
 Plugins consume Core contracts. They do not reconstruct sessions independently
@@ -119,4 +99,4 @@ or redefine native metric formulas. Pricing estimates remain distinct from
 provider-reported cost. Evaluations, scores, forecasts, and recommendations do
 not become canonical session facts.
 
-See [operations](operations.md) for publication and release procedures.
+See [operations](operations.md) for capture and local validation procedures.

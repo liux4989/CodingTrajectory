@@ -1,10 +1,4 @@
-"""Method handlers and dispatch for the historical and living service methods.
-
-Every standard historical method has one bounded ``facts`` behavior: handlers
-read the retained published-facts representation (structural identity,
-topology, measurements, event envelopes, and processed output evidence) and
-never raw bodies, whether the store came from local logs or remote SQL rows.
-"""
+"""Direct method handlers over the local retained canonical document store."""
 
 from __future__ import annotations
 
@@ -16,33 +10,28 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
-from coding_trajectory.control_plane.published_facts import (
-    FactIndex,
-    GraphFactPayload,
-    SessionFactPayload,
-    session_graph_from_fact_index,
-)
-from coding_trajectory.ingestion.common import normalize_project_key
 from coding_trajectory.ingestion.models import SessionGraph
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
+from coding_trajectory.service.pagination import LocalQueryError, paginate
 from coding_trajectory.service.serializers import (
     _parse_user_id,
     _public_output_for_session_graph,
-    serialize_session_graph_detail,
 )
 from coding_trajectory.service.store import (
     IndexCache,
     _resolve_session_graph,
     project_list_metadata,
-    resolve_collection,
+    project_sessions_metadata,
 )
 
 
 @dataclass(frozen=True)
 class ServiceContext:
-    store: DocumentStore | FactIndex
+    store: DocumentStore
     global_scope: bool
     current_dir: Path
     discovery_note: str
@@ -56,42 +45,30 @@ def dispatch(
     method: str,
     params: dict[str, Any],
     *,
-    store: DocumentStore | FactIndex,
+    store: DocumentStore,
     global_scope: bool,
     current_dir: Path,
     discovery_note: str,
     cache: IndexCache,
 ) -> Any:
     contract = service_contract(method)
-    params = contract.validate_request(params)
-    if (
-        method.startswith(("session.", "graph.", "project."))
-        and method != "session.search"
-    ):
-        from coding_trajectory.control_plane.fact_repository import (
-            LocalPublishedFactRepository,
-        )
-        from coding_trajectory.control_plane.published_facts import (
-            session_graph_from_fact_index,
-        )
+    try:
+        params = contract.validate_request(params)
+    except ValidationError as exc:
+        if any(error["loc"] == ("cursor",) for error in exc.errors()):
+            raise LocalQueryError("invalid_cursor") from exc
+        raise
+    if not isinstance(store, DocumentStore):
+        raise TypeError("dispatch requires a canonical document store")
+    # Direct callers (including metric validation) can supply transient graphs.
+    # Normalize without mutating their store or involving publication authority.
+    # Living methods keep their existing incremental behavioral contract.
+    if method.startswith(("session.", "graph.")):
+        from coding_trajectory.ingestion.retained import retain_session_graph
 
-        local_store = (
-            DocumentStore.from_session_graphs(
-                [
-                    session_graph_from_fact_index(store, graph_id)
-                    for graph_id in store.graph_ids
-                ]
-            )
-            if isinstance(store, FactIndex)
-            else store
+        store = DocumentStore.from_session_graphs(
+            [retain_session_graph(graph) for graph in store.session_graphs.values()]
         )
-        repository = LocalPublishedFactRepository(
-            global_scope=global_scope,
-            current_dir=current_dir,
-            cache=cache,
-            resolve=lambda *_args, **_kwargs: (local_store, discovery_note),
-        )
-        return contract.validate_response(repository.response_for(method, params))
     context = ServiceContext(
         store=store,
         global_scope=global_scope,
@@ -99,10 +76,7 @@ def dispatch(
         discovery_note=discovery_note,
         cache=cache,
     )
-    if isinstance(context.store, FactIndex):
-        context.cache.index_facts(context.store)
-    else:
-        context.cache.index_store(context.store)
+    context.cache.index_store(context.store)
     try:
         handler = SERVICE_HANDLERS[method]
     except KeyError as exc:
@@ -127,65 +101,8 @@ def _select_session_graph(session_graph: SessionGraph, session_id: str) -> Sessi
     )
 
 
-def _resolve_historical_graph(
-    store: DocumentStore | FactIndex, raw_id: str | None
-) -> SessionGraph:
-    if isinstance(store, DocumentStore):
-        return _resolve_session_graph(store, raw_id)
-    if raw_id is None:
-        if len(store.graph_ids) == 1:
-            return session_graph_from_fact_index(store, store.graph_ids[0])
-        if not store.graph_ids:
-            raise ValueError("no session_graphs found in store")
-        raise ValueError(
-            "session_id is required when the store contains multiple session_graphs"
-        )
-    graph_id = store.graph_id_for_entrypoint(_parse_user_id(raw_id))
-    if graph_id is None:
-        raise ResourceNotFoundError(f"resource not found: {raw_id}")
-    return session_graph_from_fact_index(store, graph_id)
-
-
-def _fact_graphs(
-    facts: FactIndex,
-    *,
-    global_scope: bool,
-    current_dir: Path,
-    project_name: str | None,
-    agent_vendor: str | None,
-) -> list[SessionGraph]:
-    selected: list[tuple[str, UUID]] = []
-    current_project = (
-        normalize_project_key(current_dir.name)
-        if not global_scope and project_name is None
-        else None
-    )
-    requested_project = (
-        normalize_project_key(project_name) if project_name is not None else None
-    )
-    for graph_id in facts.graph_ids:
-        graph_payload = facts.payload(graph_id, "graph", graph_id)
-        assert isinstance(graph_payload, GraphFactPayload)
-        project = graph_payload.summary.project
-        normalized_project = normalize_project_key(project) if project else None
-        if current_project is not None and normalized_project != current_project:
-            continue
-        if requested_project is not None and normalized_project != requested_project:
-            continue
-        if agent_vendor is not None and not any(
-            isinstance(row.payload, SessionFactPayload)
-            and row.payload.vendor.value == agent_vendor
-            for row in facts.rows_for_graph(graph_id)
-            if row.kind == "session"
-        ):
-            continue
-        selected.append((project or "", graph_id))
-    return [
-        session_graph_from_fact_index(facts, graph_id)
-        for _project, graph_id in sorted(
-            selected, key=lambda value: (value[0], str(value[1]))
-        )
-    ]
+def _resolve_historical_graph(store: DocumentStore, raw_id: str | None) -> SessionGraph:
+    return _resolve_session_graph(store, raw_id)
 
 
 def _graph_handler(
@@ -231,72 +148,53 @@ def _session_handler(
 def _handle_project_sessions(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
-    """Collapsed inventory cards: runtime and usage are always computed."""
-    from coding_trajectory.analysis.orchestration_runs import orchestration_runs
-    from coding_trajectory.metrics import build_session_graph_usage
-
-    if isinstance(context.store, FactIndex):
-        session_graphs = _fact_graphs(
-            context.store,
-            global_scope=context.global_scope,
-            current_dir=context.current_dir,
-            project_name=params.get("project_name"),
-            agent_vendor=params.get("agent_vendor"),
-        )
-    else:
-        session_graphs = resolve_collection(
-            context.store,
-            "session_graph",
-            global_scope=context.global_scope,
-            current_dir=context.current_dir,
-            project_name=params.get("project_name"),
-            agent_vendor=params.get("agent_vendor"),
-        )
-    items: list[dict[str, Any]] = []
-    for lineage_graph in session_graphs:
-        for graph in orchestration_runs(lineage_graph):
-            usage = build_session_graph_usage(graph)
-            item = {
-                **serialize_session_graph_detail(graph),
-                "project": graph.project_identifier,
-                "lineage_root_session_id": str(lineage_graph.root_session_id),
-                "modified": _graph_modified(graph),
-                "usage": usage.get("total_usage") or {},
-                "runtime": usage.get("runtime") or {},
-                "warnings": usage.get("warnings") or [],
-            }
-            items.append(_public_output_for_session_graph(graph, item))
-    return {"items": items}
-
-
-def _graph_modified(session_graph: SessionGraph) -> datetime | None:
-    return max(
-        (
-            timestamp
-            for session in session_graph.sessions
-            for timestamp in (session.ended_at, session.started_at)
-            if timestamp is not None
-        ),
-        default=None,
+    """Metadata-only inventory; never build metric graphs for cards."""
+    result = project_sessions_metadata(
+        params,
+        global_scope=context.global_scope,
+        current_dir=context.current_dir,
+        cache=context.cache,
     )
+    return _inventory_page(result["items"], "project.sessions", params, context)
 
 
 def _handle_project_list(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
-    """Dispatch adapter for ``project.list``.
-
-    Production traffic is short-circuited in :meth:`ServiceRuntime.call` to
-    :func:`project_list_metadata` (which never builds a store). This handler
-    keeps ``dispatch("project.list", ...)`` consistent with that path by
-    delegating to the same canonical implementation, so the contract registry
-    and the handler registry agree.
-    """
-    return project_list_metadata(
+    """Use the same metadata-only implementation as local runtime calls."""
+    result = project_list_metadata(
         params,
         global_scope=context.global_scope,
         current_dir=context.current_dir,
+        cache=context.cache,
     )
+    return _inventory_page(
+        list(result["items"].values()), "project.list", params, context
+    )
+
+
+def _inventory_page(
+    rows: list[dict[str, Any]],
+    method: str,
+    params: dict[str, Any],
+    context: ServiceContext,
+) -> dict[str, Any]:
+    page, cursor = paginate(
+        rows,
+        method=method,
+        params=params,
+        scope={
+            "global_scope": context.global_scope,
+            "current_dir": str(context.current_dir.resolve()),
+        },
+        key=lambda row: (row["project_id"], row.get("root_session_id", "")),
+    )
+    return {
+        "items": page,
+        "total": len(rows),
+        "returned": len(page),
+        "next_cursor": cursor,
+    }
 
 
 def _handle_living_events(
@@ -315,18 +213,13 @@ def _handle_living_events(
     )
 
 
-@_session_handler
-def _handle_session_overview(
-    params: dict[str, Any], session_graph: SessionGraph
-) -> Any:
-    from coding_trajectory.analysis.session_graph_views import (
-        build_session_graph_overview,
-    )
+def _handle_session_overview(params: dict[str, Any], context: ServiceContext) -> Any:
+    from coding_trajectory.analysis.overview import build_overview
 
-    return build_session_graph_overview(
-        session_graph,
-        limit=params["limit"],
-        before_turn_id=params.get("before_turn_id"),
+    return build_overview(
+        _resolve_historical_graph(context.store, params["session_id"]),
+        method="session.overview",
+        params=params,
     )
 
 
@@ -341,15 +234,30 @@ def _handle_session_summary(params: dict[str, Any], session_graph: SessionGraph)
 def _handle_session_search(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.analysis.session_retrieval import search_session
 
-    return search_session(
+    result = search_session(
         session_graph,
         query=params["query"],
         mode=params["mode"],
         kinds=params["kinds"],
-        limit=params["limit"],
+        limit=2**31 - 1,
         turn_id=params.get("turn_id"),
-        cursor=params.get("cursor"),
     )
+
+    def key(row: dict[str, Any]) -> tuple:
+        refs = row["references"]
+        identity = refs.get("item_id") or (refs.get("event_ids") or [""])[0]
+        return (-float(row["score"]), row["timestamp"], str(identity), row["kind"])
+
+    page, cursor = paginate(
+        result["matches"], method="session.search", params=params, key=key
+    )
+    result.update(
+        matches=page,
+        next_cursor=cursor,
+        truncated=cursor is not None,
+    )
+    result["coverage"]["trimmed"] = len(page) < result["total"]
+    return result
 
 
 def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any:
@@ -400,12 +308,27 @@ def _handle_session_request_usage(
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_request_usage
 
-    return _native_metric_costs(
-        build_session_graph_request_usage(
-            session_graph,
-            turn_id=params.get("turn_id"),
-        )
+    result = build_session_graph_request_usage(
+        session_graph, turn_id=params.get("turn_id")
     )
+    index = _usage_index(session_graph)
+    rows = result["requests"]
+    page, cursor = paginate(
+        rows,
+        method="session.request_usage",
+        params=params,
+        key=lambda row: (
+            index.turns_by_id[_parse_user_id(row["turn_id"])].sequence,
+            row["turn_id"],
+            row["sequence"],
+            row["timestamp"],
+            row.get("usage_event_id") or "",
+        ),
+    )
+    result.update(
+        requests=page, total=len(rows), returned=len(page), next_cursor=cursor
+    )
+    return result
 
 
 @_session_handler
@@ -414,22 +337,56 @@ def _handle_session_tool_usage(
 ) -> Any:
     from coding_trajectory.metrics import build_session_graph_tool_usage
 
-    return _native_metric_costs(
-        build_session_graph_tool_usage(
-            session_graph,
-            turn_id=params.get("turn_id"),
-        )
+    result = build_session_graph_tool_usage(
+        session_graph, turn_id=params.get("turn_id")
     )
+    items, costs = result["tool_items"], result.get("item_real_token_costs")
+    # Preserve independent, potentially unequal ledgers by pairing positions,
+    # not joining IDs or recomputing attribution (same public ledger semantics).
+    rows = [
+        {
+            "tool": items[i] if i < len(items) else None,
+            "cost": costs[i] if costs is not None and i < len(costs) else None,
+        }
+        for i in range(max(len(items), len(costs or [])))
+    ]
+    index = _usage_index(session_graph)
+
+    def key(row: dict[str, Any]) -> tuple:
+        value = row["cost"] if row["cost"] is not None else row["tool"]
+        turn = index.turns_by_id[_parse_user_id(value["turn_id"])]
+        # The all-item ledger includes synthetic user-prompt entries (sequence
+        # -1) that deliberately do not exist in the canonical item index.
+        sequence = (
+            value["sequence"]
+            if row["cost"] is not None
+            else index.items_by_id[_parse_user_id(value["item_id"])].sequence
+        )
+        return (turn.sequence, str(turn.turn_id), sequence, value["item_id"])
+
+    page, cursor = paginate(rows, method="session.tool_usage", params=params, key=key)
+    result["tool_items"] = [row["tool"] for row in page if row["tool"] is not None]
+    if "item_real_token_costs" in result and costs is not None:
+        result["item_real_token_costs"] = [
+            row["cost"] for row in page if row["cost"] is not None
+        ]
+    result.update(total=len(rows), returned=len(page), next_cursor=cursor)
+    return result
 
 
-@_graph_handler
-def _handle_graph_overview(params: dict[str, Any], session_graph: SessionGraph) -> Any:
-    from coding_trajectory.analysis.graph_views import build_graph_overview
+def _usage_index(session_graph: SessionGraph) -> Any:
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
 
-    return build_graph_overview(
-        session_graph,
-        limit=params["limit"],
-        before_turn_id=params.get("before_turn_id"),
+    return build_session_graph_index(session_graph)
+
+
+def _handle_graph_overview(params: dict[str, Any], context: ServiceContext) -> Any:
+    from coding_trajectory.analysis.overview import build_overview
+
+    return build_overview(
+        _resolve_historical_graph(context.store, params["root_session_id"]),
+        method="graph.overview",
+        params=params,
     )
 
 
@@ -533,16 +490,14 @@ def _handle_session_events(
                     continue
             rows.append(record)
 
-    page, next_cursor = _canonical_page(
+    page, next_cursor = paginate(
         rows,
-        kind="event",
-        cursor=params.get("cursor"),
-        limit=params["limit"],
+        method="session.events",
+        params=params,
+        key=lambda row: (row["source_order_key"], row["event_id"]),
     )
     missing = (
-        sorted(
-            str(value) for value in requested_ids - {row["event_id"] for row in rows}
-        )
+        sorted(str(value) for value in requested_ids - set(index.events_by_id))
         if requested_ids
         else []
     )
@@ -557,12 +512,15 @@ def _handle_session_events(
         {
             "root_session_id": str(session_graph.root_session_id),
             "events": page,
+            "total": len(rows),
+            "returned": len(page),
+            "unresolved_ids": missing,
             "next_cursor": next_cursor,
             "coverage": {
                 "retention": "not_retained",
                 "measurement": "complete",
                 "searchable": None,
-                "trimmed": next_cursor is not None,
+                "trimmed": len(page) < len(rows),
             },
         },
     )
@@ -618,8 +576,8 @@ def _event_record(
             event.event_id,
         ),
         "provenance": {
-            "source": "published_facts",
-            "method": "published_event_envelope.v1",
+            "source": "retained_canonical",
+            "method": "retained_event_envelope.v1",
             "confidence": "high",
         },
         "coverage": {
@@ -674,7 +632,6 @@ def _handle_session_items(
 
     index = build_session_graph_index(session_graph)
     rows: list[dict[str, Any]] = []
-    seen: set[UUID] = set()
     for session in session_graph.sessions:
         for turn in session.turns:
             if selected_turn_id is not None and str(turn.turn_id) != str(
@@ -686,31 +643,38 @@ def _handle_session_items(
                     continue
                 if types_filter and item.kind not in types_filter:
                     continue
-                seen.add(item.item_id)
                 rows.append(
                     _canonical_item_record(
                         item, session_graph=session_graph, index=index
                     )
                 )
+    missing = (
+        sorted(str(value) for value in requested_ids - set(index.items_by_id))
+        if requested_ids
+        else []
+    )
     if requested_ids:
-        for item_id in sorted(str(value) for value in requested_ids - seen):
+        for item_id in missing:
             debug.warn(
                 f"skipping unresolved item id {item_id!r}",
                 code="session.items.item_id_unresolved",
                 item_id=item_id,
             )
-    page, next_cursor = _canonical_page(
+    page, next_cursor = paginate(
         rows,
-        kind="item",
-        cursor=params.get("cursor"),
-        limit=params["limit"],
+        method="session.items",
+        params=params,
+        key=lambda row: (row["source_order_key"], row["item_id"]),
     )
-    trimmed = next_cursor is not None
+    trimmed = len(page) < len(rows)
     return _public_output_for_session_graph(
         session_graph,
         {
             "root_session_id": str(session_graph.root_session_id),
             "items": page,
+            "total": len(rows),
+            "returned": len(page),
+            "unresolved_ids": missing,
             "next_cursor": next_cursor,
             "coverage": {
                 "retention": _items_retention(rows),
@@ -794,8 +758,8 @@ def _canonical_item_record(
             else None
         ),
         "provenance": {
-            "source": "published_facts",
-            "method": "published_item_record.v1",
+            "source": "retained_canonical",
+            "method": "retained_item_record.v1",
             "confidence": "high",
         },
         "coverage": _item_coverage(item, evidence),
@@ -1018,24 +982,6 @@ def _item_detail(item: Any, *, concept: Any, index: Any) -> dict[str, Any] | Non
                 detail["target_session_id"] = str(target)
                 break
     return {key: value for key, value in detail.items() if value is not None} or None
-
-
-def _canonical_page(
-    rows: list[dict[str, Any]],
-    *,
-    kind: str,
-    cursor: str | None,
-    limit: int,
-) -> tuple[list[dict[str, Any]], str | None]:
-    prefix = f"{kind}:"
-    if cursor is not None and not cursor.startswith(prefix):
-        raise ValueError(f"invalid {kind} cursor")
-    ordered = sorted(rows, key=lambda row: row["source_order_key"])
-    if cursor is not None:
-        ordered = [row for row in ordered if row["source_order_key"] > cursor]
-    page = ordered[:limit]
-    next_cursor = page[-1]["source_order_key"] if len(ordered) > len(page) else None
-    return page, next_cursor
 
 
 def _item_source_order_key(

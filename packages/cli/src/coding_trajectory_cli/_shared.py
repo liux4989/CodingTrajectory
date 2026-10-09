@@ -134,7 +134,7 @@ def add_turn_window_flags(parser: argparse.ArgumentParser, *, view_name: str) ->
         "--cursor",
         default=None,
         metavar="CURSOR",
-        help="Read an older page using the opaque next_cursor from the previous page.",
+        help="Continue a query-bound live page with next_cursor; keep selectors unchanged. Page size may change.",
     )
 
 

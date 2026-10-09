@@ -7,7 +7,7 @@ revision, input scope, and observed evidence; changed evidence supersedes the
 previous evaluation instead of rewriting it.
 
 There is no remote fallback: every Core call uses the local in-process runtime
-with the ``local`` connection profile.
+with an explicit ``local`` source. Canonical references resolve live evidence.
 """
 
 from __future__ import annotations
@@ -75,6 +75,7 @@ class CoreFacade:
         self._runtime = ServiceRuntime(
             global_scope=True,
             current_dir=Path.cwd(),
+            source="local",
         )
 
     def __enter__(self) -> Self:
@@ -89,20 +90,17 @@ class CoreFacade:
         if not reply.get("ok"):
             error = reply.get("error") or {}
             message = error.get("message") if isinstance(error, dict) else str(error)
-            raise MonitorCoreError(method, str(message))
+            code = error.get("code", "invalid_request") if isinstance(error, dict) else "invalid_request"
+            raise MonitorCoreError(method, str(message), code=code)
         return reply["result"]
-
-    def view_hash(self) -> str | None:
-        return ((self._runtime.transport_metadata() or {}).get("identity") or {}).get(
-            "view_manifest_sha256"
-        )
 
 
 class MonitorCoreError(RuntimeError):
-    def __init__(self, method: str, message: str):
-        super().__init__(f"Core {method} failed: {message}")
+    def __init__(self, method: str, message: str, *, code: str):
+        super().__init__(f"Core {method} failed ({code}): {message}")
         self.method = method
         self.message = message
+        self.code = code
 
 
 def _turn_rows(usage: dict[str, Any]) -> list[dict[str, Any]]:
@@ -134,10 +132,9 @@ def _evaluate_session_turns(
     written: list[Evaluation] = []
     findings: list[Finding] = []
     usage = core.call("session.usage", {"session_id": session_id})
-    view_hash = core.view_hash()
     ledger = core.call(
         "session.request_usage",
-        {"session_id": session_id, "view_manifest_sha256": view_hash},
+        {"session_id": session_id},
     )
     counts = _request_counts(ledger)
     measurement_coverage = usage.get("measurement_coverage")
@@ -182,7 +179,7 @@ def _evaluate_session_turns(
             config_revision=watch.config_revision,
             trigger=trigger,  # type: ignore[arg-type]
             reference=CanonicalReference(
-                session_id=turn_session, turn_id=turn_id, view_manifest_sha256=view_hash
+                session_id=turn_session, turn_id=turn_id
             ),
             state=state,  # type: ignore[arg-type]
             result=result,  # type: ignore[arg-type]
@@ -269,7 +266,7 @@ def _finding_for(*, watch: Watch, evaluation: Evaluation) -> Finding:
 def resolve_scope_sessions(core: CoreFacade, watch: Watch) -> tuple[list[str], int]:
     """Resolve a watch scope to graph entrypoint IDs via Core inventory.
 
-    Returns (entrypoint_ids, total_in_inventory) over the pinned inventory pages.
+    Returns (entrypoint_ids, total_observed) over query-bound live inventory pages.
     """
     if watch.scope.session_id:
         return [watch.scope.session_id], 1

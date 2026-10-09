@@ -39,13 +39,6 @@ from coding_trajectory.analysis.activity_flow import (
 from coding_trajectory.analysis.session_graph_views import (
     build_session_graph_overview,
 )
-from coding_trajectory.control_plane.fact_repository import (
-    published_fact_set_for_store,
-)
-from coding_trajectory.control_plane.published_facts import (
-    FactIndex,
-    session_graph_from_fact_index,
-)
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
     CommandExecutionItem,
@@ -61,6 +54,7 @@ from coding_trajectory.ingestion.models import (
     Turn,
     Vendor,
 )
+from coding_trajectory.ingestion.retained import retain_session_graph
 from coding_trajectory.query import (
     DocumentStore,
 )
@@ -1034,7 +1028,9 @@ def evaluate_search(fixture: SyntheticFixture, store: DocumentStore) -> dict[str
         ),
         "long_tail_match_preserved": tail_case["matching_documents"] == 1,
         "long_field_coverage_truthful": (
-            tail_case["coverage"]["content_complete"] is False
+            tail_case["coverage"]["searchable"] in {"preview", "facts_only"}
+            and tail_case["coverage"]["measurement"] == "complete"
+            and "content_complete" not in tail_case["coverage"]
             and bool(tail_case["warnings"])
         ),
         "structural_failure_precedes_mutation": ranking_case["current_order"][:2]
@@ -1173,14 +1169,7 @@ def evaluate_command_activity() -> dict[str, Any]:
     )
     read_graph = pi_graph.model_copy(deep=True)
     read_graph.sessions[0].turns[0].items = read_items
-    read_roundtrip = session_graph_from_fact_index(
-        FactIndex.from_fact_sets(
-            published_fact_set_for_store(
-                DocumentStore.from_session_graphs([read_graph])
-            )
-        ),
-        read_graph.root_session_id,
-    )
+    read_roundtrip = retain_session_graph(read_graph)
     repeated_failure = build_overview_flows(
         [
             command_items[0],
@@ -1189,24 +1178,14 @@ def evaluate_command_activity() -> dict[str, Any]:
     )
 
     direct_store = DocumentStore.from_session_graphs([pi_graph])
-    roundtrip_facts = FactIndex.from_fact_sets(
-        published_fact_set_for_store(direct_store)
-    )
-    roundtrip_graph = session_graph_from_fact_index(
-        roundtrip_facts, pi_graph.root_session_id
-    )
-    codex_store = DocumentStore.from_session_graphs([codex_graph])
-    codex_roundtrip_facts = FactIndex.from_fact_sets(
-        published_fact_set_for_store(codex_store)
-    )
-    codex_roundtrip_graph = session_graph_from_fact_index(
-        codex_roundtrip_facts, codex_graph.root_session_id
-    )
+    roundtrip_graph = retain_session_graph(pi_graph)
+    roundtrip_store = DocumentStore.from_session_graphs([roundtrip_graph])
+    codex_roundtrip_graph = retain_session_graph(codex_graph)
     direct_overview = build_session_graph_overview(pi_graph)
     roundtrip_overview = build_session_graph_overview(roundtrip_graph)
     summary_params = {"session_id": str(pi_graph.root_session_id)}
     direct_summary = _dispatch(direct_store, "session.summary", summary_params)
-    roundtrip_summary = _dispatch(roundtrip_facts, "session.summary", summary_params)
+    roundtrip_summary = _dispatch(roundtrip_store, "session.summary", summary_params)
     direct_recent = direct_summary["recent_activity"]
     roundtrip_recent = roundtrip_summary["recent_activity"]
 
@@ -1245,7 +1224,7 @@ def evaluate_command_activity() -> dict[str, Any]:
         and repeated_read_failure[0].get("path") == "docs/alpha.md"
         and repeated_read_failure[0].get("count") == 2
         and repeated_read_failure[0].get("outcome") == "failed",
-        "read_targets_survive_fact_roundtrip": build_session_graph_overview(read_graph)
+        "read_targets_survive_retention": build_session_graph_overview(read_graph)
         == build_session_graph_overview(read_roundtrip),
         "repeated_failure_keeps_count_outcome_and_refs": repeated_failure
         == [
@@ -1260,10 +1239,10 @@ def evaluate_command_activity() -> dict[str, Any]:
         ],
         "projections_preserve_classified_details": "qualification-marker"
         in _canonical_json([pi_activity, codex_activity, failed_activity]),
-        "overview_fact_roundtrip_parity": direct_overview == roundtrip_overview,
-        "observed_fact_roundtrip_parity": build_session_graph_overview(codex_graph)
+        "overview_retention_parity": direct_overview == roundtrip_overview,
+        "observed_retention_parity": build_session_graph_overview(codex_graph)
         == build_session_graph_overview(codex_roundtrip_graph),
-        "summary_fact_roundtrip_parity": direct_recent == roundtrip_recent,
+        "summary_retention_parity": direct_recent == roundtrip_recent,
         "summary_renderer_preserves_grouping": len(direct_recent) == 1
         and direct_recent[0].get("label") == "Ran 2 commands",
     }

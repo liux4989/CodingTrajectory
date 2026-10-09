@@ -15,7 +15,6 @@ class CanonicalReference(BaseModel):
     turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     item_id: str | None = Field(default=None, min_length=1, max_length=256)
     event_id: str | None = Field(default=None, min_length=1, max_length=256)
-    view_manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class Investigation(BaseModel):
@@ -33,3 +32,21 @@ class CoreQuery(BaseModel):
 
     method: str
     params: dict = Field(default_factory=dict)
+
+
+def migrate_live_references(value: object) -> object:
+    """Discard obsolete pins in persisted product state, not current requests.
+
+    Historical measurements and configuration revisions remain unchanged;
+    their canonical references now resolve the latest retained local evidence.
+    """
+    if isinstance(value, dict):
+        reference = value.get("reference")
+        if isinstance(reference, dict):
+            reference.pop("view_manifest_sha256", None)
+        for child in value.values():
+            migrate_live_references(child)
+    elif isinstance(value, list):
+        for child in value:
+            migrate_live_references(child)
+    return value

@@ -28,37 +28,46 @@ uv run ct plugin loop web
 ```
 
 Loop reads local evidence. It does not publish data or use remote fallback.
-Remote publication and deployment are separate, explicitly authorized operations.
+Core is local-only. `auto` selects local sources; remote selection is unavailable.
+There is no collector, connection management, or API server command.
+
+**Warning:** the legacy Amp capture plugin can still auto-publish externally.
+Set `CT_AMP_AUTO_PUBLISH=0`. That publication path is unsupported until deliberately redesigned.
 
 ## Core documentation
 
 | Read | Use it to |
 | --- | --- |
-| [CLI](docs/cli.md) | Find sessions, read evidence, and configure connections |
+| [CLI](docs/cli.md) | Find sessions and read local evidence |
 | [Loop](docs/loop-design.md) | Investigate sessions and run token-budget watches |
+| [Product requirements](docs/prd.md) | Review Core responsibilities and boundaries |
 | [Architecture](docs/architecture.md) | Understand data flow and ownership |
-| [Operations](docs/operations.md) | Capture Amp logs, publish data, and deploy releases safely |
+| [Operations](docs/operations.md) | Capture Amp logs and validate local operation |
 | [Core protocol](docs/core-protocol.md) | Review and version public contracts |
 | [Token glossary](docs/token-usage-glossary.md) | Interpret token counts, costs, and processing or output speed |
 | [Metrics validation](docs/metrics-validation-quality-gate.md) | Check changes against audited source evidence |
 
-Worker-specific commands are in the [Worker guide](cloudflare/control-plane/README.md).
 Benchmark rules are in the [benchmark guide](benchmarks/README.md).
 [RELEASE.md](RELEASE.md) contains the release marker, not a deployment receipt.
+The parked Cloudflare tree is unsupported and is not built by Core CI.
 
 ## Checks
 
 ```sh
-uv run ruff check .
+uv run python -m compileall -q packages/core/src packages/cli/src
+uv run ruff check packages/plugins/loop/loop_plugin scripts/check-loop.py scripts/prepare-loop-demo.py
 uv run python scripts/check-core-protocol.py
+uv run python scripts/validate-local-first-source-selection.py
+uv run python scripts/benchmark-session-retrieval.py --no-write
 scripts/check-metrics-quality-gate.sh
 uv run python scripts/validate-metrics-baselines.py
+uv run python scripts/validate-amp-live.py
 bun run --cwd packages/plugins/loop/web check
 uv run python scripts/check-loop.py
 ```
 
 Run checks relevant to the change. Follow [AGENTS.md](AGENTS.md) before committing.
-Local checks do not prove that a release is deployed or that production data is current.
+These checks validate local behavior. They do not qualify the parked remote runtime.
 
 ## Documentation rules
 

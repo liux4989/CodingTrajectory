@@ -1,147 +1,45 @@
-"""Reusable execution runtime for versioned CodingTrajectory service methods."""
+"""Local execution of versioned queries over lazily retained canonical runs."""
 
 from __future__ import annotations
 
 import atexit
-import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol, Self
 
 from pydantic import ValidationError
 
-from coding_trajectory.contracts import service_contract
-from coding_trajectory.control_plane import (
-    METHOD_AUTHORITIES,
-    ApplicationDispatcher,
-    MethodAuthority,
+from coding_trajectory.contracts import SERVICE_CONTRACTS, service_contract
+from coding_trajectory.contracts.envelope import (
+    API_PROTOCOL,
+    ApiTransportMetadata,
 )
-from coding_trajectory.control_plane.fact_repository import (
-    LocalPublishedFactRepository,
-)
-from coding_trajectory.query import DocumentError, ResourceNotFoundError
-from coding_trajectory.service import (
-    IndexCache,
-    dispatch,
-)
+from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
+from coding_trajectory.service import IndexCache, dispatch, resolve_store
+from coding_trajectory.service.pagination import LocalQueryError
+
+# One capability declaration, shared by explicit source selection and callers.
+# Remote adapters are intentionally unavailable for this contract revision.
+METHOD_SOURCES = {method: frozenset({"local"}) for method in SERVICE_CONTRACTS}
 
 
 class LocalSourceUnavailableError(DocumentError):
-    """The host has no local coding-agent source that can answer a request."""
-
-
-class SourceFallbackError(DocumentError):
-    """A local miss could not be satisfied by the configured remote source."""
-
-
-def _environment_remote_fallback(
-    *, current_dir: Path
-) -> Callable[[], ServiceRuntime] | None:
-    """Return a lazy remote builder only for complete embedded configuration."""
-
-    names = (
-        "CT_CLOUDFLARE_URL",
-        "CT_ACCESS_TOKEN",
-        "CT_REMOTE_WORKSPACE_ID",
-    )
-    from coding_trajectory.control_plane.connections import profile_path
-
-    if (
-        not profile_path("default").exists()
-        and not os.environ.get("CT_CREDENTIAL_PROFILE")
-        and not all(os.environ.get(name) for name in names)
-    ):
-        return None
-
-    def build() -> ServiceRuntime:
-        from coding_trajectory.control_plane.configuration import ApiConfiguration
-
-        options = ApiConfiguration.from_environment().runtime_options(
-            current_dir=current_dir
-        )
-        return ServiceRuntime(**options)
-
-    return build
-
-
-def _local_sources_available(*, current_dir: Path, global_scope: bool) -> bool:
-    """Check source availability independently of query filters.
-
-    A filtered query may validly return an empty collection. It is unavailable
-    only when the host exposes no supported local source at all.
-    """
-
-    from coding_trajectory.discovery import discover_source_candidates
-
-    try:
-        return bool(
-            discover_source_candidates(
-                current_dir=current_dir, global_scope=global_scope
-            )
-        )
-    except OSError as exc:
-        raise LocalSourceUnavailableError(
-            f"local source discovery is unavailable: {exc}"
-        ) from exc
-
-
-def _empty_items(result: Any) -> bool:
-    return isinstance(result, dict) and "items" in result and not result["items"]
-
-
-def _error_item(request_id: Any, method: Any, message: str) -> dict[str, Any]:
-    return {
-        "id": request_id,
-        "method": method,
-        "ok": False,
-        "error": {"message": message},
-    }
+    """No supported local source exists on this host."""
 
 
 class ServiceApiClient(Protocol):
-    """In-process service API surface shared by plugin-facing adapters."""
+    def call(self, method: str, params: Mapping[str, Any]) -> Any: ...
 
-    def call(self, method: str, params: Mapping[str, Any]) -> Any:
-        """Validate and execute one service method, raising on failure."""
-
-    def execute(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        """Execute one request, returning the ``ct api`` envelope shape."""
-
-
-class HistoricalRepository(Protocol):
-    """Supply graph stores from one local or remote historical authority."""
-
-    def pin_snapshot(self) -> int: ...
-
-    def store_for(self, method: str, params: dict[str, Any]) -> tuple[Any, str]: ...
-
-    def metadata(self) -> dict[str, Any] | None: ...
-
-
-def _require_local_source(
-    has_graphs: bool, *, current_dir: Path, global_scope: bool
-) -> None:
-    if has_graphs or _local_sources_available(
-        current_dir=current_dir, global_scope=global_scope
-    ):
-        return
-    raise LocalSourceUnavailableError(
-        "no supported coding-agent source is available on this host"
-    )
+    def execute(self, request: Mapping[str, Any]) -> dict[str, Any]: ...
 
 
 class PluginApiError(RuntimeError):
-    """Raised when an in-process service call fails."""
+    """An in-process plugin query failed."""
 
 
 class PluginApiClient:
-    """In-process equivalent of ``ct api call/batch --global-scope``.
-
-    Reuses a local-first runtime across calls. Local source caches avoid repeated
-    discovery, while any remote fallback runtime pins its snapshot only after a
-    local miss. A lock serializes callers that fan out over a thread pool.
-    """
+    """Serialize plugin calls over one local runtime, without remote fallback."""
 
     def __init__(
         self, *, global_scope: bool = True, current_dir: Path | None = None
@@ -153,49 +51,19 @@ class PluginApiClient:
 
     def _get_runtime(self) -> ServiceRuntime:
         if self._runtime is None:
-            from coding_trajectory.control_plane.connections import query_source
-
-            source = query_source()
-            if source == "shared":
-                from coding_trajectory.control_plane.configuration import (
-                    ApiConfiguration,
-                )
-
-                self._runtime = ServiceRuntime(
-                    **ApiConfiguration.from_environment().runtime_options(
-                        current_dir=self._current_dir
-                    )
-                )
-            else:
-                self._runtime = ServiceRuntime(
-                    global_scope=self._global_scope,
-                    current_dir=self._current_dir,
-                    fallback_factory=_environment_remote_fallback(
-                        current_dir=self._current_dir
-                    )
-                    if source == "auto"
-                    else None,
-                )
+            self._runtime = ServiceRuntime(
+                global_scope=self._global_scope, current_dir=self._current_dir
+            )
         return self._runtime
 
     def call(self, method: str, params: Mapping[str, Any] | None = None) -> Any:
-        """Call one service method, raising :class:`PluginApiError` on failure."""
-
         try:
             with self._lock:
                 return self._get_runtime().call(method, dict(params or {}))
-        except (
-            KeyError,
-            ValueError,
-            ValidationError,
-            ResourceNotFoundError,
-            DocumentError,
-        ) as exc:
+        except (KeyError, ValueError, DocumentError, ResourceNotFoundError) as exc:
             raise PluginApiError(str(exc)) from exc
 
     def execute(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        """Execute one request, returning the ``ct api`` envelope shape."""
-
         with self._lock:
             return self._get_runtime().execute(dict(request))
 
@@ -217,8 +85,6 @@ _default_client_lock = threading.Lock()
 
 
 def default_plugin_client() -> PluginApiClient:
-    """Return the process-wide client for plugin entry-point scripts."""
-
     global _default_client
     with _default_client_lock:
         if _default_client is None:
@@ -228,52 +94,17 @@ def default_plugin_client() -> PluginApiClient:
 
 
 class ServiceRuntime:
-    """Execute calls and batches while reusing compatible stores."""
+    """Refresh requested dependencies, then compute only requested methods."""
 
     def __init__(
-        self,
-        *,
-        global_scope: bool,
-        current_dir: Path,
-        historical_repository: HistoricalRepository | None = None,
-        authority_handlers: Mapping[MethodAuthority, Callable[..., Any]] | None = None,
-        transport_metadata: Callable[[], dict[str, Any] | None] | None = None,
-        fallback_factory: Callable[[], ServiceRuntime] | None = None,
+        self, *, global_scope: bool, current_dir: Path, source: str = "local"
     ) -> None:
         self.global_scope = global_scope
         self.current_dir = current_dir
-        self.cache = (
-            IndexCache.load() if historical_repository is None else IndexCache()
-        )
-        self.historical_repository = (
-            historical_repository
-            or LocalPublishedFactRepository(
-                global_scope=global_scope,
-                current_dir=current_dir,
-                cache=self.cache,
-                require_available=lambda has_graphs: _require_local_source(
-                    has_graphs,
-                    current_dir=current_dir,
-                    global_scope=global_scope,
-                ),
-            )
-        )
-        self._transport_metadata = transport_metadata
-        self._last_call_metadata: dict[str, Any] | None = None
-        self._fallback_factory = fallback_factory
-        self._fallback_runtime: ServiceRuntime | None = None
-        handlers = dict(authority_handlers or {})
-        self._dispatcher = ApplicationDispatcher(
-            {
-                MethodAuthority.HISTORICAL: self._call_historical,
-                MethodAuthority.PROJECT_INVENTORY: handlers.get(
-                    MethodAuthority.PROJECT_INVENTORY, self._call_project_inventory
-                ),
-                MethodAuthority.LIVING: handlers.get(
-                    MethodAuthority.LIVING, self._call_living
-                ),
-            }
-        )
+        self.source = "local" if source == "auto" else source
+        self.cache = IndexCache.load() if self.source == "local" else IndexCache()
+        self._batch_store: DocumentStore | None = None
+        self._batch_note = ""
 
     def __enter__(self) -> Self:
         return self
@@ -282,167 +113,171 @@ class ServiceRuntime:
         self.close()
 
     def close(self) -> None:
-        close = getattr(self.historical_repository, "close", None)
-        if close is not None:
-            close()
-        if self._fallback_runtime is not None:
-            self._fallback_runtime.close()
-            self._fallback_runtime = None
+        self._batch_store = None
 
-    def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
-        prepare = getattr(self.historical_repository, "prepare_batch", None)
-        if prepare is not None:
-            try:
-                prepare(requests)
-            except LocalSourceUnavailableError:
-                # Per-item execution applies the same lazy remote fallback and
-                # preserves independent provenance/error envelopes.
-                pass
-            return
-        if any(
-            request.get("method") in METHOD_AUTHORITIES
-            and METHOD_AUTHORITIES[request["method"]] == MethodAuthority.HISTORICAL
-            for request in requests
-        ):
-            self.historical_repository.pin_snapshot()
+    def _require_sources(self) -> None:
+        from coding_trajectory.discovery import discover_source_candidates
 
-    def call(self, method: str, params: dict[str, Any]) -> Any:
-        params = service_contract(method).validate_request(params)
-        self._last_call_metadata = None
-        try:
-            result = self._dispatcher.call(method, params)
-        except (LocalSourceUnavailableError, ResourceNotFoundError) as local_error:
-            if self._fallback_factory is None:
-                raise
-            try:
-                fallback = self._get_fallback_runtime()
-                result = fallback.call(method, params)
-            except Exception as remote_error:
-                raise SourceFallbackError(
-                    "local source could not satisfy the request "
-                    f"({local_error}); remote Chronicles fallback failed "
-                    f"({remote_error})"
-                ) from remote_error
-            self._last_call_metadata = fallback.transport_metadata()
-            return result
-        self._last_call_metadata = self._primary_metadata()
-        if method.startswith("living.") and self._last_call_metadata is not None:
-            self._last_call_metadata = {**self._last_call_metadata, "identity": None}
-        return result
-
-    def _get_fallback_runtime(self) -> ServiceRuntime:
-        if self._fallback_runtime is None:
-            if self._fallback_factory is None:
-                raise ValueError("remote Chronicles fallback is not configured")
-            self._fallback_runtime = self._fallback_factory()
-        return self._fallback_runtime
-
-    def _primary_metadata(self) -> dict[str, Any] | None:
-        if self._transport_metadata is not None:
-            return self._transport_metadata()
-        return self.historical_repository.metadata()
-
-    def _call_project_inventory(self, method: str, params: dict[str, Any]) -> Any:
-        if method != "project.list":
-            raise KeyError(
-                f"no local project inventory handler registered for {method}"
-            )
-        result = self.historical_repository.response_for(method, params)
-        self._require_local_source_for_empty(result)
-        return result
-
-    def _call_living(self, method: str, params: dict[str, Any]) -> Any:
-        if method == "living.events":
-            from coding_trajectory.living_events import serve_living_events
-
-            result = serve_living_events(
-                params,
-                cache=self.cache,
-                current_dir=self.current_dir,
-                global_scope=self.global_scope,
-            )
-        elif method == "living.sessions":
-            from coding_trajectory.living_sessions import serve_living_sessions
-
-            result = serve_living_sessions(
-                params,
-                current_dir=self.current_dir,
-                global_scope=self.global_scope,
-            )
-        else:
-            raise KeyError(f"no local living handler registered for {method}")
-        self._require_local_source_for_empty(result)
-        return result
-
-    def _require_local_source_for_empty(self, result: Any) -> None:
-        if _empty_items(result) and not _local_sources_available(
-            current_dir=self.current_dir, global_scope=self.global_scope
+        if not discover_source_candidates(
+            current_dir=self.current_dir, global_scope=True
         ):
             raise LocalSourceUnavailableError(
                 "no supported coding-agent source is available on this host"
             )
 
-    def _call_historical(self, method: str, params: dict[str, Any]) -> Any:
-        response_for = getattr(self.historical_repository, "response_for", None)
-        if response_for is not None:
-            projected = response_for(method, params)
-            if projected is not None:
-                return projected
-        store, discovery_note = self._store_for(method, params)
+    def _validate(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        contract = service_contract(method)
+        if self.source not in METHOD_SOURCES[method]:
+            raise LocalQueryError("method_unavailable", 404)
+        try:
+            return contract.validate_request(params)
+        except ValidationError as exc:
+            if any(error["loc"] == ("cursor",) for error in exc.errors()):
+                raise LocalQueryError("invalid_cursor") from exc
+            raise
+
+    def call(self, method: str, params: dict[str, Any]) -> Any:
+        params = self._validate(method, params)
+        if method.startswith("living."):
+            if method == "living.events":
+                from coding_trajectory.living_events import serve_living_events
+
+                result = serve_living_events(
+                    params,
+                    cache=self.cache,
+                    current_dir=self.current_dir,
+                    global_scope=self.global_scope,
+                )
+            else:
+                from coding_trajectory.living_sessions import serve_living_sessions
+
+                result = serve_living_sessions(
+                    params, current_dir=self.current_dir, global_scope=self.global_scope
+                )
+            self._require_sources()
+            return service_contract(method).validate_response(result)
+        if method.startswith("project."):
+            store, note = DocumentStore.from_session_graphs([]), "(source metadata)"
+        elif self._batch_store is not None:
+            store, note = self._batch_store, self._batch_note
+        else:
+            store, note = resolve_store(
+                params,
+                global_scope=self.global_scope,
+                current_dir=self.current_dir,
+                cache=self.cache,
+                selector="lineage" if method == "session.tree" else "run",
+            )
+        self._require_sources()
         return dispatch(
             method,
             params,
             store=store,
             global_scope=self.global_scope,
             current_dir=self.current_dir,
-            discovery_note=discovery_note,
+            discovery_note=note,
             cache=self.cache,
         )
 
+    def transport_metadata(self) -> dict[str, Any]:
+        return ApiTransportMetadata().model_dump()
+
     def execute(self, request: dict[str, Any]) -> dict[str, Any]:
-        request_id = request.get("id")
         method = request.get("method")
-        params = request.get("params") or {}
-        if not isinstance(method, str) or not method:
-            return _error_item(request_id, method, "method is required")
-        if not isinstance(params, dict):
-            return _error_item(request_id, method, "params must be an object")
-        try:
-            result = self.call(method, params)
-        except (
-            KeyError,
-            ValueError,
-            ValidationError,
-            ResourceNotFoundError,
-            DocumentError,
-        ) as exc:
-            return _error_item(request_id, method, str(exc))
-        response = {
-            "id": request_id,
+        response: dict[str, Any] = {
+            "protocol": API_PROTOCOL,
+            "id": request.get("id"),
             "method": method,
-            "ok": True,
-            "result": result,
+            "method_version": SERVICE_CONTRACTS[method].version
+            if isinstance(method, str) and method in SERVICE_CONTRACTS
+            else None,
+            "ok": False,
+            "result": None,
+            "availability": {"state": "unavailable", "missing": []},
+            "error": None,
         }
-        metadata = self.transport_metadata()
-        if metadata is not None:
-            response["meta"] = metadata
+        try:
+            if not isinstance(method, str) or not method:
+                raise ValueError("method is required")
+            params = request.get("params", {})
+            if not isinstance(params, dict):
+                raise ValueError("params must be an object")  # noqa: TRY004 - public invalid_request
+            if request.get("protocol", API_PROTOCOL) != API_PROTOCOL:
+                raise LocalQueryError("unsupported_protocol")
+            if (
+                request.get("method_version", response["method_version"])
+                != response["method_version"]
+            ):
+                raise LocalQueryError("unsupported_version", 409)
+            result = self.call(method, params)
+        except (KeyError, ValueError, DocumentError, ResourceNotFoundError) as exc:
+            code = getattr(exc, "code", None) or (
+                "resource_not_found"
+                if isinstance(exc, ResourceNotFoundError)
+                else "local_source_unavailable"
+                if isinstance(exc, LocalSourceUnavailableError)
+                else "unknown_method"
+                if isinstance(exc, KeyError)
+                else "invalid_request"
+            )
+            response["error"] = {"code": code, "message": str(exc)}
+            if code in {"unknown_method", "method_unavailable"}:
+                response["availability"]["state"] = "unsupported"
+            return response
+        response.update(
+            ok=True,
+            result=result,
+            availability={"state": "complete", "missing": []},
+            meta=self.transport_metadata(),
+        )
         return response
 
+    def prepare_batch(self, requests: list[dict[str, Any]]) -> None:
+        """Load valid detail dependencies once; invalid items remain independent."""
+        ids: set[str] = set()
+        lineage_ids: set[str] = set()
+        for request in requests:
+            method, params = request.get("method"), request.get("params", {})
+            if not isinstance(method, str) or not isinstance(params, dict):
+                continue
+            if request.get("protocol", API_PROTOCOL) != API_PROTOCOL:
+                continue
+            contract = SERVICE_CONTRACTS.get(method)
+            if (
+                contract is None
+                or request.get("method_version", contract.version) != contract.version
+            ):
+                continue
+            try:
+                params = self._validate(method, params)
+            except (KeyError, ValueError):
+                continue
+            if method.startswith(("session.", "graph.")):
+                entrypoint = params.get("session_id") or params["root_session_id"]
+                ids.add(entrypoint)
+                if method == "session.tree":
+                    lineage_ids.add(entrypoint)
+        if ids:
+            self._batch_store, self._batch_note = resolve_store(
+                {
+                    "session_ids": sorted(ids),
+                    "lineage_session_ids": sorted(lineage_ids),
+                },
+                global_scope=self.global_scope,
+                current_dir=self.current_dir,
+                cache=self.cache,
+                selector="lineage" if lineage_ids else "run",
+            )
+
     def batch(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
+        self.cache._batch_mode = True
         try:
             self.prepare_batch(requests)
-            response = {"items": [self.execute(request) for request in requests]}
-            metadata = self.transport_metadata()
-            if metadata is not None:
-                response["meta"] = metadata
-            return response
+            return {
+                "items": [self.execute(request) for request in requests],
+                "meta": self.transport_metadata(),
+            }
         finally:
-            end_batch = getattr(self.historical_repository, "end_batch", None)
-            if end_batch is not None:
-                end_batch()
-
-    def transport_metadata(self) -> dict[str, Any] | None:
-        return self._last_call_metadata or self._primary_metadata()
-
-    def _store_for(self, method: str, params: dict[str, Any]) -> tuple[Any, str]:
-        return self.historical_repository.store_for(method, params)
+            self._batch_store = None
+            self.cache._batch_mode = False
+            self.cache._batch_topology = None

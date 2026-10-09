@@ -6,22 +6,21 @@ Replace uppercase IDs and shell variables with values for your selected source.
 
 ## Select a source
 
-Put `--source` and `--profile` before the command path:
+Put `--source` before the command path:
 
 ```sh
 uv run ct --source local project list
-uv run ct --source shared --profile READER project list
-uv run ct --source auto --profile READER project list
+uv run ct --source auto project list
 ```
 
 - `local` reads host-local sources without remote fallback.
-- `shared` reads the configured remote workspace.
-- `auto` tries local sources first. It uses remote reads only when local sources
-  are unavailable or the target resource is missing.
+- `auto` (the default) reads local sources only.
+- `shared` and `remote` are recognized but fail explicitly with
+  `method_unavailable`; they never silently read local evidence.
 
-A valid empty local result does not trigger fallback. Malformed evidence,
-invalid requests, and ambiguous selection do not trigger fallback either.
-The runtime does not merge local and remote evidence. Queries never publish data.
+There is no remote fallback, connection profile, or credential configuration.
+Queries never publish data. The `collector`, `connection`, and `api serve`
+commands are no longer supported.
 
 ## Read a session
 
@@ -63,12 +62,18 @@ The runtime does not merge local and remote evidence. Queries never publish data
 
 Project names are convenience selectors, not identity. Use an ID when names are
 ambiguous. Local project IDs identify host locations; moving a directory changes
-its ID. Remote IDs come from the workspace registry. Do not substitute IDs across sources.
+its ID.
 
 Inventory, overview, search, and detail responses support pagination. Pass
-`next_cursor` as `--cursor` and keep the other selectors unchanged.
-API clients can use `view_manifest_sha256` to select an immutable prepared view.
-Missing or expired views fail explicitly; do not silently continue on a newer view.
+`next_cursor` as `--cursor` and keep the method, scope, selectors, and filters
+unchanged; page size may change. Cursors are query-bound continuations over live local evidence, not
+snapshot pins. Evidence can change between pages; no immutable view selection
+is supported.
+
+`project sessions` returns discovery cards: session identity, project, title and
+preview, vendors, member session IDs, and modification time. Read session usage
+or stats separately for measurements; cards do not include usage, runtime, or
+warnings.
 
 ## Choose the correct view
 
@@ -135,7 +140,7 @@ Sessions without a rate omit the line; graph sections show each session's rate.
 Claude TPS counts each provider response once, using its highest recorded
 cumulative output count. Repeated stream records still contribute to recorded
 token totals and cost estimates. Claude TPS is unavailable when response IDs
-are missing, including older prepared facts that did not retain them.
+are missing from retained local evidence.
 The `Recorded tokens` line shows `input`, `output`, `processed tokens`, and
 `cache hit ratio`. The ratio is cached input divided by cache-inclusive input,
 weighted by tokens across recorded usage entries. Cache writes count in the
@@ -206,29 +211,9 @@ uv run ct --source local api call session.tool_usage \
 Schemas require no discovery or credentials. Requests reject unknown fields.
 Graph API methods require `root_session_id`. Session methods use `session_id`.
 Model usage and tool usage have no dedicated CLI commands.
-Remote `session.search` and `living.events` are unavailable.
-
-## Configure a connection
-
-**Warning:** never put token values in command arguments, Git, reports, or browser bundles.
-Inject the token through your host's secret store. For a headless reader:
-
-```sh
-uv run ct connection configure READER --role reader --default-source shared \
-  --url "$CT_CLOUDFLARE_URL" --workspace-id "$CT_REMOTE_WORKSPACE_ID" \
-  --token-env CT_ACCESS_TOKEN
-uv run ct connection status READER
-uv run ct connection check READER
-```
-
-Profiles store secret references, not token values. Interactive macOS setup uses
-Keychain. `status` checks local configuration; `check` makes a read-only
-authenticated request. A configured profile does not prove server access.
-
-`rotate` replaces local credentials without changing collector identity or pending
-work. `forget` removes local configuration; it does not revoke the server grant.
-Server grants determine `read` and `collect` access, regardless of client role intent.
-See [operations](operations.md) before configuring a collector or publishing data.
+The API protocol remains `ct.api.v1`. Response metadata describes local live
+retained evidence (`source: local`, `freshness: live`, `content_scope: retained`)
+and contains no prepared-view identity. `living` change-feed behavior is unchanged.
 
 ## Diagnostics and plugins
 
