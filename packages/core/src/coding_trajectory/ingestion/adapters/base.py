@@ -118,6 +118,7 @@ class BaseAdapter(ABC):
         """
         if not hasattr(self, "_source_occurrences"):
             self._source_occurrences = []
+        source_path = path.resolve()
         with path.open("rb") as fh:
             offset = 0
             for ordinal, raw_line in enumerate(fh):
@@ -126,7 +127,7 @@ class BaseAdapter(ABC):
                 digest = hashlib.sha256(stripped).hexdigest()
                 occurrence_id = uuid5(
                     NAMESPACE_URL,
-                    f"coding-trajectory:source-occurrence:{path.resolve()}:{ordinal}:{offset}:{end}:{digest}",
+                    f"coding-trajectory:source-occurrence:{source_path}:{ordinal}:{offset}:{end}:{digest}",
                 )
                 span = RecordSpan(
                     occurrence_id=occurrence_id,
