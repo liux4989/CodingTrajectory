@@ -254,6 +254,7 @@ class ClaudeCodeAdapter(BaseAdapter):
     def scan_header(self, source: Path) -> SessionHeader | None:
         scan = _ClaudeRecordScan()
         has_transcript = False
+        cwd = None
         # Identity includes agentName/slug from the first session record. Keep
         # only scalar metadata, never that record's message or lastPrompt body.
         keys = {
@@ -275,6 +276,8 @@ class ClaudeCodeAdapter(BaseAdapter):
         }
         for record in self._iter_topology_records(source):
             scan.observe_meta({key: record[key] for key in keys if key in record})
+            if cwd is None:
+                cwd = _as_non_empty_str(record.get("cwd"))
             if not has_transcript:
                 has_transcript = _transcript_timestamp(record) is not None
         if scan.raw_session_id is None or not has_transcript:
@@ -286,7 +289,7 @@ class ClaudeCodeAdapter(BaseAdapter):
             vendor=Vendor.CLAUDE_CODE,
             parent_session_id=parent_session_id,
             title=mechanism.title,
-            cwd=_as_non_empty_str((scan.first_session_record or {}).get("cwd")),
+            cwd=cwd,
         )
 
     def scan_topology(

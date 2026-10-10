@@ -355,12 +355,24 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
         write_source(
             claude_dir / f"{sid}.jsonl",
             [
+                *(
+                    [
+                        {
+                            "type": "queue-operation",
+                            "operation": "enqueue",
+                            "sessionId": sid,
+                            "timestamp": timestamp,
+                        }
+                    ]
+                    if ordinal == 100
+                    else []
+                ),
                 {
                     "sessionId": sid,
                     "cwd": str(project_dir),
                     "timestamp": timestamp,
                     **record,
-                }
+                },
             ],
         )
     for ordinal, role in enumerate(
@@ -539,6 +551,15 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
         }
         for root in actual:
             assert success(runtime, "session.stats", session_id=root)
+        claude = success(
+            runtime,
+            "living.sessions",
+            session_id="00000000-0000-4000-8000-000000000100",
+        )
+        assert claude["items"][0]["cwd"] == str(project_dir), (
+            "Claude cwd must come from available record metadata, even when the "
+            "first session record has none"
+        )
     print(
         f"PASS source acceptance: {len(extra_paths) + 4} sources, {len(expected)} runs, zero root/member/lineage mismatches; every inventory root resolves"
     )

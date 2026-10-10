@@ -73,7 +73,9 @@ post-acceptance cleanup, never a side effect of a query or migration. Loop's
 delete them as Core cache cleanup.
 
 `living.sessions` returns header-level identities, project/cwd, source modified
-time and size, `living`/`inactive` state and a digest. Global/project reads include
+time and size, `living`/`inactive` state and a digest. Claude cwd comes from the
+first available source record field, not an inferred filesystem path; it remains
+null if no record supplies one. Global/project reads include
 runs with a source modified in the last `horizon_days` (1–30, default 3 / 72
 hours); explicit run scopes ignore the horizon. State uses each session's own
 source mtime and a 300-second activity window. Changing time alone can therefore
