@@ -49,6 +49,7 @@ class SourceTopology(BaseModel):
     cwd: str | None = None
     project: str | None = None
     modified: datetime
+    parent_ownership_required: bool = False
     title: str | None = Field(default=None, max_length=280)
     preview: str | None = Field(default=None, max_length=280)
 

@@ -593,6 +593,19 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
 
     # Parent-aware admission must agree with full ingestion, including the
     # boundaries where a simple non-parent-turn-id check would be incorrect.
+    from coding_trajectory.ingestion.adapters.codex import CodexAdapter
+
+    topology_records = CodexAdapter._iter_topology_records
+
+    def bounded_context_scan(adapter, source):
+        for ordinal, record in enumerate(topology_records(adapter, source)):
+            if source.name == "rollout-00000000-0000-4000-8000-000000000306.jsonl":
+                assert ordinal == 0, (
+                    "inventory reread a fork body whose own context metadata "
+                    "already establishes admission"
+                )
+            yield record
+
     inherited_rows = [
         json.loads(line)
         for line in (codex_dir / f"rollout-{codex_parent}.jsonl")
@@ -685,10 +698,17 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
             for run in orchestration_runs(graph)
         }
         with ServiceRuntime(global_scope=True, current_dir=project_dir) as runtime:
-            with patch.object(
-                store_module,
-                "_ingest_sessions",
-                side_effect=AssertionError("parent-aware inventory built transcripts"),
+            with (
+                patch.object(
+                    store_module,
+                    "_ingest_sessions",
+                    side_effect=AssertionError(
+                        "parent-aware inventory built transcripts"
+                    ),
+                ),
+                patch.object(
+                    CodexAdapter, "_iter_topology_records", bounded_context_scan
+                ),
             ):
                 inventory = success(runtime, "project.sessions", limit=200)["items"]
             actual = {

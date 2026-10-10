@@ -324,23 +324,31 @@ def _refresh_topology(
     # Use exactly the same segmented-parent union and failed-parent exclusion
     # as ingestion. Fork admission observes only records that survive its cut.
     # Reuse scanned identities rather than reading every vendor header twice.
-    cut_inputs = scan_parent_turn_ids(
-        selected_candidates,
-        topologies={
-            source: cache._topologies[str(source.resolve())]
-            for _vendor, _adapter_cls, source in selected_candidates
-            if str(source.resolve()) in cache._topologies
-        },
-    )
-    for _vendor, _adapter_cls, source in selected_candidates:
-        path = str(source.resolve())
-        if source not in cut_inputs:
-            cache._topologies.pop(path, None)
-            continue
-        try:
-            scan(path, cut_inputs[source])
-        except (OSError, ValueError):
-            cache._topologies.pop(path, None)
+    topologies = {
+        source: cache._topologies[str(source.resolve())]
+        for _vendor, _adapter_cls, source in selected_candidates
+        if str(source.resolve()) in cache._topologies
+    }
+    required_paths = {
+        source
+        for source, topology in topologies.items()
+        if topology.parent_ownership_required
+    }
+    if required_paths:
+        cut_inputs = scan_parent_turn_ids(
+            selected_candidates,
+            topologies=topologies,
+            required_paths=required_paths,
+        )
+        for source in required_paths:
+            path = str(source.resolve())
+            if source not in cut_inputs:
+                cache._topologies.pop(path, None)
+                continue
+            try:
+                scan(path, cut_inputs[source])
+            except (OSError, ValueError):
+                cache._topologies.pop(path, None)
     cache._runs = orchestration_topology(cache._topologies)
     cache._full_topology = projects is None
     for run in cache._runs:

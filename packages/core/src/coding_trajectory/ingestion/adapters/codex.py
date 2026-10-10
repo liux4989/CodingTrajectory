@@ -641,7 +641,16 @@ class CodexAdapter(BaseAdapter):
                 outer_type, payload, parse_iso_timestamp(record.get("timestamp"))
             )
             if topology is not None and admitted:
-                return topology
+                # Metadata and compaction survive ingestion's cut regardless
+                # of lifecycle ownership. Do not read entire parent/fork logs
+                # merely to reconfirm admission established by those records.
+                return topology.model_copy(
+                    update={
+                        "parent_ownership_required": topology.parent_session_id
+                        is not None
+                        and outer_type not in {"session_meta", "compacted"}
+                    }
+                )
         return None
 
     def _identity_from_records(self, records: Iterable[dict]) -> SessionHeader | None:

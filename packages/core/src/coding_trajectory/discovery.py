@@ -400,6 +400,7 @@ def scan_parent_turn_ids(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
     *,
     topologies: dict[Path, SourceTopology] | None = None,
+    required_paths: set[Path] | None = None,
 ) -> dict[Path, set[str] | None]:
     """Pass 1 of the two-pass ingest: per-file parent started-turn-id inputs.
 
@@ -408,6 +409,8 @@ def scan_parent_turn_ids(
     stable ids would shift.  Returns each candidate's
     ``parent_started_turn_ids`` argument. Failed sources and forks depending
     on a failed parent scan are omitted, not assigned an empty parent history.
+    Topology may restrict parent-history reads to sources whose admission
+    depends on ownership; full ingestion leaves ``required_paths`` unset.
     """
 
     started_turn_ids_by_session: dict[UUID, set[str]] = {}
@@ -436,8 +439,9 @@ def scan_parent_turn_ids(
 
     referenced_parent_ids = {
         parent_session_id
-        for parent_session_id in parent_session_by_path.values()
+        for path, parent_session_id in parent_session_by_path.items()
         if parent_session_id is not None
+        and (required_paths is None or path in required_paths)
     }
     for path, (adapter, header) in header_scans.items():
         if header is None or header.session_id not in referenced_parent_ids:
