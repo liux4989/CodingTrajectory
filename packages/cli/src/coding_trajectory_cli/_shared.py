@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
+from coding_trajectory.ingestion.models import Vendor
 
 OUTPUT_CHOICES = ("markdown", "json")
 TERMINAL_LINE_LIMIT = 140
@@ -112,12 +113,14 @@ def add_params_flag(parser: argparse.ArgumentParser) -> None:
 
 
 def add_agent_vendor_flag(parser: argparse.ArgumentParser) -> None:
+    vendors = tuple(vendor.value for vendor in Vendor)
     parser.add_argument(
         "--agent-vendor",
         metavar="AGENT_VENDOR",
         dest="agent_vendor",
         default=None,
-        help="Filter by agent vendor. Known values: claude_code, codex_cli, pi.",
+        choices=vendors,
+        help=f"Filter by agent vendor. Known values: {', '.join(vendors)}.",
     )
 
 

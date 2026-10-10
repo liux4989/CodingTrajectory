@@ -10,7 +10,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -295,25 +294,31 @@ def qualify_throughput(source: Path) -> None:
                     assert selected[field] == 2.833
                 assert len(selected["turns"]) == 1
 
-    # Exercise the real disposable SQLite path, including a fresh cache instance.
+    # Each request discovers fresh evidence; only its retained graph lives in memory.
     throughput_source = source.parent / "throughput" / source.name
     throughput_source.parent.mkdir()
     throughput_source.write_text("".join(json.dumps(row) + "\n" for row in rows))
     previous_logs = os.environ["CT_AMP_LOG_DIR"]
     os.environ["CT_AMP_LOG_DIR"] = str(throughput_source.parent)
     try:
-        cache_path = source.parent / "throughput.sqlite"
-        for cache in (IndexCache(db_path=cache_path), IndexCache(db_path=cache_path)):
+        request_graphs = []
+        for _ in range(2):
             store, _ = resolve_store(
                 {"session_id": PARENT[2:]},
                 global_scope=True,
                 current_dir=source.parent,
-                cache=cache,
+                cache=IndexCache(),
             )
-            cached_graph = store.get_session_graph_for_session(replay.root_session_id)
+            request_graph = store.get_session_graph_for_session(replay.root_session_id)
+            request_graphs.append(request_graph)
+            retained_json = request_graph.model_dump_json()
+            assert "Let us reason." not in retained_json
+            assert "PRIVATE output" not in retained_json
+            assert "PRIVATE task" in retained_json
+            assert retain_session_graph(request_graph) == request_graph
             for method in ("session.stats", "session.usage", "session.model_usage"):
-                actual, expected = call(cached_graph, method), call(replay, method)
-                # Turn UUIDs include the source path; the separate cache fixture
+                actual, expected = call(request_graph, method), call(replay, method)
+                # Turn UUIDs include the source path; the separate request fixture
                 # has the same evidence, not the same filesystem identity.
                 actual_runtime = (
                     actual if method == "session.model_usage" else actual["runtime"]
@@ -343,12 +348,33 @@ def qualify_throughput(source: Path) -> None:
                             else expected_turn["runtime"]
                         )
                         assert actual_rate[field] == expected_rate[field]
-        assert cache.counters["graph_hits"] == 1
-        assert cache.counters["graph_builds"] == 0
-        with sqlite3.connect(cache_path) as db:
-            retained_json = db.execute("SELECT graph FROM graphs").fetchone()[0]
-            assert "Let us reason." not in retained_json
-            assert "PRIVATE output" not in retained_json
+        assert request_graphs[0] == request_graphs[1]
+        assert request_graphs[0] is not request_graphs[1]
+        changed_rows = copy.deepcopy(rows)
+        for row in changed_rows:
+            if row["captured_at"] == "2026-09-05T00:00:34Z":
+                row["captured_at"] = "2026-09-05T00:00:38Z"
+        throughput_source.write_text(
+            "".join(json.dumps(row) + "\n" for row in changed_rows)
+        )
+        fresh_store, _ = resolve_store(
+            {"session_id": PARENT[2:]},
+            global_scope=True,
+            current_dir=source.parent,
+            cache=IndexCache(),
+        )
+        fresh_graph = fresh_store.get_session_graph_for_session(replay.root_session_id)
+        # Same 23 tokens, now over 6 + 8 seconds: 23/14 = 1.643.
+        # The earlier in-memory graphs must keep their original 23/10 = 2.3.
+        for method in ("session.stats", "session.usage", "session.model_usage"):
+            fresh = call(fresh_graph, method)
+            earlier = call(request_graphs[0], method)
+            fresh_runtime = fresh if method == "session.model_usage" else fresh["runtime"]
+            earlier_runtime = (
+                earlier if method == "session.model_usage" else earlier["runtime"]
+            )
+            assert fresh_runtime[field] == 1.643
+            assert earlier_runtime[field] == 2.3
     finally:
         os.environ["CT_AMP_LOG_DIR"] = previous_logs
         throughput_source.unlink()
@@ -416,7 +442,7 @@ def qualify_throughput(source: Path) -> None:
             assert field not in mixed, name
             assert mixed["turns"][-1][field] == 1.5, name
     print(
-        "PASS Amp throughput: source-derived rates, parallel-window union, revisions, thinking, idle exclusion, weighted aggregation, CLI, retained idempotence/SQLite cache, 10 unavailable cases"
+        "PASS Amp throughput: source-derived rates, parallel-window union, revisions, thinking, idle exclusion, weighted aggregation, CLI, fresh requests, retained in-memory isolation/redaction, 10 unavailable cases"
     )
 
 

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
 from coding_trajectory_cli._shared import GhFormatter
 from coding_trajectory_cli.outcome import CommandOutcome
@@ -24,13 +24,11 @@ from coding_trajectory_cli.telemetry import (
     resolve_telemetry_decision,
 )
 
-_CACHE_DIR = Path.home() / ".coding-trajectory"
-_INDEX_CACHE_PATH = _CACHE_DIR / "index.json"
+_CONFIG_DIR = Path.home() / ".coding-trajectory"
 _SUPPORTED_SINCE_VALUES = ("7d", "30d", "90d", "all")
 _MARKDOWN_FAILURE_LIMIT = 10
 _MARKDOWN_WARNING_LIMIT = 10
 _MARKDOWN_TREND_LIMIT = 20
-_MARKDOWN_STALE_LIMIT = 20
 # A failure/warning/info group is "stale" when its most recent occurrence
 # falls outside this many days; stale groups sort after active ones so the
 # report surfaces currently-live issues first without dropping history.
@@ -40,7 +38,6 @@ _ENVIRONMENT_CHECK_ORDER = (
     "cli_version",
     "config_files",
     "telemetry",
-    "index_cache",
     "vendor_root_codex",
     "vendor_root_claude",
     "vendor_root_pi",
@@ -50,7 +47,6 @@ _ENVIRONMENT_CHECK_LABELS = {
     "cli_version": "CLI version",
     "config_files": "Config files",
     "telemetry": "Telemetry",
-    "index_cache": "Index cache",
     "vendor_root_codex": "Codex root",
     "vendor_root_claude": "Claude root",
     "vendor_root_pi": "Pi root",
@@ -76,13 +72,6 @@ class TimeWindow:
         if self.delta is None:
             return None
         return now - self.delta
-
-
-class IndexCacheRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path_to_session_graph: dict[str, str]
-    session_to_session_graph: dict[str, str]
 
 
 class InvocationLogError(ValueError):
@@ -162,14 +151,11 @@ def _get_cli_version() -> dict[str, Any]:
 
 def _check_config_files() -> dict[str, Any]:
     """Check for config files."""
-    config_toml = _CACHE_DIR / "config.toml"
-    index_json = _CACHE_DIR / "index.json"
+    config_toml = _CONFIG_DIR / "config.toml"
 
     present: list[str] = []
     if config_toml.exists():
         present.append("config.toml")
-    if index_json.exists():
-        present.append("index.json")
 
     if not present:
         return _make_check("warn", "no config files found", present=present)
@@ -189,57 +175,6 @@ def _check_telemetry() -> dict[str, Any]:
         )
     status = "ok" if decision.enabled else "warn"
     return _make_check(status, decision.detail, source=decision.source)
-
-
-def _load_index_cache(path: Path) -> IndexCacheRecord:
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise ValueError(f"unable to read {path.name}: {exc}") from exc
-
-    try:
-        return IndexCacheRecord.model_validate_json(raw)
-    except ValidationError as exc:
-        raise ValueError(_format_validation_error(exc)) from exc
-
-
-def _check_index_cache() -> tuple[dict[str, Any], IndexCacheRecord | None]:
-    """Check index cache."""
-    if not _INDEX_CACHE_PATH.exists():
-        return _make_check("warn", "not found"), None
-
-    try:
-        stat = _INDEX_CACHE_PATH.stat()
-    except OSError as exc:
-        return _make_check("fail", f"unable to stat: {exc}"), None
-
-    size_bytes = stat.st_size
-    size_mb = size_bytes / (1024 * 1024)
-    mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-    age_days = (datetime.now(timezone.utc) - mtime).days
-
-    try:
-        cache = _load_index_cache(_INDEX_CACHE_PATH)
-    except ValueError as exc:
-        return _make_check("fail", f"invalid schema: {exc}"), None
-
-    path_mapping_count = len(cache.path_to_session_graph)
-    session_mapping_count = len(cache.session_to_session_graph)
-    detail = (
-        f"{path_mapping_count} path mappings, {session_mapping_count} session mappings, "
-        f"{size_mb:.1f}MB, {age_days}d old"
-    )
-    return (
-        _make_check(
-            "ok",
-            detail,
-            path_mapping_count=path_mapping_count,
-            session_mapping_count=session_mapping_count,
-            size_bytes=size_bytes,
-            age_days=age_days,
-        ),
-        cache,
-    )
 
 
 def _check_vendor_root(path: Path) -> dict[str, Any]:
@@ -467,30 +402,6 @@ def _aggregate_latency_trends(records: list[InvocationRecord], since: TimeWindow
     return {"granularity": granularity, "entries": entries}
 
 
-def _check_stale_state(cache: IndexCacheRecord | None) -> dict[str, Any]:
-    """Check for stale index entries."""
-    if cache is None:
-        return {
-            "path_mappings_scanned": 0,
-            "stale_path_mappings": 0,
-            "affected_session_graphs": 0,
-            "entries": [],
-        }
-
-    entries = [
-        {"path": path_str, "root_session_id": root_session_id}
-        for path_str, root_session_id in cache.path_to_session_graph.items()
-        if not Path(path_str).exists()
-    ]
-    affected_session_graphs = len({entry["root_session_id"] for entry in entries})
-    return {
-        "path_mappings_scanned": len(cache.path_to_session_graph),
-        "stale_path_mappings": len(entries),
-        "affected_session_graphs": affected_session_graphs,
-        "entries": sorted(entries, key=lambda entry: (entry["root_session_id"], entry["path"])),
-    }
-
-
 def _format_ms(value: float) -> str:
     rounded = round(value, 2)
     if rounded.is_integer():
@@ -538,7 +449,6 @@ def _render_markdown(
     warnings: list[dict[str, Any]],
     info: list[dict[str, Any]],
     latency_trends: dict[str, Any],
-    stale: dict[str, Any],
     since: TimeWindow,
 ) -> str:
     """Render doctor report as markdown."""
@@ -645,20 +555,6 @@ def _render_markdown(
         lines.append("```")
         lines.append("")
 
-    if stale["entries"]:
-        lines.append("## Stale State")
-        lines.append("")
-        lines.append(
-            f"Found {stale['stale_path_mappings']} stale path mappings across "
-            f"{stale['affected_session_graphs']} session graphs."
-        )
-        visible_entries = stale["entries"][:_MARKDOWN_STALE_LIMIT]
-        if len(stale["entries"]) > len(visible_entries):
-            lines.append(f"Showing {len(visible_entries)} of {len(stale['entries'])} stale entries.")
-        for entry in visible_entries:
-            lines.append(f"- [{entry['root_session_id']}] {entry['path']}")
-        lines.append("")
-
     return "\n".join(lines).rstrip()
 
 
@@ -669,7 +565,6 @@ def _render_json(
     warnings: list[dict[str, Any]],
     info: list[dict[str, Any]],
     latency_trends: dict[str, Any],
-    stale: dict[str, Any],
     since: TimeWindow,
 ) -> dict[str, Any]:
     """Render doctor report as JSON."""
@@ -688,12 +583,6 @@ def _render_json(
         "info": info,
         "latency_trends": latency_trends["entries"],
         "latency_trend_granularity": latency_trends["granularity"],
-        "stale_state": stale["entries"],
-        "stale_state_summary": {
-            "path_mappings_scanned": stale["path_mappings_scanned"],
-            "stale_path_mappings": stale["stale_path_mappings"],
-            "affected_session_graphs": stale["affected_session_graphs"],
-        },
     }
 
 
@@ -712,13 +601,11 @@ def _doctor_handler(args: argparse.Namespace) -> CommandOutcome:
         print(message, file=sys.stderr)
         return CommandOutcome.failed(exit_code=3, error=message)
 
-    index_cache_check, index_cache = _check_index_cache()
     env_checks = {
         "python_version": _check_python_version(),
         "cli_version": _get_cli_version(),
         "config_files": _check_config_files(),
         "telemetry": _check_telemetry(),
-        "index_cache": index_cache_check,
         **_vendor_root_checks(),
     }
 
@@ -729,16 +616,15 @@ def _doctor_handler(args: argparse.Namespace) -> CommandOutcome:
     warnings = [group for group in warning_groups if _is_anomaly_warning(group)]
     info = [group for group in warning_groups if not _is_anomaly_warning(group)]
     latency_trends = _aggregate_latency_trends(records, since)
-    stale = _check_stale_state(index_cache)
 
     if args.output_format == "json":
         report = _render_json(
-            env_checks, inv_summary, failures, warnings, info, latency_trends, stale, since
+            env_checks, inv_summary, failures, warnings, info, latency_trends, since
         )
         print(json.dumps(report, indent=2))
     else:
         report = _render_markdown(
-            env_checks, inv_summary, failures, warnings, info, latency_trends, stale, since
+            env_checks, inv_summary, failures, warnings, info, latency_trends, since
         )
         print(report)
 

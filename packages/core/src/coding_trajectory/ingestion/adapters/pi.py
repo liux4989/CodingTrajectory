@@ -20,7 +20,11 @@ from coding_trajectory.ingestion.adapters._shared import (
     content_blocks,
     scan_header_records,
 )
-from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.adapters.base import (
+    BaseAdapter,
+    SessionHeader,
+    SourceTopology,
+)
 from coding_trajectory.ingestion.assembly import AssemblyHooks, assemble_session
 from coding_trajectory.ingestion.common import (
     extract_exit_code,
@@ -90,6 +94,26 @@ def _is_real_user_message(message: dict) -> bool:
         if any(isinstance(b, dict) and b.get("type") == "toolResult" for b in content):
             return False
     return True
+
+
+def _is_session_source(source: Path) -> bool:
+    return not (
+        source.name == "manifest.jsonl"
+        and source.parent.name.endswith(".jsonl.subagents")
+    )
+
+
+def _transcript_timestamp(record: dict) -> datetime | None:
+    """Shared body-free acceptance gate for translation and topology."""
+    message = record.get("message")
+    if record.get("type") != "message" or not isinstance(message, dict):
+        return None
+    role = message.get("role")
+    if role in {"assistant", "toolResult", "bashExecution"} or (
+        role == "user" and _is_real_user_message(message)
+    ):
+        return parse_iso_timestamp(record.get("timestamp"))
+    return None
 
 
 def _parse_usage(message: dict) -> dict | None:
@@ -180,6 +204,14 @@ class PiAdapter(BaseAdapter):
             cwd=facts.cwd,
         )
 
+    def scan_topology(self, source: Path) -> SourceTopology | None:
+        if not _is_session_source(source) or not any(
+            _transcript_timestamp(record) is not None
+            for record in self._iter_topology_records(source)
+        ):
+            return None
+        return super().scan_topology(source)
+
     def _build_session(
         self,
         source: Path,
@@ -187,6 +219,8 @@ class PiAdapter(BaseAdapter):
         *,
         retention: CanonicalRetention = "trajectory",
     ) -> Session:
+        if not _is_session_source(source):
+            raise ValueError(f"PiAdapter: not a session source: {source}")
         transcript = self._build_transcript(records)
         session_id = self._resolved_session_id(source)
         if not transcript:
@@ -253,17 +287,12 @@ class PiAdapter(BaseAdapter):
         if self._handle_state_record(record):
             return
 
-        if record.get("type", "") != "message":
-            return
-
-        message = record.get("message")
-        if not isinstance(message, dict):
-            return
-
-        role = message.get("role")
-        ts = parse_iso_timestamp(record.get("timestamp"))
+        ts = _transcript_timestamp(record)
         if ts is None:
             return
+
+        message = record["message"]
+        role = message.get("role")
 
         if role == "user":
             self._handle_user_message(message, ts, transcript)

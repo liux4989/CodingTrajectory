@@ -4,7 +4,8 @@
 This benchmark intentionally constructs canonical ``SessionGraph`` models in
 memory. It does not read provider logs or claim real-world retrieval quality.
 It evaluates projection behavior, structural-ranking ablations, invariants,
-response bounds, and warm-store execution cost.
+response bounds, and projection-only execution cost on a prepared in-memory
+store with a fresh request memo per dispatch. No dynamic ingestion is timed here.
 
 Usage:
     uv run python scripts/benchmark-session-retrieval.py
@@ -1289,7 +1290,7 @@ def evaluate_performance(
         }
     return {
         "diagnostic_only": True,
-        "note": "Synthetic warm-store timings are not a real-data performance gate.",
+        "note": "Synthetic projection-only timings use a prepared in-memory store and fresh request memo per dispatch; exclude discovery/ingestion and are not a real-data performance gate.",
         "measurements": results,
     }
 
@@ -1364,7 +1365,7 @@ def _print_report(report: dict[str, Any]) -> None:
             f"recall@10={metrics['recall_at_10']:.3f} "
             f"MRR={metrics['mrr']:.3f} nDCG@10={metrics['ndcg_at_10']:.3f}"
         )
-    print("\nWarm-store diagnostics")
+    print("\nProjection-only diagnostics (prepared store, fresh request memo)")
     for method, measurement in report["performance"]["measurements"].items():
         print(
             f"  {method:20} median={measurement['median_ms']:.3f}ms "
@@ -1382,7 +1383,7 @@ def main() -> int:
         "--repeat",
         type=int,
         default=30,
-        help="Warm-store timing repetitions per method (default: 30).",
+        help="Projection-only repetitions with fresh request memo per method (default: 30).",
     )
     parser.add_argument(
         "--output",

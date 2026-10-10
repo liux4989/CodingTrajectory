@@ -127,6 +127,110 @@ def _extract_response_text(payload: dict[str, Any]) -> str | None:
     return content_block_texts(content, text_type="output_text")
 
 
+def _has_transcript_evidence(
+    outer_type: str, payload: dict, timestamp: datetime | None
+) -> bool:
+    """Shared raw-record admission for topology and transcript dispatch.
+
+    Only inspect emission prerequisites, never translate bodies. Deduplication
+    can suppress later evidence, but its first occurrence already admits the
+    source. State-only records are handled separately by the translator.
+    """
+    if timestamp is None:
+        return False
+    if outer_type == "session_meta":
+        base = payload.get("base_instructions")
+        text = base.get("text") if isinstance(base, dict) else None
+        return isinstance(text, str) and bool(text)
+    if outer_type == "compacted":
+        return True
+    inner_type = payload.get("type")
+    if outer_type == "response_item":
+        if inner_type == "message":
+            role = payload.get("role")
+            if role == "assistant":
+                return True
+            content = payload.get("content")
+            return isinstance(content, list) and any(
+                isinstance(item, dict)
+                and isinstance(text := item.get("text"), str)
+                and bool(text)
+                and (
+                    role in {"developer", "system"}
+                    or (
+                        role == "user"
+                        and _codex_user_prompt_block_name(text) is not None
+                    )
+                )
+                for item in content
+            )
+        return inner_type in {
+            "function_call",
+            "function_call_output",
+            "custom_tool_call",
+            "custom_tool_call_output",
+            "tool_search_call",
+            "tool_search_output",
+            "web_search_call",
+            "local_shell_call",
+            "image_generation_call",
+            "reasoning",
+        }
+    if outer_type != "event_msg":
+        return False
+    if inner_type in {
+        "user_message",
+        "task_started",
+        "task_complete",
+        "turn_aborted",
+        "token_count",
+        "context_compacted",
+    }:
+        return True
+    if inner_type not in {"item_started", "item_completed"}:
+        return False
+    item = payload.get("item")
+    if not isinstance(item, dict):
+        return False
+    item_type = item.get("type")
+    completed = inner_type == "item_completed"
+    if item_type == "UserMessage":
+        return completed
+    if _as_non_empty_str(item.get("id")) is None:
+        return False
+    if item_type in {"CommandExecution", "FileChange", "Plan"}:
+        return True
+    if item_type == "WebSearch":
+        return _as_non_empty_str(item.get("query")) is not None
+    if item_type == "CollabAgentToolCall":
+        return _as_non_empty_str(item.get("tool")) is not None
+    if item_type == "Extension" and item.get("kind") == "web.search":
+        return True
+    # The native terminal decoder preserves future action types too, while
+    # content/runtime items have dedicated (non-terminal) translation paths.
+    terminal_type = _as_non_empty_str(item_type)
+    return (
+        completed
+        and terminal_type is not None
+        and terminal_type
+        not in {
+            "AgentMessage",
+            "CommandExecution",
+            "ContextCompaction",
+            "FileChange",
+            "Plan",
+            "Reasoning",
+            "UserMessage",
+            "WebSearch",
+            "CollabAgentToolCall",
+        }
+        and not (
+            terminal_type == "Extension"
+            and _as_non_empty_str(item.get("kind")) == "web.search"
+        )
+    )
+
+
 _as_non_empty_str = non_empty_str
 
 
@@ -481,27 +585,39 @@ class CodexAdapter(BaseAdapter):
         return self._identity_from_records(self._iter_topology_records(source))
 
     def scan_topology(self, source: Path) -> SourceTopology | None:
+        topology = None
+        admitted = False
         for record in self._iter_topology_records(source):
-            if record.get("type") != "session_meta":
+            outer_type = record.get("type", "")
+            payload = record.get("payload") or {}
+            if outer_type == "session_meta" and topology is not None:
+                # Full ingestion captures only the first session_meta.
                 continue
-            header = self._identity_from_records((record,))
-            if header is None:
-                return None
-            meta = record.get("payload") or {}
-            spawn = _extract_nested_map(meta.get("source"), "subagent", "thread_spawn")
-            kind = "spawn" if spawn and spawn.get("parent_thread_id") else "fork"
-            preview = meta.get("preview")
-            return SourceTopology(
-                session_id=header.session_id,
-                vendor=self.vendor,
-                parent_session_id=header.parent_session_id,
-                parent_kind=kind if header.parent_session_id else None,
-                cwd=header.cwd,
-                project=Path(header.cwd).name if header.cwd else None,
-                modified=datetime.fromtimestamp(source.stat().st_mtime, tz=UTC),
-                title=header.title[:280] if header.title else None,
-                preview=preview[:280] if isinstance(preview, str) else None,
+            if outer_type == "session_meta":
+                header = self._identity_from_records((record,))
+                if header is None:
+                    return None
+                spawn = _extract_nested_map(
+                    payload.get("source"), "subagent", "thread_spawn"
+                )
+                kind = "spawn" if spawn and spawn.get("parent_thread_id") else "fork"
+                preview = payload.get("preview")
+                topology = SourceTopology(
+                    session_id=header.session_id,
+                    vendor=self.vendor,
+                    parent_session_id=header.parent_session_id,
+                    parent_kind=kind if header.parent_session_id else None,
+                    cwd=header.cwd,
+                    project=Path(header.cwd).name if header.cwd else None,
+                    modified=datetime.fromtimestamp(source.stat().st_mtime, tz=UTC),
+                    title=header.title[:280] if header.title else None,
+                    preview=preview[:280] if isinstance(preview, str) else None,
+                )
+            admitted |= _has_transcript_evidence(
+                outer_type, payload, parse_iso_timestamp(record.get("timestamp"))
             )
+            if topology is not None and admitted:
+                return topology
         return None
 
     def _identity_from_records(self, records: Iterable[dict]) -> SessionHeader | None:
@@ -679,6 +795,12 @@ class CodexAdapter(BaseAdapter):
             return
 
         if ts is None:
+            return
+
+        if not _has_transcript_evidence(outer_type, payload, ts) and not (
+            outer_type == "event_msg"
+            and payload.get("type") in {"thread_rolled_back", "sub_agent_activity"}
+        ):
             return
 
         if outer_type == "event_msg":
@@ -1452,7 +1574,7 @@ class CodexAdapter(BaseAdapter):
             if isinstance(base_instructions, dict)
             else None
         )
-        if ts is not None and isinstance(base_text, str) and base_text:
+        if _has_transcript_evidence("session_meta", payload, ts):
             _record_context_source(
                 state,
                 _context_source_observation(

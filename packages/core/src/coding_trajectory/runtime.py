@@ -102,9 +102,7 @@ class ServiceRuntime:
         self.global_scope = global_scope
         self.current_dir = current_dir
         self.source = "local" if source == "auto" else source
-        self.cache = IndexCache.load() if self.source == "local" else IndexCache()
-        self._batch_store: DocumentStore | None = None
-        self._batch_note = ""
+        self.cache = IndexCache()
 
     def __enter__(self) -> Self:
         return self
@@ -113,7 +111,7 @@ class ServiceRuntime:
         self.close()
 
     def close(self) -> None:
-        self._batch_store = None
+        self.cache._reset()
 
     def _require_sources(self) -> None:
         from coding_trajectory.discovery import discover_source_candidates
@@ -137,6 +135,15 @@ class ServiceRuntime:
             raise
 
     def call(self, method: str, params: dict[str, Any]) -> Any:
+        if self.cache._batch_mode:
+            return self._call(method, params)
+        self.cache._reset()
+        try:
+            return self._call(method, params)
+        finally:
+            self.cache._reset()
+
+    def _call(self, method: str, params: dict[str, Any]) -> Any:
         params = self._validate(method, params)
         if method.startswith("living."):
             if method == "living.events":
@@ -158,8 +165,6 @@ class ServiceRuntime:
             return service_contract(method).validate_response(result)
         if method.startswith("project."):
             store, note = DocumentStore.from_session_graphs([]), "(source metadata)"
-        elif self._batch_store is not None:
-            store, note = self._batch_store, self._batch_note
         else:
             store, note = resolve_store(
                 params,
@@ -236,6 +241,7 @@ class ServiceRuntime:
         """Load valid detail dependencies once; invalid items remain independent."""
         ids: set[str] = set()
         lineage_ids: set[str] = set()
+        inventory = False
         for request in requests:
             method, params = request.get("method"), request.get("params", {})
             if not isinstance(method, str) or not isinstance(params, dict):
@@ -252,13 +258,19 @@ class ServiceRuntime:
                 params = self._validate(method, params)
             except (KeyError, ValueError):
                 continue
+            if method.startswith("project."):
+                inventory = True
             if method.startswith(("session.", "graph.")):
                 entrypoint = params.get("session_id") or params["root_session_id"]
                 ids.add(entrypoint)
                 if method == "session.tree":
                     lineage_ids.add(entrypoint)
+        if inventory:
+            from coding_trajectory.service.store import _refresh_topology
+
+            _refresh_topology(self.cache, self.current_dir)
         if ids:
-            self._batch_store, self._batch_note = resolve_store(
+            resolve_store(
                 {
                     "session_ids": sorted(ids),
                     "lineage_session_ids": sorted(lineage_ids),
@@ -270,6 +282,7 @@ class ServiceRuntime:
             )
 
     def batch(self, requests: list[dict[str, Any]]) -> dict[str, Any]:
+        self.cache._reset()
         self.cache._batch_mode = True
         try:
             self.prepare_batch(requests)
@@ -278,6 +291,5 @@ class ServiceRuntime:
                 "meta": self.transport_metadata(),
             }
         finally:
-            self._batch_store = None
             self.cache._batch_mode = False
-            self.cache._batch_topology = None
+            self.cache._reset()

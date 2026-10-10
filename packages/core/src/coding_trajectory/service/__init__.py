@@ -1,7 +1,7 @@
 """Service layer implementing the session-api.json contract.
 
 Split into ``serializers`` (output shaping and id parsing), ``store``
-(discovery-backed DocumentStore construction and the index cache), and
+(discovery-backed stores and request-scoped in-memory ownership), and
 ``handlers`` (dispatch plus the per-method handlers). All previously public
 names are re-exported here so ``coding_trajectory.service.X`` keeps working.
 """

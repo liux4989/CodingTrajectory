@@ -24,9 +24,9 @@ Graph identity is the root session ID.
 ```text
 Local vendor logs
   → adapter-owned streamed relationship metadata
-  → project/session/topology inventory
-  → lazy requested runs through existing canonical ingestion
-  → publication-independent retained canonical graphs
+  → fresh project/session/topology inventory per request
+  → selected runs through existing canonical ingestion
+  → publication-independent retention and redaction in memory
   → direct contextual handlers and on-request metrics
 ```
 
@@ -36,10 +36,12 @@ Vendor adapters preserve source identity and order before normalization.
 Ingestion owns revision reconciliation, inherited-history classification,
 deduplication, relationships, and accounting before retention removes content.
 
-One disposable cache, `~/.coding-trajectory/local.sqlite`, stores source
-fingerprints, topology, ownership, and retained canonical graphs. Source changes
-invalidate affected dependencies. An incompatible cache can be rebuilt from logs.
-It is not an evidence authority or a public persistence contract.
+Historical and inventory queries are stateless: topology is discovered fresh for
+each request, and only selected runs and their canonical dependencies are ingested,
+retained, and redacted in memory. Reuse is limited to one request or explicit batch;
+there is no cross-request topology or graph persistence. Core no longer uses
+`~/.coding-trajectory/local.sqlite`. Repeated detail reads of large runs repeat
+ingestion rather than amortizing it through a persistent cache.
 
 No upfront preparation, publication packs, manifests, saved snapshots, signatures,
 or byte-budget pages are required. Display projections and metrics are computed
@@ -57,7 +59,14 @@ Collection pages use opaque, unsigned count-keyset cursors bound to the query
 and method version. Inventory uses identity ordering; content uses canonical
 source order with ID tie-breakers. Results are deterministic within each call,
 not frozen across calls as logs change. There are no published-view references
-or stale-view errors. Living queries keep their existing behavioral storage.
+or stale-view errors. This stateless ingestion change preserves native metrics
+and public vNext cursors.
+
+Living queries still use the existing `living-events/` and `living-sessions/`
+SQLite stores under `~/.coding-trajectory/`. Their behavior and persistence are
+pending the separate Job B living redesign; removing `local.sqlite` does not
+mean those stores have already migrated. Loop's `investigations.sqlite3` and
+`monitor.sqlite3` are product/user data and remain, not Core derived caches.
 
 Local envelopes use `result`, not the parked remote envelope's `data`.
 Transport metadata states `local` / `live` / `retained`, without snapshot identity.
@@ -86,7 +95,7 @@ Paths below are relative to `packages/core/src/coding_trajectory/`, unless state
 | --- | --- |
 | Source inventory and relationships | `discovery.py`, `discovery_metadata.py`, vendor adapters in `ingestion/` |
 | Canonical reconstruction and retention | `ingestion/` |
-| Disposable local graph cache and ownership | `service/store.py` |
+| Request-scoped topology and in-memory graph ownership | `service/store.py` |
 | Local execution and source capabilities | `runtime.py` |
 | Direct contextual queries and pagination | `service/` |
 | Native metrics and live pricing | `metrics/` |

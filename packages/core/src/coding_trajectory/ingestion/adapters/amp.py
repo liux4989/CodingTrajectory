@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -55,6 +56,57 @@ class AmpRecord(BaseModel):
     status: str | None = None
 
 
+@dataclass
+class _CapturedActivity:
+    """Body-free admission facts, including latest message revisions."""
+
+    messages: dict[str, tuple[bool, bool]] = field(default_factory=dict)
+    starts: set[str] = field(default_factory=set)
+    has_tool_call: bool = False
+    has_end: bool = False
+
+    def observe(self, record: AmpRecord) -> None:
+        if record.type == "observation":
+            key = str(record.tool_use_id or record.message_id)
+            if record.event == "agent.start":
+                self.starts.add(key)
+            elif record.event == "agent.end":
+                self.has_end = True
+            elif record.event == "tool.call":
+                self.has_tool_call = True
+        elif record.type == "message":
+            message = record.message
+            if "id" not in message:
+                raise ValueError("Amp message has no captured identity")
+            blocks = message.get("content", [])
+            text_blocks = [block for block in blocks if block.get("type") == "text"]
+            has_text = len(text_blocks) > 1 or any(
+                bool(block.get("text", "")) for block in text_blocks
+            )
+            role = message.get("role")
+            has_content = (role == "user" and has_text) or (
+                role == "assistant"
+                and (
+                    has_text or any(block.get("type") == "thinking" for block in blocks)
+                )
+            )
+            has_call = any(block.get("type") == "tool_use" for block in blocks)
+            self.messages[str(message["id"])] = (
+                has_content or has_call,
+                role == "user",
+            )
+
+    def admitted(self) -> bool:
+        return (
+            self.has_tool_call
+            or self.has_end
+            or any(has_content for has_content, _user in self.messages.values())
+            or any(
+                key not in self.messages or self.messages[key][1] for key in self.starts
+            )
+        )
+
+
 def _object(value: Any) -> dict[str, Any]:
     # PluginToolResult also permits text/image block arrays. Interpret only one
     # text block: concatenating several can manufacture ambiguous JSON evidence.
@@ -89,12 +141,20 @@ class AmpAdapter(BaseAdapter):
         self, source: Path, records: Iterable[dict]
     ) -> SourceTopology | None:
         header = None
+        activity = _CapturedActivity()
+        thread_ids = set()
+        header_ids = set()
         observations: dict[
             tuple[str, str], tuple[str | None, str | None, UUID | None]
         ] = {}
         messages: dict[str, tuple[tuple[str, str | None, int | None], ...]] = {}
         for raw in records:
+            record = AmpRecord.model_validate(raw)
+            activity.observe(record)
+            if record.thread_id is not None:
+                thread_ids.add(record.thread_id)
             if raw.get("type") == "thread":
+                header_ids.add(record.payload["id"])
                 current = self.scan_identity_records(source, (raw,))
                 if header and current and header.session_id != current.session_id:
                     raise ValueError("Amp journal contains multiple thread identities")
@@ -130,7 +190,9 @@ class AmpAdapter(BaseAdapter):
                         )
                 key = str(message.get("id") or raw.get("message_id"))
                 messages[key] = tuple(facts)
-        if header is None:
+        if len(header_ids) > 1 or (header_ids and thread_ids - header_ids):
+            raise ValueError("Amp record belongs to another thread")
+        if header is None or not activity.admitted():
             return None
         results = {}
         for facts in messages.values():
@@ -196,6 +258,11 @@ class AmpAdapter(BaseAdapter):
             raise ValueError("Amp journal contains multiple thread identities")
         if any(r.thread_id not in (None, thread_id) for r, _ in rows):
             raise ValueError("Amp record belongs to another thread")
+        activity = _CapturedActivity()
+        for record, _span in rows:
+            activity.observe(record)
+        if not activity.admitted():
+            raise ValueError("Amp journal has no captured activity")
         uri = urlparse(payload.get("workspace_root") or "")
         cwd = unquote(uri.path) if uri.scheme == "file" else None
 

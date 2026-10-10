@@ -4,9 +4,10 @@
 Surveys two cost layers of the query path:
 
 1. Store build (discovery + ingestion -> DocumentStore)
-   - targeted: ingest only the files for one session_graph (warm path-index cache)
+   - targeted: discover topology afresh and ingest one session_graph per repetition
    - full:     ingest every matching log in the selected project/global scope
-2. Projection (warm store): each ServiceRuntime method run in isolation
+2. Projection (prepared in-memory store): each dispatch uses a fresh IndexCache;
+   these timings exclude discovery and ingestion, so are not end-to-end runtime reads.
 
 For the slowest methods, an optional cProfile pass pinpoints hot lines.
 
@@ -37,13 +38,12 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "packages" / "core" / "src"))
 
-from coding_trajectory.service import (  # noqa: E402
+from coding_trajectory.query import DocumentStore
+from coding_trajectory.service import (
     IndexCache,
     dispatch,
     resolve_store,
 )
-from coding_trajectory.query import DocumentStore  # noqa: E402
-
 
 # Methods that take a session entry point (session_id / root_session_id).
 ENTRYPOINT_METHODS: list[tuple[str, dict[str, Any]]] = [
@@ -91,7 +91,6 @@ def bench_store_build(
     *,
     global_scope: bool,
     current_dir: Path,
-    cache: IndexCache,
     params: dict[str, Any],
     repeat: int,
 ) -> dict[str, Any]:
@@ -100,13 +99,12 @@ def bench_store_build(
     last_store: DocumentStore | None = None
     note = ""
     for _ in range(repeat):
-        cache2 = IndexCache.load()  # fresh cache each run to measure cold path
         t0 = time.perf_counter()
         last_store, note = resolve_store(
             params,
             global_scope=global_scope,
             current_dir=current_dir,
-            cache=cache2,
+            cache=IndexCache(),
         )
         runs.append(time.perf_counter() - t0)
     assert last_store is not None
@@ -126,12 +124,11 @@ def bench_projection(
     params: dict[str, Any],
     store: DocumentStore,
     current_dir: Path,
-    cache: IndexCache,
     global_scope: bool,
     repeat: int,
     discovery_note: str,
 ) -> dict[str, Any]:
-    """Time a single dispatch call on a warm store."""
+    """Time dispatch on a prepared store without cross-request memo reuse."""
     full = {**params}
     runs: list[float] = []
     resp_size = 0
@@ -144,7 +141,7 @@ def bench_projection(
             global_scope=global_scope,
             current_dir=current_dir,
             discovery_note=discovery_note,
-            cache=cache,
+            cache=IndexCache(),
         )
         runs.append(time.perf_counter() - t0)
         resp_size = len(json.dumps(result, default=str, separators=(",", ":")))
@@ -163,7 +160,6 @@ def profile_projection(
     params: dict[str, Any],
     store: DocumentStore,
     current_dir: Path,
-    cache: IndexCache,
     global_scope: bool,
     discovery_note: str,
     top: int = 25,
@@ -178,7 +174,7 @@ def profile_projection(
         global_scope=global_scope,
         current_dir=current_dir,
         discovery_note=discovery_note,
-        cache=cache,
+        cache=IndexCache(),
     )
     profiler.disable()
     buf = io.StringIO()
@@ -192,12 +188,11 @@ def pick_graph(
 ) -> tuple[str, dict[str, int]]:
     """Pick a graph id; return (graph_id, {sessions,turns,items})."""
     # This is an offline ingestion/projection benchmark, not a public API read.
-    cache = IndexCache.load()
     store, note = resolve_store(
         {},
         global_scope=global_scope,
         current_dir=current_dir,
-        cache=cache,
+        cache=IndexCache(),
     )
     res = dispatch(
         "project.sessions",
@@ -206,7 +201,7 @@ def pick_graph(
         global_scope=global_scope,
         current_dir=current_dir,
         discovery_note=note,
-        cache=cache,
+        cache=IndexCache(),
     )
     items = res["items"]
     items.sort(key=lambda i: len(i.get("session_ids", [])), reverse=not smallest)
@@ -244,7 +239,6 @@ def main() -> int:
 
     current_dir = REPO_ROOT
     global_scope = args.global_scope
-    cache = IndexCache.load()
 
     # --- pick a target graph -------------------------------------------------
     if args.graph_id:
@@ -279,13 +273,12 @@ def main() -> int:
             "global (all logs)" if global_scope else "project (current project)"
         )
         for label, params in [
-            ("targeted (warm cache)", {"session_id": graph_id}),
+            ("targeted (fresh ingestion)", {"session_id": graph_id}),
             (full_scope_label, {}),
         ]:
             r = bench_store_build(
                 global_scope=global_scope,
                 current_dir=current_dir,
-                cache=cache,
                 params=params,
                 repeat=args.repeat,
             )
@@ -297,20 +290,19 @@ def main() -> int:
                 f"{_fmt_ms(r['max_s']):>11}  {store_str}"
             )
 
-    # --- warm store for projections -----------------------------------------
+    # --- prepared in-memory store for projection-only diagnostics ------------
     if not args.no_projection:
-        print("\n## Layer 2: projection (warm store, single dispatch)\n")
-        warm_cache = IndexCache.load()
+        print("\n## Layer 2: projection (prepared store, fresh request memo)\n")
         t0 = time.perf_counter()
         store, discovery_note = resolve_store(
             {"session_id": graph_id},
             global_scope=global_scope,
             current_dir=current_dir,
-            cache=warm_cache,
+            cache=IndexCache(),
         )
-        warm_build_s = time.perf_counter() - t0
+        build_s = time.perf_counter() - t0
         s = _store_stats(store)
-        print(f"(warm store built once in {_fmt_ms(warm_build_s)}: "
+        print(f"(in-memory store built once in {_fmt_ms(build_s)}; ingestion excluded below: "
               f"g={s['graphs']} s={s['sessions']} t={s['turns']} i={s['items']} e={s['events']})\n")
 
         print(f"{'method':22}{'params':22}{'median':>11}{'min':>11}{'max':>11}  resp")
@@ -330,7 +322,6 @@ def main() -> int:
                     params=full,
                     store=store,
                     current_dir=current_dir,
-                    cache=warm_cache,
                     global_scope=global_scope,
                     repeat=args.repeat,
                     discovery_note=discovery_note,
@@ -359,7 +350,6 @@ def main() -> int:
                     params=full,
                     store=store,
                     current_dir=current_dir,
-                    cache=warm_cache,
                     global_scope=global_scope,
                     discovery_note=discovery_note,
                 )

@@ -67,7 +67,12 @@ def dispatch(
         from coding_trajectory.ingestion.retained import retain_session_graph
 
         store = DocumentStore.from_session_graphs(
-            [retain_session_graph(graph) for graph in store.session_graphs.values()]
+            [
+                graph
+                if cache._graphs.get(str(graph.root_session_id)) is graph
+                else retain_session_graph(graph)
+                for graph in store.session_graphs.values()
+            ]
         )
     context = ServiceContext(
         store=store,

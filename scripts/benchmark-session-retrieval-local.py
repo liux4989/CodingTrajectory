@@ -5,7 +5,7 @@ opt-in: it reads a user-owned JSON configuration containing explicit local
 session IDs and source-derived judgments. Detailed reports stay under the
 ignored ``.artifacts/session-retrieval-local`` directory.
 
-- targeted source discovery and cold store-build cost;
+- targeted source discovery and fresh dynamic-ingestion store-build cost;
 - summary invariants: bounded sections, truthful truncation, evidence
   references that resolve, private-reasoning and self-retrieval exclusion,
   objective selection, deterministic responses;
@@ -14,7 +14,8 @@ ignored ``.artifacts/session-retrieval-local`` directory.
 - candidate-generation recall against configured canonical relevance, kept
   separate from ranking and ranking ablations;
 - source-derived summary evidence assertions, never facts copied from output;
-- warm-store execution cost at real scale.
+- projection-only execution cost on a prepared in-memory store at real scale,
+  with a fresh request memo on every dispatch (ingestion is timed separately).
 
 Usage:
     uv run python scripts/benchmark-session-retrieval-local.py \
@@ -933,11 +934,6 @@ def _single_session_graph(session: Session) -> Any:
     )
 
 
-# One cache shared across dispatches mirrors ServiceRuntime's store-lifetime
-# reuse and keeps entry-point indexing out of the per-call measurement noise.
-_SHARED_CACHE = IndexCache()
-
-
 def _dispatch(
     store: DocumentStore, method: str, params: dict[str, Any]
 ) -> dict[str, Any]:
@@ -948,7 +944,7 @@ def _dispatch(
         global_scope=True,
         current_dir=REPO_ROOT,
         discovery_note="local corpus benchmark",
-        cache=_SHARED_CACHE,
+        cache=IndexCache(),
     )
 
 
@@ -1205,7 +1201,11 @@ def evaluate(
             "response_bytes": _distribution(response_bytes),
             "ablation_candidate_set": "Each ablation reorders the same returned lexical candidates; source-order candidate recall is only a prefix diagnostic, while candidate-universe recall measures matching completeness.",
         },
-        "performance": {"diagnostic_only": True, "measurements": performance},
+        "performance": {
+            "diagnostic_only": True,
+            "note": "Prepared in-memory store, fresh request memo per dispatch; excludes discovery and ingestion, which are timed separately under store_build.",
+            "measurements": performance,
+        },
         "gates": gates,
         "passed": all(gates.values()),
     }
@@ -1231,7 +1231,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print("\nRanking ablations")
     for strategy, metrics in report["search"]["ranking"].items():
         print(f"  {strategy:30} {metrics}")
-    print("\nWarm-store diagnostics")
+    print("\nProjection-only diagnostics (prepared store, fresh request memo)")
     for name, measurement in report["performance"]["measurements"].items():
         print(
             f"  {name:22} median={measurement['median_ms']:.2f}ms "
@@ -1252,7 +1252,8 @@ def main() -> int:
         help="Ignored private JSON with session IDs and source-derived judgments.",
     )
     parser.add_argument(
-        "--repeat", type=int, default=30, help="Warm repetitions (default: 30)."
+        "--repeat", type=int, default=30,
+        help="Projection-only repetitions with fresh request memo (default: 30)."
     )
     parser.add_argument(
         "--output",

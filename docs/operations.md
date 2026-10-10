@@ -51,16 +51,24 @@ sources; it never falls back to remote. If no supported source exists on the
 host, queries report local source unavailability rather than reading a remote copy.
 See [CLI](cli.md) for scoped detail queries and [Loop](loop-design.md) for browser access.
 
-Inventory streams adapter-owned relationship metadata. Detail queries lazily
-ingest requested runs through the canonical reconstruction pipeline. One disposable
-`~/.coding-trajectory/local.sqlite` caches source fingerprints, topology, ownership,
-and retained graphs. It needs no upfront preparation or manual publication.
-An incompatible cache can be rebuilt from local logs. Do not remove vendor logs
-as a cache-cleanup action; they remain the evidence authority.
+Inventory streams adapter-owned relationship metadata and discovers fresh topology
+for each request. Detail queries ingest only selected runs and their canonical
+dependencies, applying retention and redaction in memory. Reuse is limited to one
+request or explicit batch; no topology or canonical graph is persisted across
+requests, and Core no longer uses `~/.coding-trajectory/local.sqlite`. No upfront
+preparation or manual publication is needed. Repeated reads of large runs repeat
+ingestion, trading persistent-cache speed for stateless operation. Vendor logs
+remain the evidence authority; this change does not delete logs or old databases.
 
 Metrics are computed on request. Pricing keeps the existing live catalog path;
-catalog estimates remain separate from provider-reported cost. Living query
-behavior and its existing storage are unchanged by the graph-cache refactor.
+catalog estimates remain separate from provider-reported cost. Native metric
+formulas and public vNext cursors are unchanged.
+
+Living query behavior still depends on the existing SQLite stores in
+`~/.coding-trajectory/living-events/` and `~/.coding-trajectory/living-sessions/`.
+Their migration is the separate Job B living redesign, not part of removing the
+Core `local.sqlite` cache. Loop's `investigations.sqlite3` and `monitor.sqlite3`
+remain product/user data. Do not delete these stores as Core cache cleanup.
 
 Pages are count-bounded. Treat their unsigned query- and version-bound cursors
 as opaque. Ordering is deterministic per call; a multi-page read is not a saved
@@ -70,6 +78,13 @@ snapshot of changing logs. Old published-view references are not supported.
 
 Core CI runs Python/contract checks and the Loop web/integration checks. It does
 not build, qualify, prepare, or deploy the parked remote runtime.
+
+The local qualification checks admission parity for header-only sources, valid
+runtime-only sources, and owned spawn/fork relationships. It also reports known
+follow-up **A1b**: an inherited-only Codex fork may appear in inventory while
+detail returns `resource_not_found`, until the fork records its first owned turn.
+Parent-aware topology admission is deferred; the workflow does not hide this gap
+or relax equality for the approved admission boundaries.
 
 ```sh
 uv run python scripts/check-core-protocol.py

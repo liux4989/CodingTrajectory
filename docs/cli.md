@@ -22,6 +22,20 @@ There is no remote fallback, connection profile, or credential configuration.
 Queries never publish data. The `collector`, `connection`, and `api serve`
 commands are no longer supported.
 
+Historical and inventory queries discover fresh topology per request. Only
+selected runs and their canonical dependencies are ingested, retained, and
+redacted in memory, with reuse limited to one request or explicit API batch.
+There is no cross-request topology or graph cache; Core no longer uses
+`~/.coding-trajectory/local.sqlite`. Repeated detail reads of large runs repeat
+ingestion. Native metrics and public vNext cursors stay unchanged.
+
+Commands accepting `--agent-vendor` support the Core `Vendor` values:
+`codex_cli`, `claude_code`, `pi`, and `amp`. For example:
+
+```sh
+uv run ct --source local project sessions --agent-vendor amp --limit 20
+```
+
 ## Read a session
 
 1. List projects:
@@ -213,7 +227,12 @@ Graph API methods require `root_session_id`. Session methods use `session_id`.
 Model usage and tool usage have no dedicated CLI commands.
 The API protocol remains `ct.api.v1`. Response metadata describes local live
 retained evidence (`source: local`, `freshness: live`, `content_scope: retained`)
-and contains no prepared-view identity. `living` change-feed behavior is unchanged.
+and contains no prepared-view identity. `living` change-feed behavior still uses
+the existing SQLite stores in `~/.coding-trajectory/living-events/` and
+`~/.coding-trajectory/living-sessions/`, pending the separate Job B living redesign.
+Those stores have not migrated with Core's `local.sqlite` removal. Loop's
+`investigations.sqlite3` and `monitor.sqlite3` remain product/user data, not Core
+derived caches.
 
 ## Diagnostics and plugins
 
@@ -224,8 +243,11 @@ uv run ct plugin list
 uv run ct plugin loop web --help
 ```
 
-Doctor checks the environment and local invocation telemetry. It reports problems;
-it does not repair them or upload its report. Exit codes are 0 for healthy, 1 for
+Doctor checks Python and CLI versions, configuration, telemetry settings, vendor
+roots, and local invocation telemetry. It no longer reads or reports `index.json`,
+index-cache health, or stale cache-path mappings. Invocation failures, warning/info
+recency, and latency trends remain available. It reports problems;
+it does not repair them, delete data, or upload its report. Exit codes are 0 for healthy, 1 for
 warnings or failed invocations, 2 for environment failure, and 3 for a corrupt log.
 
 Telemetry stays in `~/.coding-trajectory/invocations.jsonl`. It records command

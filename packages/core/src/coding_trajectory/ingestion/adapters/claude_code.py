@@ -193,6 +193,33 @@ def _is_real_user_prompt(obj: dict) -> bool:
     return True
 
 
+def _transcript_timestamp(record: dict) -> datetime | None:
+    """Shared body-free acceptance gate for translation and topology."""
+    raw_type = record.get("type")
+    if raw_type == "file-history-snapshot":
+        return parse_timestamp((record.get("snapshot") or {}).get("timestamp"))
+    timestamp = parse_timestamp(record.get("timestamp"))
+    if timestamp is None or not record.get("sessionId"):
+        return None
+    if raw_type == "user":
+        if _is_real_user_prompt(record) or _tool_result_blocks(
+            record.get("message", {}).get("content")
+        ):
+            return timestamp
+    elif (
+        raw_type in {"assistant", "attachment", "queue-operation"}
+        or raw_type == "system"
+        and record.get("subtype")
+        in {
+            "compact_boundary",
+            "turn_duration",
+            "local_command",
+        }
+    ):
+        return timestamp
+    return None
+
+
 def _base_payload(obj: dict) -> dict:
     return compact_dict(
         {
@@ -226,6 +253,7 @@ class ClaudeCodeAdapter(BaseAdapter):
 
     def scan_header(self, source: Path) -> SessionHeader | None:
         scan = _ClaudeRecordScan()
+        has_transcript = False
         # Identity includes agentName/slug from the first session record. Keep
         # only scalar metadata, never that record's message or lastPrompt body.
         keys = {
@@ -247,7 +275,9 @@ class ClaudeCodeAdapter(BaseAdapter):
         }
         for record in self._iter_topology_records(source):
             scan.observe_meta({key: record[key] for key in keys if key in record})
-        if scan.raw_session_id is None:
+            if not has_transcript:
+                has_transcript = _transcript_timestamp(record) is not None
+        if scan.raw_session_id is None or not has_transcript:
             return None
         mechanism = _subagent_input_from_scan(source, scan, scan.raw_session_id)
         session_id, parent_session_id = canonical_session_ids(mechanism)
@@ -411,14 +441,14 @@ class ClaudeCodeAdapter(BaseAdapter):
         transcript: list[TranscriptRecord],
         team_inputs: list[ClaudeTeamStateInput],
     ) -> None:
+        ts = _transcript_timestamp(record)
+        if ts is None:
+            return
         raw_type = record.get("type")
 
         # File-history-snapshot carries its timestamp inside snapshot.timestamp.
         if raw_type == "file-history-snapshot":
             snapshot = record.get("snapshot") or {}
-            ts = parse_timestamp(snapshot.get("timestamp"))
-            if ts is None:
-                return
             base = _base_payload(record)
             transcript.append(
                 TranscriptRecord(
@@ -434,14 +464,6 @@ class ClaudeCodeAdapter(BaseAdapter):
                     },
                 )
             )
-            return
-
-        ts = parse_timestamp(record.get("timestamp"))
-        if ts is None:
-            return
-
-        sid_str = record.get("sessionId")
-        if not sid_str:
             return
 
         if raw_type == "user":

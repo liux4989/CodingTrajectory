@@ -87,7 +87,7 @@ class BaseAdapter(ABC):
         with path.open("rb") as stream:
             for line in stream:
                 try:
-                    record = json.loads(line)
+                    record = json.loads(line.strip().decode("utf-8"))
                 except (ValueError, UnicodeDecodeError):
                     continue
                 if isinstance(record, dict):

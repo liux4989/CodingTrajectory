@@ -1,6 +1,6 @@
 """Offline filesystem -> CLI/runtime qualification of local-only selection.
 
-Uses the existing Amp journal evidence, an isolated home/cache, and rejects
+Uses the existing Amp journal evidence, an isolated home, and rejects
 socket connection attempts. No credential profiles, remote stubs or unit tests.
 """
 
@@ -11,11 +11,12 @@ import json
 import os
 import runpy
 import socket
-import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 META = {"source": "local", "freshness": "live", "content_scope": "retained"}
@@ -54,8 +55,20 @@ def qualify() -> None:
     def request(method, **params):
         return {"method": method, "params": params}
 
+    def filesystem_state():
+        return {
+            str(path.relative_to(Path.home())): (
+                path.is_dir(),
+                path.stat().st_size,
+                path.stat().st_mtime_ns,
+            )
+            for path in Path.home().rglob("*")
+        }
+
     def success(runtime, method, **params):
+        before = filesystem_state()
         reply = runtime.execute(request(method, **params))
+        assert filesystem_state() == before, "Core read changed the filesystem"
         assert reply["ok"] is True, reply
         assert reply["meta"] == META, reply
         assert reply["error"] is None
@@ -63,6 +76,7 @@ def qualify() -> None:
         return reply["result"]
 
     def error(runtime, req, code):
+        before = filesystem_state()
         try:
             reply = runtime.execute(req)
         except (DocumentError, ResourceNotFoundError, ValueError, KeyError) as exc:
@@ -70,6 +84,7 @@ def qualify() -> None:
                 f"{req}: expected {code}, raised {type(exc).__name__}: {exc}"
             )
             return None
+        assert filesystem_state() == before, "Core error changed the filesystem"
         check(
             reply["ok"] is False
             and reply["result"] is None
@@ -165,10 +180,17 @@ def qualify() -> None:
             if reply is not None:
                 check(reply["availability"]["state"] == "unsupported", str(reply))
 
-    # A fresh detail cache makes union loading observable; inventory does not
-    # materialize every graph. Invalid items must not widen that union.
-    cache_path = Path.home() / ".coding-trajectory" / "local.sqlite"
-    cache_path.unlink()
+    # Instrument canonical source loading in this qualification run, rather
+    # than maintaining production counters or a persisted graph store.
+    from coding_trajectory.service import store as store_module
+
+    original_ingest = store_module._ingest_sessions
+    ingested_paths = []
+
+    def observe_ingestion(candidates, **kwargs):
+        ingested_paths.append([str(path) for _vendor, _adapter, path in candidates])
+        return original_ingest(candidates, **kwargs)
+
     requests = [
         request("session.overview", session_id=parent[2:]),
         request("session.stats", session_id=child[2:]),
@@ -180,8 +202,13 @@ def qualify() -> None:
             "method_version": 999,
         },
     ]
-    with ServiceRuntime(global_scope=True, current_dir=logs) as runtime:
+    before = filesystem_state()
+    with (
+        patch.object(store_module, "_ingest_sessions", observe_ingestion),
+        ServiceRuntime(global_scope=True, current_dir=logs) as runtime,
+    ):
         batch = runtime.batch(requests)
+        assert filesystem_state() == before, "Core batch changed the filesystem"
         assert batch["meta"] == META
         assert [item["ok"] for item in batch["items"]] == [
             True,
@@ -196,24 +223,52 @@ def qualify() -> None:
             "unknown_method",
             "unsupported_version",
         ]
+        expected_paths = {
+            str((logs / f"{sid}.jsonl").resolve()) for sid in (parent, child, second)
+        }
         check(
-            runtime.cache.counters["graph_builds"] == 2,
-            f"batch union expected two graph builds: {runtime.cache.counters}",
+            len(ingested_paths) == 1 and set(ingested_paths[0]) == expected_paths,
+            f"batch must ingest only the valid run union once: {ingested_paths}",
         )
-        check(
-            runtime.cache.counters["ingested_sources"] == 3,
-            f"batch union expected three ingested sources: {runtime.cache.counters}",
-        )
-        with sqlite3.connect(cache_path) as db:
-            roots = {row[0] for row in db.execute("SELECT root FROM graphs")}
-            check(
-                roots == {parent[2:], second[2:]},
-                f"invalid version item widened batch graph union: {sorted(roots)}",
-            )
-            graph_bytes = "".join(
-                row[0] for row in db.execute("SELECT graph FROM graphs")
-            )
-            assert "PRIVATE output" not in graph_bytes
+        assert "PRIVATE output" not in json.dumps(batch)
+
+    # A long-lived runtime must discard request state, including after a batch.
+    # Inventory must never invoke canonical ingestion.
+    ingested_paths.clear()
+    with (
+        patch.object(store_module, "_ingest_sessions", observe_ingestion),
+        ServiceRuntime(global_scope=True, current_dir=logs) as runtime,
+    ):
+        initial_inventory = success(runtime, "project.sessions", limit=200)
+        assert not ingested_paths, "inventory ingested transcripts"
+        initial_items = success(runtime, "session.items", session_id=second[2:])
+        source = logs / f"{second}.jsonl"
+        original = source.read_text()
+        updated = fixtures["journal"](second, parent=False)[-2]
+        updated["message"]["content"] = [
+            {"type": "text", "text": "fresh request evidence"}
+        ]
+        updated["captured_at"] = "2026-09-05T00:00:11Z"
+        with source.open("a") as stream:
+            stream.write(json.dumps(updated) + "\n")
+        changed = success(runtime, "session.items", session_id=second[2:])
+        assert changed["items"][0]["preview"] == "fresh request evidence", changed
+        source.write_text(original)
+        restored = success(runtime, "session.items", session_id=second[2:])
+        assert restored == initial_items
+        runtime.batch([request("session.stats", session_id=parent[2:])])
+        child_source = logs / f"{child}.jsonl"
+        child_contents = child_source.read_text()
+        child_source.unlink()
+        removed = success(runtime, "project.sessions", limit=200)
+        assert all(child[2:] not in row["session_ids"] for row in removed["items"])
+        child_source.write_text(child_contents)
+        returned = success(runtime, "project.sessions", limit=200)
+        assert returned["items"] and returned["total"] == initial_inventory["total"]
+        assert any(child[2:] in row["session_ids"] for row in returned["items"])
+    print(
+        "PASS request freshness: append, rewrite, delete, restore; header-only inventory"
+    )
 
     # CLI subprocesses inherit the same isolated filesystem and are independently
     # denied network access via Python's socket audit events.
@@ -226,6 +281,7 @@ sys.argv = ['ct', *sys.argv[1:]]
 runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
 """
     for source in ("local", "auto", "shared", "remote"):
+        before = filesystem_state()
         result = subprocess.run(
             [
                 sys.executable,
@@ -243,6 +299,7 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
             text=True,
             check=False,
         )
+        assert filesystem_state() == before, "CLI query changed the filesystem"
         if source in {"local", "auto"}:
             assert result.returncode == 0, result.stderr
             assert json.loads(result.stdout)["items"]
@@ -252,13 +309,309 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
                 result.stderr
             )
 
+    # Inventory must reject metadata-only sources without rejecting runtime-only
+    # sessions that canonical ingestion accepts. Compare both directions, not
+    # just membership of roots that happen to exist in both projections.
+    from coding_trajectory.analysis.orchestration_runs import orchestration_runs
+    from coding_trajectory.discovery import discover_store
+
+    timestamp = "2026-10-01T12:00:00Z"
+    claude_dir = Path.home() / ".claude/projects" / str(project_dir).replace("/", "-")
+    pi_dir = Path.home() / ".pi/agent/sessions/qualification"
+    extra_paths = []
+
+    def write_source(path, rows):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        extra_paths.append(path)
+
+    claude_records = [
+        {"type": "user", "message": {"content": "acceptance"}},
+        {"type": "assistant", "message": {"content": []}},
+        *(
+            {"type": "system", "subtype": value}
+            for value in ("compact_boundary", "turn_duration", "local_command")
+        ),
+        {"type": "attachment", "attachment": {}},
+        {"type": "queue-operation", "operation": "enqueue"},
+        {"type": "file-history-snapshot", "snapshot": {"timestamp": timestamp}},
+        *(
+            {"type": value}
+            for value in (
+                "mode",
+                "permission-mode",
+                "system",
+                "cost-state",
+                "ai-title",
+                "agent-name",
+            )
+        ),
+        {"type": "user", "isMeta": True, "message": {"content": "metadata"}},
+        {"type": "assistant", "timestamp": "invalid", "message": {}},
+    ]
+    for ordinal, record in enumerate(claude_records, 100):
+        sid = f"00000000-0000-4000-8000-{ordinal:012d}"
+        write_source(
+            claude_dir / f"{sid}.jsonl",
+            [
+                {
+                    "sessionId": sid,
+                    "cwd": str(project_dir),
+                    "timestamp": timestamp,
+                    **record,
+                }
+            ],
+        )
+    for ordinal, role in enumerate(
+        ("user", "assistant", "toolResult", "bashExecution"), 200
+    ):
+        sid = f"00000000-0000-4000-8000-{ordinal:012d}"
+        write_source(
+            pi_dir / f"{sid}.jsonl",
+            [
+                {"type": "session", "id": sid, "cwd": str(project_dir)},
+                {
+                    "type": "message",
+                    "timestamp": timestamp,
+                    "message": {"role": role, "content": []},
+                },
+            ],
+        )
+    write_source(pi_dir / "state-only.jsonl", [{"type": "session", "id": "state-only"}])
+    write_source(pi_dir / "parent.jsonl.subagents/manifest.jsonl", [{"agent": "child"}])
+
+    codex_dir = Path.home() / ".codex/sessions/qualification"
+    codex_parent = "00000000-0000-4000-8000-000000000300"
+    for ordinal in (300, 301, 302):
+        sid = f"00000000-0000-4000-8000-{ordinal:012d}"
+        relationship = (
+            {
+                "source": {
+                    "subagent": {"thread_spawn": {"parent_thread_id": codex_parent}}
+                }
+            }
+            if ordinal == 301
+            else {"forked_from_id": codex_parent}
+            if ordinal == 302
+            else {}
+        )
+        write_source(
+            codex_dir / f"rollout-{sid}.jsonl",
+            [
+                {
+                    "type": "session_meta",
+                    "timestamp": timestamp,
+                    "payload": {"id": sid, "cwd": str(project_dir), **relationship},
+                },
+                {
+                    "type": "event_msg",
+                    "timestamp": timestamp,
+                    "payload": {"type": "task_started", "turn_id": f"turn-{ordinal}"},
+                },
+                {
+                    "type": "response_item",
+                    "timestamp": timestamp,
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "accepted"}],
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "timestamp": timestamp,
+                    "payload": {"type": "task_complete", "turn_id": f"turn-{ordinal}"},
+                },
+            ],
+        )
+
+    for ordinal, activity in (
+        (303, {}),
+        (304, {"base_instructions": {"text": "context"}}),
+    ):
+        sid = f"00000000-0000-4000-8000-{ordinal:012d}"
+        write_source(
+            codex_dir / f"rollout-{sid}.jsonl",
+            [
+                {
+                    "type": "session_meta",
+                    "timestamp": timestamp,
+                    "payload": {"id": sid, "cwd": str(project_dir), **activity},
+                }
+            ],
+        )
+
+    for ordinal, activity in (
+        (400, []),
+        (401, [{"type": "observation", "event": "agent.start", "message_id": "u1"}]),
+        (
+            402,
+            [
+                {
+                    "type": "message",
+                    "message": {"id": "u1", "role": "user", "content": []},
+                }
+            ],
+        ),
+        (
+            403,
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "id": "a1",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "activity"}],
+                    },
+                }
+            ],
+        ),
+        (
+            404,
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "id": "a1",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "replaced"}],
+                    },
+                },
+                {
+                    "type": "message",
+                    "message": {"id": "a1", "role": "assistant", "content": []},
+                },
+            ],
+        ),
+        (
+            405,
+            [
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "missing identity"}],
+                    },
+                }
+            ],
+        ),
+    ):
+        thread = f"T-00000000-0000-4000-8000-{ordinal:012d}"
+        header = fixtures["journal"](thread, parent=False)[0]
+        write_source(
+            logs / f"{thread}.jsonl",
+            [
+                header,
+                *(
+                    {
+                        "schema_version": 1,
+                        "captured_at": timestamp,
+                        "thread_id": thread,
+                        **row,
+                    }
+                    for row in activity
+                ),
+            ],
+        )
+
+    canonical = discover_store(current_dir=project_dir, global_scope=True).store
+    expected = {
+        str(run.root_session_id): (
+            str(graph.root_session_id),
+            tuple(sorted(str(s.session_id) for s in run.sessions)),
+        )
+        for graph in canonical.session_graphs.values()
+        for run in orchestration_runs(graph)
+    }
+    with ServiceRuntime(global_scope=True, current_dir=project_dir) as runtime:
+        inventory = success(runtime, "project.sessions", limit=200)
+        actual = {
+            row["root_session_id"]: (
+                row["lineage_root_session_id"],
+                tuple(sorted(row["session_ids"])),
+            )
+            for row in inventory["items"]
+        }
+        assert actual == expected, {
+            "inventory_only": actual.keys() - expected.keys(),
+            "canonical_only": expected.keys() - actual.keys(),
+        }
+        for root in actual:
+            assert success(runtime, "session.stats", session_id=root)
+    print(
+        f"PASS source acceptance: {len(extra_paths) + 4} sources, {len(expected)} runs, zero root/member/lineage mismatches; every inventory root resolves"
+    )
+
+    timings = []
+    for _ in range(2):
+        before = filesystem_state()
+        started = time.perf_counter()
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                code,
+                "project",
+                "sessions",
+                "--global-scope",
+                "--output",
+                "json",
+            ],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        timings.append(time.perf_counter() - started)
+        assert filesystem_state() == before, "CLI inventory changed the filesystem"
+        assert json.loads(result.stdout)["total"] == len(expected)
+    print(
+        f"Inventory timing (fixture CLI, separate processes): cold={timings[0]:.3f}s repeat={timings[1]:.3f}s; no persistent cache"
+    )
+
+    # Design-approved A1b follow-up: single-source admission cannot yet account
+    # for a fork whose entire transcript disappears after parent-aware cutting.
+    inherited_id = "00000000-0000-4000-8000-000000000305"
+    inherited_rows = [
+        json.loads(line)
+        for line in (codex_dir / f"rollout-{codex_parent}.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    inherited_rows[0]["payload"].update(id=inherited_id, forked_from_id=codex_parent)
+    write_source(codex_dir / f"rollout-{inherited_id}.jsonl", inherited_rows)
+    canonical_with_fork = discover_store(
+        current_dir=project_dir, global_scope=True
+    ).store
+    canonical_roots = {
+        str(run.root_session_id)
+        for graph in canonical_with_fork.session_graphs.values()
+        for run in orchestration_runs(graph)
+    }
+    with ServiceRuntime(global_scope=True, current_dir=project_dir) as runtime:
+        rows = success(runtime, "project.sessions", limit=200)["items"]
+        topology_roots = {row["root_session_id"] for row in rows}
+        assert topology_roots - canonical_roots == {inherited_id}
+        assert not canonical_roots - topology_roots
+        error(
+            runtime,
+            request("session.stats", session_id=inherited_id),
+            "resource_not_found",
+        )
+    print(
+        "KNOWN GAP A1b: one inherited-only Codex fork is topology-only until its first owned turn; all approved admission boundaries remain strict"
+    )
+    for path in extra_paths:
+        path.unlink()
+
     for path in logs.glob("*.jsonl"):
         path.unlink()
     with ServiceRuntime(global_scope=True, current_dir=logs) as runtime:
         error(runtime, request("project.list"), "local_source_unavailable")
+    assert not (Path.home() / ".coding-trajectory").exists()
     assert not failures, "local-only qualification failures:\n" + "\n".join(failures)
     print(
-        "PASS local-only: offline filesystem/CLI/runtime, local/auto, unavailable shared/remote, empty filters, typed errors, cursor/version binding, isolated batch union, SQLite privacy"
+        "PASS local-only: offline filesystem/CLI/runtime, local/auto, unavailable shared/remote, empty filters, typed errors, cursor/version binding, isolated batch union, no filesystem writes"
     )
 
 

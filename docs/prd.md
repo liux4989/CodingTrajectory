@@ -77,16 +77,18 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 
 - Chronicle is the local canonical query layer, not a publication format or
   remote storage authority. Remote delivery is deferred and unavailable.
-- Vendor logs feed adapter-owned streamed relationship metadata for inventory.
-  Detail queries lazily reconstruct requested runs through existing canonical
-  ingestion, then apply publication-independent canonical retention.
+- Vendor logs feed adapter-owned streamed relationship metadata for inventory,
+  with fresh topology discovery per request. Detail queries reconstruct only
+  selected runs and their canonical dependencies through existing canonical
+  ingestion, then apply publication-independent retention and redaction in memory.
 - Consumers may read bounded canonical resources directly instead of going
   through a Core-owned display projection. Stable hierarchy references retain
   their meaning across contextual and metric queries.
-- One disposable `~/.coding-trajectory/local.sqlite` caches source fingerprints,
-  topology, ownership, and retained canonical graphs. Immutable logs remain the
-  evidence authority; incompatible caches are rebuilt rather than migrated as
-  public canonical history.
+- Historical and inventory queries have no cross-request derived persistence.
+  Core no longer uses `~/.coding-trajectory/local.sqlite`; topology and retained
+  graphs are reused only within one request or explicit batch. Immutable logs
+  remain the evidence authority. Repeated detail reads of large runs repeat
+  ingestion rather than benefiting from a persistent graph cache.
 - No upfront preparation, packs, manifests, saved snapshots, signatures, or
   byte-budget pages are required. Display and metric responses are computed on
   request and never become required canonical dependencies.
@@ -114,6 +116,8 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
   method version. Inventory uses identity ordering; content uses canonical source
   order with ID tie-breakers. Determinism is per call, not a cross-call snapshot.
   Published-view references and stale-view errors are removed.
+- Stateless scoped ingestion preserves native metrics and public vNext cursor
+  contracts; it does not introduce a new cursor or snapshot model.
 
 ### Chronicle query ownership
 
@@ -126,7 +130,11 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
   ordering, timestamps, normalized type and observed status when supported.
 - `living.sessions` owns the bounded changing-session inventory;
   `living.events` owns scoped canonical resource changes. Their behavioral
-  storage remains unchanged by the retained-graph refactor.
+  SQLite stores in `~/.coding-trajectory/living-sessions/` and
+  `~/.coding-trajectory/living-events/` remain pending migration in the separate
+  Job B living redesign. Removing Core's `local.sqlite` is not that migration.
+- Loop's `investigations.sqlite3` and `monitor.sqlite3` are product/user data,
+  not Core derived caches, and remain intact.
 
 ### Core reference display ownership
 
@@ -196,7 +204,7 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - Provider-specific payloads remain in transcript `data` and canonical `vendor_data` only when they are useful to CT; unused raw log properties are skipped instead of modeled.
 - Core ingestion may apply a consumer-neutral retention policy after canonical identifiers are stabilized. `trajectory` retains replay evidence; `measurements` retains hierarchy, usage, runtime, reported cost, tool outcomes, and reconciliation inputs while releasing transcript bodies. Both policies preserve the same canonical facts for their shared metric contracts.
 - Retention policy must not introduce consumer concepts such as waste scores, rankings, dashboard cards, default horizons, or UI labels. Those remain projection-layer decisions, and immutable vendor logs remain the evidence authority for lazy detail reconstruction.
-- Consumer-owned derived stores are replaceable artifacts, not canonical compatibility boundaries. An incompatible SQLite format must be rebuilt from immutable logs; core vendor compatibility and versioned public API contracts remain separate responsibilities.
+- Request-scoped retained graphs are in-memory reconstructions, not a persistent SQLite format or canonical compatibility boundary. Core vendor compatibility and versioned public API contracts remain separate responsibilities; living-store migration and Loop product/user data have their own ownership.
 
 # Activity Projection Layer
 - Activity projections have three separate layers: immutable vendor evidence, canonical item lifecycle reconstruction, and compact presentation. A presentation summary never replaces its underlying item evidence.
@@ -206,8 +214,9 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 
 # Chronicle history
 
-- Chronicle queries read publication-independent retained canonical graphs from
-  local vendor evidence. Inventory metadata locates requested runs; it does not
+- Historical Chronicle queries reconstruct publication-independent retained
+  canonical graphs in memory from local vendor evidence for each request or
+  explicit batch. Fresh inventory metadata locates selected runs; it does not
   replace canonical ingestion or supply fabricated measurements.
 - Direct historical handlers consume those graphs. Metrics are calculated on
   request, while the existing live pricing path remains unchanged.
