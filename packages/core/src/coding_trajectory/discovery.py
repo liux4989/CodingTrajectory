@@ -37,7 +37,11 @@ from coding_trajectory.ingestion import (
     CodexAdapter,
     PiAdapter,
 )
-from coding_trajectory.ingestion.adapters.base import BaseAdapter, SessionHeader
+from coding_trajectory.ingestion.adapters.base import (
+    BaseAdapter,
+    SessionHeader,
+    SourceTopology,
+)
 from coding_trajectory.ingestion.common import (
     canonical_json,
     normalize_project_key,
@@ -394,6 +398,8 @@ def _deep_merge_mappings(target: dict[str, object], source: dict[str, object]) -
 
 def scan_parent_turn_ids(
     candidates: list[tuple[Vendor, type[BaseAdapter], Path]],
+    *,
+    topologies: dict[Path, SourceTopology] | None = None,
 ) -> dict[Path, set[str] | None]:
     """Pass 1 of the two-pass ingest: per-file parent started-turn-id inputs.
 
@@ -406,12 +412,16 @@ def scan_parent_turn_ids(
 
     started_turn_ids_by_session: dict[UUID, set[str]] = {}
     parent_session_by_path: dict[Path, UUID | None] = {}
-    header_scans: dict[Path, tuple[BaseAdapter, SessionHeader | None]] = {}
+    header_scans: dict[
+        Path, tuple[BaseAdapter, SessionHeader | SourceTopology | None]
+    ] = {}
     failed_sessions: set[UUID] = set()
     for vendor, adapter_cls, path in candidates:
         adapter = adapter_cls()
         try:
-            header = adapter.scan_header(path)
+            header = (topologies or {}).get(path)
+            if header is None:
+                header = adapter.scan_header(path)
         except Exception as exc:  # noqa: BLE001 - isolate untrusted source parsing
             debug.warn(
                 f"failed to scan {vendor.value} session header: {exc}",

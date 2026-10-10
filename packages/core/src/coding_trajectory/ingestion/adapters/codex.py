@@ -416,30 +416,46 @@ def _iter_own_records(
     if _session_forked_from_id(record for record, _span in materialized) is None:
         yield from materialized
         return
+    owned_turn_ids = _owned_turn_ids(
+        (record for record, _span in materialized), parent_started_turn_ids
+    )
+    yield from _iter_owned_records(
+        materialized, parent_started_turn_ids, owned_turn_ids
+    )
 
-    started: list[str] = []
+
+def _owned_turn_ids(
+    records: Iterable[dict], parent_started_turn_ids: set[str]
+) -> set[str]:
+    """Collect lifecycle ownership without retaining records or their bodies."""
+    started: set[str] = set()
+    last_started = None
     completed: set[str] = set()
-    for record, _span in materialized:
+    for record in records:
         payload = record.get("payload")
         payload = payload if isinstance(payload, dict) else {}
         turn_id = payload.get("turn_id")
         if not isinstance(turn_id, str):
             continue
         if payload.get("type") == "task_started":
-            started.append(turn_id)
+            started.add(turn_id)
+            last_started = turn_id
         elif payload.get("type") == "task_complete":
             completed.add(turn_id)
-    owned_turn_ids = {
-        turn_id
-        for turn_id in started
-        if turn_id not in parent_started_turn_ids and turn_id in completed
-    }
-    if started and started[-1] not in parent_started_turn_ids:
+    owned = (started & completed) - parent_started_turn_ids
+    if last_started is not None and last_started not in parent_started_turn_ids:
         # The final lifecycle may be a legitimate in-progress child turn.
-        owned_turn_ids.add(started[-1])
+        owned.add(last_started)
+    return owned
 
+
+def _iter_owned_records(
+    records: Iterable[tuple[dict, RecordSpan | None]],
+    parent_started_turn_ids: set[str],
+    owned_turn_ids: set[str],
+) -> Iterator[tuple[dict, RecordSpan | None]]:
     keep_active_window = False
-    for record, span in materialized:
+    for record, span in records:
         if record.get("type") in {"session_meta", "compacted"}:
             yield record, span
             continue
@@ -474,20 +490,11 @@ def _nested_turn_id(value: object) -> str | None:
 def _cut_inherited_records(
     records: list[dict], parent_started_turn_ids: set[str] | None
 ) -> list[dict]:
-    """Drop the inherited-history segment a forked rollout re-materializes.
+    """Drop inherited records using explicit ownership and lifecycle windows.
 
-    A forked continuation window copies the source's recent turns verbatim
-    (including their ``task_started``/``task_complete``/``token_count``/
-    ``sub_agent_activity`` records). Re-projecting that copy double-counts
-    turns/tokens and re-emits inherited spawn edges. The fork's own turns begin
-    at the first ``task_started`` whose ``turn_id`` is absent from the parent's
-    raw ``task_started`` set (validated: a clean cut for every fork - all
-    preceding turns are inherited, all from here are own, and no ``spawn_agent``
-    call lands in the dropped segment).
-
-    The leading ``session_meta`` record(s) are always kept (they are the fork's
-    own). When the parent set is unavailable (single-file ingestion) or the file
-    is not a fork, records are returned unchanged.
+    Completed child turns and the final in-progress child turn survive, even
+    when parent turns are interleaved. Metadata and compaction records survive
+    independently. A missing parent set preserves standalone ingestion.
     """
     if parent_started_turn_ids is None:
         return records
@@ -562,7 +569,7 @@ class CodexAdapter(BaseAdapter):
         return self._build_session(source, transcript, state, retention=retention)
 
     def scan_started_turn_ids(self, source: Path) -> set[str] | None:
-        return self.scan_started_turn_ids_records(self._iter_records(source))
+        return self.scan_started_turn_ids_records(self._iter_topology_records(source))
 
     def scan_started_turn_ids_records(self, records: Iterable[dict]) -> set[str] | None:
         started: set[str] = set()
@@ -584,10 +591,27 @@ class CodexAdapter(BaseAdapter):
 
         return self._identity_from_records(self._iter_topology_records(source))
 
-    def scan_topology(self, source: Path) -> SourceTopology | None:
+    def scan_topology(
+        self, source: Path, *, parent_started_turn_ids: set[str] | None = None
+    ) -> SourceTopology | None:
+        records = self._iter_topology_records(source)
+        if parent_started_turn_ids is not None:
+            header = self.scan_identity(source)
+            if header is not None and header.parent_session_id is not None:
+                owned = _owned_turn_ids(
+                    self._iter_topology_records(source), parent_started_turn_ids
+                )
+                records = (
+                    record
+                    for record, _span in _iter_owned_records(
+                        ((record, None) for record in records),
+                        parent_started_turn_ids,
+                        owned,
+                    )
+                )
         topology = None
         admitted = False
-        for record in self._iter_topology_records(source):
+        for record in records:
             outer_type = record.get("type", "")
             payload = record.get("payload") or {}
             if outer_type == "session_meta" and topology is not None:

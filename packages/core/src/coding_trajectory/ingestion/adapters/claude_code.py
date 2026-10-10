@@ -289,7 +289,9 @@ class ClaudeCodeAdapter(BaseAdapter):
             cwd=_as_non_empty_str((scan.first_session_record or {}).get("cwd")),
         )
 
-    def scan_topology(self, source: Path) -> SourceTopology | None:
+    def scan_topology(
+        self, source: Path, *, parent_started_turn_ids: set[str] | None = None
+    ) -> SourceTopology | None:
         topology = super().scan_topology(source)
         if topology is None:
             return None

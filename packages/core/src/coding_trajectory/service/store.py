@@ -18,6 +18,7 @@ from coding_trajectory.discovery import (
     format_discovery_sources,
     infer_project_identifier,
     locate_session_files,
+    scan_parent_turn_ids,
 )
 from coding_trajectory.ingestion.adapters.base import SessionHeader, SourceTopology
 from coding_trajectory.ingestion.common import normalize_project_key
@@ -246,14 +247,20 @@ def _refresh_topology(
             )
         }
 
-    def scan(path: str) -> SourceTopology | None:
-        if path not in cache._topologies:
+    def scan(
+        path: str, parent_started_turn_ids: set[str] | None = None
+    ) -> SourceTopology | None:
+        if path not in cache._topologies or parent_started_turn_ids is not None:
             candidate = cache._candidates[path]
-            topology = candidate.adapter_cls().scan_topology(candidate.path)
+            topology = candidate.adapter_cls().scan_topology(
+                candidate.path, parent_started_turn_ids=parent_started_turn_ids
+            )
             if topology is not None:
                 cache._topologies[path] = topology.model_copy(
                     update={"project": topology.project or candidate.path.stem}
                 )
+            else:
+                cache._topologies.pop(path, None)
         return cache._topologies.get(path)
 
     # Locate entry files first, but never limit membership to their parent
@@ -283,6 +290,7 @@ def _refresh_topology(
             projects = None
             break
 
+    selected_candidates = []
     for path, candidate in cache._candidates.items():
         try:
             if projects is not None and path not in cache._topologies:
@@ -306,10 +314,33 @@ def _refresh_topology(
                     and normalize_project_key(project) not in projects
                 ):
                     continue
+            selected_candidates.append(
+                (candidate.vendor, candidate.adapter_cls, candidate.path)
+            )
             scan(path)
         except (OSError, ValueError):
             # Malformed/changing sources can be retried by the next request.
             continue
+    # Use exactly the same segmented-parent union and failed-parent exclusion
+    # as ingestion. Fork admission observes only records that survive its cut.
+    # Reuse scanned identities rather than reading every vendor header twice.
+    cut_inputs = scan_parent_turn_ids(
+        selected_candidates,
+        topologies={
+            source: cache._topologies[str(source.resolve())]
+            for _vendor, _adapter_cls, source in selected_candidates
+            if str(source.resolve()) in cache._topologies
+        },
+    )
+    for _vendor, _adapter_cls, source in selected_candidates:
+        path = str(source.resolve())
+        if source not in cut_inputs:
+            cache._topologies.pop(path, None)
+            continue
+        try:
+            scan(path, cut_inputs[source])
+        except (OSError, ValueError):
+            cache._topologies.pop(path, None)
     cache._runs = orchestration_topology(cache._topologies)
     cache._full_topology = projects is None
     for run in cache._runs:

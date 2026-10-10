@@ -204,7 +204,9 @@ class PiAdapter(BaseAdapter):
             cwd=facts.cwd,
         )
 
-    def scan_topology(self, source: Path) -> SourceTopology | None:
+    def scan_topology(
+        self, source: Path, *, parent_started_turn_ids: set[str] | None = None
+    ) -> SourceTopology | None:
         if not _is_session_source(source) or not any(
             _transcript_timestamp(record) is not None
             for record in self._iter_topology_records(source)

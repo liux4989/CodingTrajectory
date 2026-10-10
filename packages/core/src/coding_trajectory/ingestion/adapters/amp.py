@@ -134,7 +134,9 @@ class AmpAdapter(BaseAdapter):
     def scan_header(self, source: Path) -> SessionHeader | None:
         return self.scan_identity_records(source, self._iter_topology_records(source))
 
-    def scan_topology(self, source: Path) -> SourceTopology | None:
+    def scan_topology(
+        self, source: Path, *, parent_started_turn_ids: set[str] | None = None
+    ) -> SourceTopology | None:
         return self.scan_topology_records(source, self._iter_topology_records(source))
 
     def scan_topology_records(

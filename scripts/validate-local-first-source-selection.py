@@ -570,37 +570,124 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
         f"Inventory timing (fixture CLI, separate processes): cold={timings[0]:.3f}s repeat={timings[1]:.3f}s; no persistent cache"
     )
 
-    # Design-approved A1b follow-up: single-source admission cannot yet account
-    # for a fork whose entire transcript disappears after parent-aware cutting.
-    inherited_id = "00000000-0000-4000-8000-000000000305"
+    # Parent-aware admission must agree with full ingestion, including the
+    # boundaries where a simple non-parent-turn-id check would be incorrect.
     inherited_rows = [
         json.loads(line)
         for line in (codex_dir / f"rollout-{codex_parent}.jsonl")
         .read_text()
         .splitlines()
     ]
-    inherited_rows[0]["payload"].update(id=inherited_id, forked_from_id=codex_parent)
-    write_source(codex_dir / f"rollout-{inherited_id}.jsonl", inherited_rows)
-    canonical_with_fork = discover_store(
-        current_dir=project_dir, global_scope=True
-    ).store
-    canonical_roots = {
-        str(run.root_session_id)
-        for graph in canonical_with_fork.session_graphs.values()
-        for run in orchestration_runs(graph)
-    }
-    with ServiceRuntime(global_scope=True, current_dir=project_dir) as runtime:
-        rows = success(runtime, "project.sessions", limit=200)["items"]
-        topology_roots = {row["root_session_id"] for row in rows}
-        assert topology_roots - canonical_roots == {inherited_id}
-        assert not canonical_roots - topology_roots
-        error(
-            runtime,
-            request("session.stats", session_id=inherited_id),
-            "resource_not_found",
-        )
+
+    def lifecycle(kind, turn_id):
+        return {
+            "type": "event_msg",
+            "timestamp": timestamp,
+            "payload": {"type": kind, "turn_id": turn_id},
+        }
+
+    segment = [
+        inherited_rows[0],
+        lifecycle("task_started", "parent-segment"),
+        lifecycle("task_complete", "parent-segment"),
+    ]
+    write_source(codex_dir / f"rollout-{codex_parent}-segment.jsonl", segment)
+    fork_cases = (
+        ("inherited-only", {}, [], False),
+        ("base-instructions", {"base_instructions": {"text": "own context"}}, [], True),
+        (
+            "compaction",
+            {},
+            [{"type": "compacted", "timestamp": timestamp, "payload": {}}],
+            True,
+        ),
+        (
+            "completed-owned",
+            {},
+            [lifecycle("task_started", "own"), lifecycle("task_complete", "own")],
+            True,
+        ),
+        ("in-progress-owned", {}, [lifecycle("task_started", "own")], True),
+        (
+            "nonfinal-incomplete",
+            {},
+            [lifecycle("task_started", "own"), *inherited_rows[1:]],
+            False,
+        ),
+        (
+            "interleaved-parent",
+            {},
+            [
+                lifecycle("task_started", "own"),
+                *inherited_rows[1:],
+                lifecycle("task_complete", "own"),
+            ],
+            True,
+        ),
+        (
+            "inherited-other-segment",
+            {},
+            segment[1:],
+            False,
+        ),
+        (
+            "missing-parent",
+            {"forked_from_id": "00000000-0000-4000-8000-000000000999"},
+            [],
+            True,
+        ),
+    )
+    for ordinal, (label, metadata, activity, admitted) in enumerate(fork_cases, 305):
+        sid = f"00000000-0000-4000-8000-{ordinal:012d}"
+        rows = [
+            {
+                **inherited_rows[0],
+                "payload": {
+                    **inherited_rows[0]["payload"],
+                    "id": sid,
+                    "forked_from_id": codex_parent,
+                    **metadata,
+                },
+            },
+            *inherited_rows[1:],
+            *activity,
+        ]
+        write_source(codex_dir / f"rollout-{sid}.jsonl", rows)
+        canonical = discover_store(current_dir=project_dir, global_scope=True).store
+        assert (sid in {str(value) for value in canonical.sessions}) == admitted, label
+        expected = {
+            str(run.root_session_id): (
+                str(graph.root_session_id),
+                tuple(sorted(str(session.session_id) for session in run.sessions)),
+            )
+            for graph in canonical.session_graphs.values()
+            for run in orchestration_runs(graph)
+        }
+        with ServiceRuntime(global_scope=True, current_dir=project_dir) as runtime:
+            with patch.object(
+                store_module,
+                "_ingest_sessions",
+                side_effect=AssertionError("parent-aware inventory built transcripts"),
+            ):
+                inventory = success(runtime, "project.sessions", limit=200)["items"]
+            actual = {
+                row["root_session_id"]: (
+                    row["lineage_root_session_id"],
+                    tuple(sorted(row["session_ids"])),
+                )
+                for row in inventory
+            }
+            assert actual == expected, label
+            if admitted:
+                assert success(runtime, "session.stats", session_id=sid)
+            else:
+                error(
+                    runtime,
+                    request("session.stats", session_id=sid),
+                    "resource_not_found",
+                )
     print(
-        "KNOWN GAP A1b: one inherited-only Codex fork is topology-only until its first owned turn; all approved admission boundaries remain strict"
+        f"PASS parent-aware Codex admission: {len(fork_cases)} ownership/metadata cases, segmented parent union, strict root/member/lineage parity, no transcript ingestion"
     )
     for path in extra_paths:
         path.unlink()

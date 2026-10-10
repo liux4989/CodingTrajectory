@@ -93,7 +93,9 @@ class BaseAdapter(ABC):
                 if isinstance(record, dict):
                     yield record
 
-    def scan_topology(self, source: Path) -> SourceTopology | None:
+    def scan_topology(
+        self, source: Path, *, parent_started_turn_ids: set[str] | None = None
+    ) -> SourceTopology | None:
         header = self.scan_header(source)
         if header is None:
             return None

@@ -100,11 +100,10 @@ Core CI runs Python/contract checks and the Loop web/integration checks. It does
 not build, qualify, prepare, or deploy the parked remote runtime.
 
 The local qualification checks admission parity for header-only sources, valid
-runtime-only sources, and owned spawn/fork relationships. It also reports known
-follow-up **A1b**: an inherited-only Codex fork may appear in inventory while
-detail returns `resource_not_found`, until the fork records its first owned turn.
-Parent-aware topology admission is deferred; the workflow does not hide this gap
-or relax equality for the approved admission boundaries.
+runtime-only sources, and owned spawn/fork relationships. Codex fork admission
+uses ingestion's parent-aware ownership cut, including segmented parent history:
+inherited-only forks are absent until they have owned activity. Missing parents
+retain the existing standalone behavior. These scans do not ingest transcripts.
 
 ```sh
 uv run python scripts/check-core-protocol.py
