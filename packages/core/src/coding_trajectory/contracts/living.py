@@ -1,40 +1,67 @@
-"""Contracts for the living.* snapshot/delta protocol."""
+"""Stateless live inventory and retained-resource query contracts."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
+from uuid import UUID
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 
 
 class LivingScope(RequestModel):
-    """Optional hierarchy scope for living-event snapshot and delta reads."""
-
     root_session_id: str | None = None
     session_id: str | None = None
     turn_id: str | None = None
     item_id: str | None = None
 
+    @field_validator("root_session_id", "session_id", "turn_id", "item_id")
+    @classmethod
+    def canonical_id(cls, value: str | None) -> str | None:
+        return str(UUID(value.removeprefix("T-"))) if value is not None else None
+
+    @model_validator(mode="after")
+    def one_scope(self) -> Self:
+        if (self.root_session_id is not None) + (self.session_id is not None) != 1:
+            raise ValueError("scope requires exactly one root_session_id or session_id")
+        return self
+
 
 class LivingEventsRequest(RequestModel):
-    """Frozen ``ct.living_events.v1`` request contract."""
-
+    scope: LivingScope
     mode: Literal["view", "details"] = "view"
-    scope: LivingScope = Field(default_factory=LivingScope)
-    after: str | None = Field(default=None, max_length=4096)
-    through: str | None = Field(default=None, max_length=4096)
-    limit: int = Field(default=50, ge=1, le=200)
+    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int = Field(default=50, ge=1, le=200, strict=True)
 
 
 class LivingSessionsRequest(RequestModel):
-    """``ct.living_sessions.v2`` global inventory request contract."""
+    root_session_id: str | None = None
+    session_id: str | None = None
+    project_name: str | None = Field(default=None, min_length=1)
+    horizon_days: int = Field(default=3, ge=1, le=30, strict=True)
+    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int = Field(default=50, ge=1, le=200, strict=True)
 
-    after: str | None = Field(default=None, max_length=4096)
-    through: str | None = Field(default=None, max_length=4096)
-    limit: int = Field(default=50, ge=1, le=200)
+    @field_validator("root_session_id", "session_id")
+    @classmethod
+    def canonical_id(cls, value: str | None) -> str | None:
+        return str(UUID(value.removeprefix("T-"))) if value is not None else None
+
+    @model_validator(mode="after")
+    def one_selector(self) -> Self:
+        if (
+            sum(
+                value is not None
+                for value in (self.root_session_id, self.session_id, self.project_name)
+            )
+            > 1
+        ):
+            raise ValueError(
+                "root_session_id, session_id and project_name are mutually exclusive"
+            )
+        return self
 
 
 class LivingResourcePath(ContractModel):
@@ -58,7 +85,6 @@ class LivingContentReferenceTarget(ContractModel):
 
 class LivingContentReference(ContractModel):
     model_config = ConfigDict(extra="allow", serialize_by_alias=True)
-
     type: Literal["content_ref"] = Field(alias="$type")
     size_chars: int = Field(ge=0)
     ref: LivingContentReferenceTarget
@@ -77,18 +103,6 @@ class LivingUserRequest(ContractModel):
     content: LivingInlineContent
 
 
-class LivingSourceCheckpoint(ContractModel):
-    path: str
-    file_identity: str | None = None
-    size: int = Field(ge=0)
-    mtime_ns: int = Field(ge=0)
-    committed_offset: int = Field(ge=0)
-    trailing_bytes: int = Field(ge=0)
-    status: Literal["ready", "partial", "error", "deleted"]
-    error: str | None = None
-    last_success_revision: int | None = Field(default=None, ge=0)
-
-
 class LivingSessionResource(ContractModel):
     session_id: str
     root_session_id: str
@@ -104,7 +118,6 @@ class LivingSessionResource(ContractModel):
     turn_count: int = Field(ge=0)
     item_count: int = Field(ge=0)
     context_checkpoint_count: int = Field(ge=0)
-    source_checkpoint: LivingSourceCheckpoint | None = None
 
 
 class LivingTurnResource(ContractModel):
@@ -127,6 +140,7 @@ class LivingItemResource(ContractModel):
     turn_id: str
     kind: str
     type: str
+    status: str | None = None
     operations: list[str] | None = None
     shape: dict[str, LivingContentReference | Any] | None = None
     event_ids: list[str] = Field(default_factory=list)
@@ -170,20 +184,13 @@ LivingResource = (
 )
 
 
-class LivingChange(ContractModel):
-    cursor: str
-    revision: int = Field(ge=0)
-    operation: Literal["upsert", "remove", "reset"]
+class LivingEventResource(ContractModel):
     resource_kind: Literal[
-        "session",
-        "turn",
-        "item",
-        "context_checkpoint",
-        "session_edge",
+        "session", "turn", "item", "context_checkpoint", "session_edge"
     ]
     path: LivingResourcePath
-    resource: LivingResource | None = None
-    reason: str | None = None
+    resource: LivingResource
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class LivingProtocolIssue(ContractModel):
@@ -194,56 +201,35 @@ class LivingProtocolIssue(ContractModel):
 
 
 class LivingEventsResponse(ContractModel):
-    schema_version: Literal["ct.living_events.v1"]
+    schema_version: Literal["ct.living_events.v2"]
     mode: Literal["view", "details"]
-    page_kind: Literal["snapshot", "delta"]
-    through: str
+    resources: list[LivingEventResource] = Field(default_factory=list)
+    total: int = Field(ge=0)
+    returned: int = Field(ge=0)
     next_cursor: str | None = None
-    has_more: bool
-    changes: list[LivingChange] = Field(default_factory=list)
     issues: list[LivingProtocolIssue] = Field(default_factory=list)
 
 
-class LivingSessionReadiness(ContractModel):
-    status: Literal["ready", "partial", "error", "deleted", "unknown"]
-    committed_offset: int | None = Field(default=None, ge=0)
-    size: int | None = Field(default=None, ge=0)
-    mtime_ns: int | None = Field(default=None, ge=0)
-
-
-class LivingSessionInventoryResource(ContractModel):
+class LivingSessionMetadata(ContractModel):
     session_id: str
     root_session_id: str
+    lineage_root_session_id: str
     vendor: str
-    model: str | None = None
-    reasoning_effort: str | None = None
+    project: str
     cwd: str | None = None
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
-    latest_activity_at: datetime | None = None
-    state: Literal["living", "not_living"]
-    latest_turn_status: (
-        Literal["running", "interrupted", "completed", "incomplete"] | None
-    ) = None
-    source_readiness: LivingSessionReadiness
+    modified: datetime
+    size: int = Field(ge=0)
+    state: Literal["living", "inactive"]
 
 
-class LivingSessionsChange(ContractModel):
-    cursor: str
-    revision: int = Field(ge=0)
-    operation: Literal["upsert", "remove", "reset"]
-    resource_kind: Literal["session"]
-    path: LivingResourcePath
-    resource: LivingSessionInventoryResource | None = None
-    reason: str | None = None
+class LivingSessionInventoryResource(LivingSessionMetadata):
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class LivingSessionsResponse(ContractModel):
-    schema_version: Literal["ct.living_sessions.v2"]
-    mode: Literal["view"]
-    page_kind: Literal["snapshot", "delta"]
-    through: str
+    schema_version: Literal["ct.living_sessions.v3"]
+    items: list[LivingSessionInventoryResource] = Field(default_factory=list)
+    total: int = Field(ge=0)
+    returned: int = Field(ge=0)
     next_cursor: str | None = None
-    has_more: bool
-    changes: list[LivingSessionsChange] = Field(default_factory=list)
     issues: list[LivingProtocolIssue] = Field(default_factory=list)

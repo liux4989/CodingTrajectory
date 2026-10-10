@@ -31,6 +31,7 @@ from loop_plugin.monitor.models import (
     FindingStatusEvent,
     FindingStatusRequest,
     MonitorRun,
+    RefreshState,
     RunRequest,
     Watch,
     WatchCreateRequest,
@@ -85,7 +86,7 @@ def _query_limit(query: dict[str, list[str]], *, default: int, maximum: int) -> 
 def _apply_watch_update(watch: Watch, update: WatchUpdateRequest) -> Watch:
     """Apply a human edit. Scope/config changes create a new effective
     revision so historical evaluations stay pinned to their configuration,
-    and reset the refresh cursor so the new policy re-observes the scope."""
+    and clear evaluated digests so the new policy re-observes the scope."""
     now = datetime.now(UTC)
     if update.name is not None:
         watch.name = update.name
@@ -107,9 +108,7 @@ def _apply_watch_update(watch: Watch, update: WatchUpdateRequest) -> Watch:
                 changed_at=now,
             )
         )
-        watch.refresh = watch.refresh.model_copy(
-            update={"cursor": None, "watermark": None, "caught_up": False}
-        )
+        watch.refresh = RefreshState()
     watch.updated_at = now
     return watch
 

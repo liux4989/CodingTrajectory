@@ -749,7 +749,7 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
         <p className="muted small">
           Last refresh {date(watch.refresh.last_run_at)} ·{" "}
           {watch.refresh.caught_up
-            ? "caught up with the local change feed"
+            ? "caught up with the scoped inventory"
             : "more changed sessions remain"}
         </p>
       )}
@@ -822,7 +822,7 @@ export function MonitorWatchDetail({ watchId }: { watchId: string }) {
             <CardTitle>Edit configuration</CardTitle>
             <CardDescription>
               Saving creates revision {(watch.config_revision ?? 1) + 1} and
-              resets the refresh position so the new policy re-observes the
+              clears evaluated digests so the new policy re-observes the
               scope.
             </CardDescription>
           </CardHeader>

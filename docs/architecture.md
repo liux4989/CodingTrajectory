@@ -62,11 +62,13 @@ not frozen across calls as logs change. There are no published-view references
 or stale-view errors. This stateless ingestion change preserves native metrics
 and public vNext cursors.
 
-Living queries still use the existing `living-events/` and `living-sessions/`
-SQLite stores under `~/.coding-trajectory/`. Their behavior and persistence are
-pending the separate Job B living redesign; removing `local.sqlite` does not
-mean those stores have already migrated. Loop's `investigations.sqlite3` and
-`monitor.sqlite3` are product/user data and remain, not Core derived caches.
+Living queries are stateless too. `living.sessions` projects source topology and
+file metadata without ingesting transcripts; `living.events` projects a required
+run or subordinate scope through the same retained-run path as detail queries.
+Each returned resource has a stable digest. Consumers compare complete live
+passes and own their last-seen state; Core keeps no change history, removal
+markers, checkpoints or second payload store. Loop's `investigations.sqlite3`
+and `monitor.sqlite3` remain product/user data, not Core derived caches.
 
 Local envelopes use `result`, not the parked remote envelope's `data`.
 Transport metadata states `local` / `live` / `retained`, without snapshot identity.
@@ -99,7 +101,7 @@ Paths below are relative to `packages/core/src/coding_trajectory/`, unless state
 | Local execution and source capabilities | `runtime.py` |
 | Direct contextual queries and pagination | `service/` |
 | Native metrics and live pricing | `metrics/` |
-| Living behavior and storage | `living_sessions.py`, `living_events.py`, `living_events_store.py` |
+| Stateless living inventory and resource projections | `living_sessions.py`, `living_events.py` |
 | Public contracts | `contracts/` and `validation/core-protocol.json` at the repository root |
 | Product state and judgments | `packages/plugins/loop/` at the repository root |
 

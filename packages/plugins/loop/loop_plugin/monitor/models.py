@@ -99,14 +99,22 @@ class WatchRevision(BaseModel):
 
 
 class RefreshState(BaseModel):
-    """Core `living.sessions` continuation position owned by one watch."""
+    """Digests evaluated by one watch, not a Core continuation position."""
 
     model_config = ConfigDict(extra="forbid")
 
-    cursor: str | None = Field(default=None, max_length=4096)
-    watermark: str | None = Field(default=None, max_length=4096)
+    seen: dict[str, str] = Field(default_factory=dict)
+    rebaseline: bool = False
     last_run_at: datetime | None = None
     caught_up: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_continuation(cls, value):
+        if isinstance(value, dict) and {"cursor", "watermark"}.intersection(value):
+            value = {key: item for key, item in value.items() if key not in {"cursor", "watermark"}}
+            value.update(seen={}, rebaseline=True, caught_up=False)
+        return value
 
 
 class Watch(BaseModel):
@@ -233,6 +241,7 @@ class RefreshResult(BaseModel):
     findings: list[Finding]
     summary: EvaluationSummary
     remaining: bool
+    rebaselined: bool = False
     notes: list[str] = Field(default_factory=list)
 
 

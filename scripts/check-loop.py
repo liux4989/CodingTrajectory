@@ -193,22 +193,26 @@ def main():
                 first_event["events"][0]["event_id"]
                 != next_event["events"][0]["event_id"]
             )
-            # Preserve the frozen living-session snapshot continuation protocol.
+            # Current header inventory uses query-bound cursors, not change feeds.
             live_first = core("living.sessions", {"limit": 1})
-            assert live_first["page_kind"] == "snapshot" and live_first["has_more"]
+            assert live_first["returned"] == 1 and live_first["next_cursor"]
+            assert live_first["issues"] == []
             live_next = core(
                 "living.sessions",
                 {
                     "limit": 1,
-                    "after": live_first["next_cursor"],
-                    "through": live_first["through"],
+                    "cursor": live_first["next_cursor"],
                 },
             )
-            assert live_next["through"] == live_first["through"]
+            assert live_next["total"] == live_first["total"]
+            assert live_next["returned"] == 1 and live_next["issues"] == []
             assert (
-                live_first["changes"][0]["path"]["session_id"]
-                != live_next["changes"][0]["path"]["session_id"]
+                live_first["items"][0]["session_id"]
+                != live_next["items"][0]["session_id"]
             )
+            for page in (live_first, live_next):
+                assert not {"changes", "through", "after", "has_more", "page_kind"}.intersection(page)
+                assert all(item["digest"] for item in page["items"])
             reference = {
                 "session_id": session_id,
                 "turn_id": failed["turn_id"],
@@ -307,7 +311,7 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
         "project.sessions": 6,
         "session.usage": 5,
         "session.request_usage": 7,
-        "living.sessions": 4,
+        "living.sessions": 5,
     }
     assert manifest["evaluator"]["type"] == "deterministic"
     assert any(
@@ -431,8 +435,11 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
     assert finding["reference"] == by_outcome["breach"]["reference"]
     assert finding["condition"]["outcome"] == "breach"
     relive = call(f"/api/monitor/watches/{watch_id}/refresh", {})["run"]
-    assert relive["summary"]["skipped_unchanged"] == 3
+    assert relive["summary"]["sessions_examined"] == 0
+    assert relive["summary"]["turns_evaluated"] == 0
     assert relive["findings"] == [] and relive["remaining"] is False
+    assert relive["watch"]["refresh"]["caught_up"] is True
+    assert relive["rebaselined"] is False
 
     # Trigger partitions: dry-run and refresh records coexist per turn.
     all_live = call(
@@ -517,6 +524,28 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
     assert codex_run["summary"]["unavailable"] == 1
     assert codex_run["scope_sessions_total"] == 1
 
+    # A persisted legacy cursor is rebaselined exactly once without evaluation.
+    legacy_id = codex_watch["watch_id"]
+    with sqlite3.connect(monitor_state) as db:
+        record = json.loads(db.execute(
+            "SELECT record FROM watches WHERE watch_id = ?", (legacy_id,)
+        ).fetchone()[0])
+        record["enabled"] = True
+        record["refresh"] = {"cursor": "legacy", "watermark": "legacy", "caught_up": True}
+        db.execute(
+            "UPDATE watches SET record = ? WHERE watch_id = ?",
+            (json.dumps(record), legacy_id),
+        )
+    migrated = call(f"/api/monitor/watches/{legacy_id}")["watch"]
+    assert migrated["refresh"]["rebaseline"] is True
+    assert migrated["refresh"]["seen"] == {} and not migrated["refresh"]["caught_up"]
+    baseline = call(f"/api/monitor/watches/{legacy_id}/refresh", {})["run"]
+    assert baseline["rebaselined"] and baseline["summary"]["sessions_examined"] == 0
+    assert baseline["evaluations"] == [] and baseline["findings"] == []
+    assert baseline["watch"]["refresh"]["seen"] and not baseline["remaining"]
+    again = call(f"/api/monitor/watches/{legacy_id}/refresh", {})["run"]
+    assert not again["rebaselined"] and again["summary"]["sessions_examined"] == 0
+
     # A watch scoped to a missing session fails honestly instead of fabricating.
     missing_watch = call(
         "/api/monitor/watches",
@@ -552,7 +581,7 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
         },
     )["watch"]
     assert revised["config_revision"] == 2 and len(revised["revisions"]) == 2
-    assert revised["refresh"]["cursor"] is None
+    assert revised["refresh"]["seen"] == {} and not revised["refresh"]["rebaseline"]
     rev2 = call(f"/api/monitor/watches/{watch_id}/refresh", {})["run"]
     assert rev2["summary"]["passed"] == 2 and rev2["summary"]["breached"] == 0
     assert rev2["findings"] == []
@@ -589,7 +618,6 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
             )
             + "\n"
         )
-    time.sleep(1.1)  # source mtime resolution for the living feed
     follow = call(f"/api/monitor/watches/{watch_id}/refresh", {})["run"]
     assert follow["summary"]["turns_evaluated"] == 1
     revived = follow["evaluations"][0]
@@ -623,6 +651,31 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
             for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
     assert {"watches", "evaluations", "findings"} <= tables
+
+    # Core's default project horizon is 72 hours, not seven days. Scope is
+    # source modification time, so exercise both sides without changing evidence.
+    source = home / ".codex" / "sessions" / "loop-budget-demo.jsonl"
+    original = source.stat()
+    session_id = "019faa00-0000-7000-8000-0000000000b0"
+    project_scope = {"project_name": "codex-budget-demo"}
+    try:
+        for age_days in (2, 4):
+            os.utime(source, ns=(original.st_atime_ns, time.time_ns() - age_days * 86400 * 10**9))
+            default = core("living.sessions", project_scope)
+            explicit = core("living.sessions", {**project_scope, "horizon_days": 3})
+            assert default == explicit
+            assert [item["session_id"] for item in default["items"]] == (
+                [session_id] if age_days == 2 else []
+            )
+            assert default["issues"] == []
+        wider = core("living.sessions", {**project_scope, "horizon_days": 5})
+        assert [item["session_id"] for item in wider["items"]] == [session_id]
+        for selector in ("root_session_id", "session_id"):
+            scoped = core("living.sessions", {selector: session_id, "horizon_days": 1})
+            assert [item["session_id"] for item in scoped["items"]] == [session_id]
+            assert scoped["issues"] == []
+    finally:
+        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
 
 
 if __name__ == "__main__":

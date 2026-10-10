@@ -29,7 +29,7 @@ REQUIRED_CORE_METHODS: dict[str, int] = {
     "project.sessions": 6,
     "session.usage": 5,
     "session.request_usage": 7,
-    "living.sessions": 4,
+    "living.sessions": 5,
 }
 
 
@@ -79,7 +79,9 @@ STRATEGY_MANIFEST = StrategyManifest(
         "historical_dry_run": "Bounded evaluation over existing local Core evidence.",
         "manual_refresh": (
             "Evaluation of newly observed sessions discovered through the local "
-            "Core living.sessions change feed. Loop polls on human request; it "
+            "Core living.sessions digest inventory. Project refresh uses Core's "
+            "72-hour default horizon; explicit session scope has no horizon. "
+            "Loop polls on human request; it "
             "does not claim a live push guarantee."
         ),
     },
@@ -106,7 +108,9 @@ STRATEGY_MANIFEST = StrategyManifest(
             label="Read local Core session inventory",
             detail=(
                 "Reads project.sessions membership and the living.sessions "
-                "change feed to learn which sessions need evaluation."
+                "scoped digest inventory to learn which sessions need evaluation. "
+                "Core defaults global/project inventory to horizon_days=3 (72 hours), "
+                "configurable from 1 to 30; explicit run/session scope ignores the horizon."
             ),
         ),
         StrategyPermission(

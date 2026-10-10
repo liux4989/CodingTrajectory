@@ -64,11 +64,31 @@ Metrics are computed on request. Pricing keeps the existing live catalog path;
 catalog estimates remain separate from provider-reported cost. Native metric
 formulas and public vNext cursors are unchanged.
 
-Living query behavior still depends on the existing SQLite stores in
-`~/.coding-trajectory/living-events/` and `~/.coding-trajectory/living-sessions/`.
-Their migration is the separate Job B living redesign, not part of removing the
-Core `local.sqlite` cache. Loop's `investigations.sqlite3` and `monitor.sqlite3`
-remain product/user data. Do not delete these stores as Core cache cleanup.
+Living reads also write no derived state. `living.sessions` uses topology and
+file metadata only; `living.events` loads the explicitly scoped retained run.
+Old `local.sqlite`, `living-events/` and `living-sessions/` databases are no longer
+read or updated. Moving these old derived stores to the Trash is a separate
+post-acceptance cleanup, never a side effect of a query or migration. Loop's
+`investigations.sqlite3` and `monitor.sqlite3` remain product/user data; do not
+delete them as Core cache cleanup.
+
+`living.sessions` returns header-level identities, project/cwd, source modified
+time and size, `living`/`inactive` state and a digest. Global/project reads include
+runs with a source modified in the last `horizon_days` (1–30, default 3 / 72
+hours); explicit run scopes ignore the horizon. State uses each session's own
+source mtime and a 300-second activity window. Changing time alone can therefore
+change a digest.
+
+`living.events` requires exactly one `root_session_id` or `session_id`; optional
+`turn_id` and/or `item_id` narrow within that directly loaded run. A bare turn or
+item ID is invalid; a cross-run narrowing ID returns `resource_not_found` without
+loading any other run. Both modes return digests of retained details, so completing
+a tool changes its digest even when the compact view hides those details. Compare
+complete passes to discover removals; neither method emits historical deltas,
+tombstones or reset operations.
+Digest serialization is UTF-8 JSON with sorted keys, compact separators and
+unescaped Unicode. Session digests exclude only their own `digest` field; event
+digests cover the normalized details-mode `resource` payload.
 
 Pages are count-bounded. Treat their unsigned query- and version-bound cursors
 as opaque. Ordering is deterministic per call; a multi-page read is not a saved

@@ -145,26 +145,15 @@ class ServiceRuntime:
 
     def _call(self, method: str, params: dict[str, Any]) -> Any:
         params = self._validate(method, params)
-        if method.startswith("living."):
-            if method == "living.events":
-                from coding_trajectory.living_events import serve_living_events
-
-                result = serve_living_events(
-                    params,
-                    cache=self.cache,
-                    current_dir=self.current_dir,
-                    global_scope=self.global_scope,
-                )
-            else:
-                from coding_trajectory.living_sessions import serve_living_sessions
-
-                result = serve_living_sessions(
-                    params, current_dir=self.current_dir, global_scope=self.global_scope
-                )
-            self._require_sources()
-            return service_contract(method).validate_response(result)
-        if method.startswith("project."):
+        if method.startswith("project.") or method == "living.sessions":
             store, note = DocumentStore.from_session_graphs([]), "(source metadata)"
+        elif method == "living.events":
+            store, note = resolve_store(
+                params["scope"],
+                global_scope=self.global_scope,
+                current_dir=self.current_dir,
+                cache=self.cache,
+            )
         else:
             store, note = resolve_store(
                 params,
@@ -258,8 +247,12 @@ class ServiceRuntime:
                 params = self._validate(method, params)
             except (KeyError, ValueError):
                 continue
-            if method.startswith("project."):
+            if method.startswith("project.") or method == "living.sessions":
                 inventory = True
+            if method == "living.events":
+                scope = params["scope"]
+                entrypoint = scope.get("session_id") or scope.get("root_session_id")
+                ids.add(entrypoint)
             if method.startswith(("session.", "graph.")):
                 entrypoint = params.get("session_id") or params["root_session_id"]
                 ids.add(entrypoint)

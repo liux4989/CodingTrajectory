@@ -7,6 +7,7 @@ socket connection attempts. No credential profiles, remote stubs or unit tests.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import runpy
@@ -615,9 +616,308 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
     )
 
 
+def qualify_living() -> None:
+    """Exercise stateless living reads against mutable, disposable source logs."""
+    from coding_trajectory.runtime import ServiceRuntime
+    from coding_trajectory.service import store as store_module
+
+    fixtures = runpy.run_path(str(ROOT / "scripts/validate-amp-live.py"))
+    parent, child = fixtures["PARENT"], fixtures["CHILD"]
+    old = "T-00000000-0000-4000-8000-000000000003"
+    logs = Path(os.environ["CT_AMP_LOG_DIR"])
+    paths = {sid[2:]: logs / f"{sid}.jsonl" for sid in (parent, child, old)}
+    for sid in (parent, child, old):
+        paths[sid[2:]].write_text(
+            "".join(
+                json.dumps(row) + "\n"
+                for row in fixtures["journal"](sid, parent=sid == parent)
+            )
+        )
+    old_time = time.time() - 4 * 86400
+    os.utime(paths[old[2:]], (old_time, old_time))
+
+    def filesystem_state():
+        return {
+            str(path.relative_to(Path.home())): (
+                path.is_dir(),
+                path.stat().st_size,
+                path.stat().st_mtime_ns,
+            )
+            for path in Path.home().rglob("*")
+        }
+
+    def digest(payload):
+        # Derive expectations from the public wire format, not Core helpers.
+        return hashlib.sha256(
+            json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode()
+        ).hexdigest()
+
+    with ServiceRuntime(global_scope=True, current_dir=logs) as runtime:
+
+        def read(method, **params):
+            before = filesystem_state()
+            reply = runtime.execute({"method": method, "params": params})
+            assert filesystem_state() == before, "living read wrote derived state"
+            assert reply["ok"], reply
+            return reply["result"]
+
+        def rejected(method, code, **params):
+            before = filesystem_state()
+            reply = runtime.execute({"method": method, "params": params})
+            assert filesystem_state() == before
+            assert not reply["ok"] and reply["error"]["code"] == code, reply
+
+        def complete(method, field, **params):
+            result = read(method, limit=1, **params)
+            rows = list(result[field])
+            cursor = result["next_cursor"]
+            cursors = set()
+            while cursor:
+                assert cursor not in cursors, "living pagination did not advance"
+                cursors.add(cursor)
+                page = read(method, limit=2, cursor=cursor, **params)
+                assert page["returned"] == len(page[field])
+                rows.extend(page[field])
+                cursor = page["next_cursor"]
+            assert len(rows) == result["total"]
+            return rows
+
+        # Header-level inventory must not invoke transcript ingestion at all.
+        with patch.object(
+            store_module,
+            "_ingest_sessions",
+            side_effect=AssertionError("living.sessions ingested transcripts"),
+        ):
+            initial = complete("living.sessions", "items")
+            repeated = complete("living.sessions", "items")
+            assert initial == repeated
+            assert [row["session_id"] for row in initial] == [parent[2:], child[2:]]
+            assert all(row["state"] == "living" for row in initial)
+            assert all(
+                row["digest"] == digest({k: v for k, v in row.items() if k != "digest"})
+                for row in initial
+            )
+            assert not any(
+                {"model", "turn_count", "source_readiness"} & row.keys()
+                for row in initial
+            )
+            assert {
+                row["session_id"]
+                for row in complete("living.sessions", "items", horizon_days=5)
+            } == {parent[2:], child[2:], old[2:]}
+            assert [
+                row["session_id"]
+                for row in complete("living.sessions", "items", root_session_id=old[2:])
+            ] == [old[2:]]
+            assert {
+                row["session_id"]
+                for row in complete("living.sessions", "items", session_id=child[2:])
+            } == {parent[2:], child[2:]}
+            assert not read("living.sessions", project_name="absent-project")["items"]
+
+        first = read("living.sessions", limit=1)
+        rejected(
+            "living.sessions",
+            "invalid_cursor",
+            root_session_id=parent[2:],
+            cursor=first["next_cursor"],
+        )
+        rejected(
+            "living.sessions",
+            "invalid_request",
+            session_id=child[2:],
+            project_name="amp-example",
+        )
+        rejected("living.sessions", "invalid_request", horizon_days=31)
+        rejected("living.sessions", "invalid_request", after="retired")
+        rejected("living.events", "invalid_request")
+        rejected("living.events", "invalid_request", scope={})
+        rejected(
+            "living.events",
+            "invalid_request",
+            scope={"root_session_id": parent[2:], "session_id": child[2:]},
+        )
+
+        scope = {"root_session_id": parent[2:]}
+        initial_events = complete(
+            "living.events", "resources", scope=scope, mode="details"
+        )
+        assert initial_events == complete(
+            "living.events", "resources", scope=scope, mode="details"
+        )
+        assert all(row["digest"] == digest(row["resource"]) for row in initial_events)
+        event_page = read("living.events", scope=scope, limit=1)
+        rejected(
+            "living.events",
+            "invalid_cursor",
+            scope={"session_id": child[2:]},
+            cursor=event_page["next_cursor"],
+        )
+        rejected(
+            "living.events", "invalid_cursor", scope=scope, cursor=first["next_cursor"]
+        )
+
+        def append(event, second, **fields):
+            with paths[parent[2:]].open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "type": "observation",
+                            "thread_id": parent,
+                            "captured_at": f"2026-09-05T00:00:{second:02d}Z",
+                            "event": event,
+                            **fields,
+                        }
+                    )
+                    + "\n"
+                )
+
+        append("agent.start", 11, message_id="u2")
+        append(
+            "tool.call",
+            12,
+            tool_use_id="empty-result",
+            tool_name="read_file",
+            input={"path": "α" * 600},
+        )
+        changed_sessions = complete("living.sessions", "items")
+        assert changed_sessions[0]["digest"] != initial[0]["digest"]
+        assert changed_sessions[1] == initial[1], "append changed an unrelated session"
+        pending = complete("living.events", "resources", scope=scope, mode="details")
+        tool = next(
+            row for row in pending if row["resource"].get("operations") == ["read_file"]
+        )
+        assert tool["resource"].get("status") != "completed"
+        append(
+            "tool.result",
+            13,
+            tool_use_id="empty-result",
+            tool_name="read_file",
+            status="done",
+            output="",
+        )
+        completed = complete("living.events", "resources", scope=scope, mode="details")
+        done = next(row for row in completed if row["path"] == tool["path"])
+        assert done["resource"]["status"] == "completed"
+        assert done["digest"] != tool["digest"]
+        assert done["digest"] == digest(done["resource"])
+        view = complete("living.events", "resources", scope=scope)
+        compact = next(row for row in view if row["path"] == done["path"])
+        assert compact["digest"] == done["digest"]
+        # Raw inputs are not retained. Exercise view truncation using a public
+        # tool name below retention's 512-character cap, above view's 500 cap.
+        name = "qualified_tool_" + "α" * 490
+        append("tool.call", 14, tool_use_id="view-boundary", tool_name=name, input={})
+        details = complete("living.events", "resources", scope=scope, mode="details")
+        large = next(
+            row for row in details if row["resource"].get("operations") == [name]
+        )
+        compact = next(
+            row
+            for row in complete("living.events", "resources", scope=scope)
+            if row["path"] == large["path"]
+        )
+        assert large["resource"]["shape"]["tool_name"] == name
+        assert compact["resource"]["shape"]["tool_name"]["$type"] == "content_ref"
+        assert compact["digest"] == large["digest"] == digest(large["resource"])
+        assert "PRIVATE output" not in json.dumps(completed)
+        for field in ("item_id", "turn_id"):
+            rejected(
+                "living.events", "invalid_request", scope={field: done["path"][field]}
+            )
+            selected = complete(
+                "living.events",
+                "resources",
+                scope={**scope, field: done["path"][field]},
+                mode="details",
+            )
+            assert selected and all(
+                row["path"][field] == done["path"][field] for row in selected
+            )
+
+        ingested = []
+        original_ingest = store_module._ingest_sessions
+
+        def observe_ingestion(candidates, **kwargs):
+            ingested.append(
+                {str(path.resolve()) for _vendor, _adapter, path in candidates}
+            )
+            return original_ingest(candidates, **kwargs)
+
+        other_run = complete(
+            "living.events",
+            "resources",
+            scope={"root_session_id": old[2:]},
+            mode="details",
+        )
+        other_item = next(row for row in other_run if row["resource_kind"] == "item")
+        with patch.object(store_module, "_ingest_sessions", observe_ingestion):
+            for field in ("item_id", "turn_id"):
+                rejected(
+                    "living.events",
+                    "resource_not_found",
+                    scope={**scope, field: other_item["path"][field]},
+                )
+        required = {str(paths[sid].resolve()) for sid in (parent[2:], child[2:])}
+        assert ingested == [required, required], "narrowing searched another run"
+        ingested.clear()
+        before = filesystem_state()
+        with patch.object(store_module, "_ingest_sessions", observe_ingestion):
+            batch = runtime.batch(
+                [
+                    {"method": "living.events", "params": {"scope": scope}},
+                    {"method": "session.stats", "params": {"session_id": child[2:]}},
+                    {
+                        "method": "living.sessions",
+                        "params": {"root_session_id": parent[2:]},
+                    },
+                ]
+            )
+        assert filesystem_state() == before
+        assert all(row["ok"] for row in batch["items"]), batch
+        assert ingested == [
+            {str(paths[sid].resolve()) for sid in (parent[2:], child[2:])}
+        ], ingested
+
+        # Let only the parent's source cross the real 300-second boundary.
+        # No log append, timestamp rewrite, or fake per-run liveness is involved.
+        expires = time.time() + 5
+        parent_time = expires - 300
+        os.utime(paths[parent[2:]], (parent_time, parent_time))
+        os.utime(paths[child[2:]], None)
+        before_expiry = complete("living.sessions", "items", root_session_id=parent[2:])
+        assert [row["state"] for row in before_expiry] == ["living", "living"]
+        time.sleep(max(0, expires - time.time()) + 0.1)
+        after_expiry = complete("living.sessions", "items", root_session_id=parent[2:])
+        assert after_expiry[0]["state"] == "inactive"
+        assert after_expiry[0]["digest"] != before_expiry[0]["digest"]
+        assert {
+            k: v for k, v in after_expiry[0].items() if k not in {"state", "digest"}
+        } == {k: v for k, v in before_expiry[0].items() if k not in {"state", "digest"}}
+        assert after_expiry[1] == before_expiry[1], "expiry leaked across the run"
+        os.utime(paths[parent[2:]], (old_time, old_time))
+        recent_child = complete("living.sessions", "items")
+        assert {row["session_id"] for row in recent_child} == {parent[2:], child[2:]}
+        paths[child[2:]].unlink()
+        assert not read("living.sessions")["items"], (
+            "deleted child kept the old run in horizon"
+        )
+        remaining = complete("living.events", "resources", scope=scope)
+        assert all(row["path"].get("session_id") != child[2:] for row in remaining)
+        assert not any(row["resource_kind"] == "session_edge" for row in remaining)
+    assert not (Path.home() / ".coding-trajectory").exists()
+    print(
+        "PASS stateless living: stable wire digests, header-only inventory, horizon, live paging/scopes, empty-output tool completion, retained views, directly routed narrowing, mixed batch, own-source expiry, removals, no writes"
+    )
+
+
 def main() -> None:
     if sys.argv[1:] == ["--offline-worker"]:
         qualify()
+        qualify_living()
         return
     with TemporaryDirectory(prefix="ct-local-only-") as root:
         env = {

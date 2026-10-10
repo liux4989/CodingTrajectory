@@ -62,8 +62,7 @@ def dispatch(
         raise TypeError("dispatch requires a canonical document store")
     # Direct callers (including metric validation) can supply transient graphs.
     # Normalize without mutating their store or involving publication authority.
-    # Living methods keep their existing incremental behavioral contract.
-    if method.startswith(("session.", "graph.")):
+    if method.startswith(("session.", "graph.")) or method == "living.events":
         from coding_trajectory.ingestion.retained import retain_session_graph
 
         store = DocumentStore.from_session_graphs(
@@ -215,6 +214,19 @@ def _handle_living_events(
         cache=context.cache,
         current_dir=context.current_dir,
         global_scope=context.global_scope,
+    )
+
+
+def _handle_living_sessions(
+    params: dict[str, Any], context: ServiceContext
+) -> dict[str, Any]:
+    from coding_trajectory.living_sessions import serve_living_sessions
+
+    return serve_living_sessions(
+        params,
+        current_dir=context.current_dir,
+        global_scope=context.global_scope,
+        cache=context.cache,
     )
 
 
@@ -1080,6 +1092,7 @@ SERVICE_HANDLERS: dict[str, ServiceHandler] = {
     "project.list": _handle_project_list,
     "project.sessions": _handle_project_sessions,
     "living.events": _handle_living_events,
+    "living.sessions": _handle_living_sessions,
     "session.overview": _handle_session_overview,
     "session.summary": _handle_session_summary,
     "session.search": _handle_session_search,

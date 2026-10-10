@@ -29,8 +29,7 @@ export type ChangedAt = string;
  * @maxItems 50
  */
 export type Revisions = WatchRevision[];
-export type Cursor = string | null;
-export type Watermark = string | null;
+export type Rebaseline = boolean;
 export type LastRunAt = string | null;
 export type CaughtUp = boolean;
 export type EvaluationId = string;
@@ -90,6 +89,7 @@ export type Pending = number;
 export type Errored = number;
 export type SkippedUnchanged = number;
 export type Remaining = boolean;
+export type Rebaselined = boolean;
 export type Notes = string[];
 
 /**
@@ -101,6 +101,7 @@ export interface RefreshResult {
   findings: Findings;
   summary: EvaluationSummary;
   remaining: Remaining;
+  rebaselined?: Rebaselined;
   notes?: Notes;
 }
 export interface Watch {
@@ -143,13 +144,16 @@ export interface WatchRevision {
   changed_at: ChangedAt;
 }
 /**
- * Core `living.sessions` continuation position owned by one watch.
+ * Digests evaluated by one watch, not a Core continuation position.
  */
 export interface RefreshState {
-  cursor?: Cursor;
-  watermark?: Watermark;
+  seen?: Seen;
+  rebaseline?: Rebaseline;
   last_run_at?: LastRunAt;
   caught_up?: CaughtUp;
+}
+export interface Seen {
+  [k: string]: string;
 }
 /**
  * Every attempted strategy execution over one canonical turn.

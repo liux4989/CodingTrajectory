@@ -128,11 +128,15 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - `session.items` and `session.events` own progressively expanded canonical
   evidence. Their public contracts expose stable hierarchy references, source
   ordering, timestamps, normalized type and observed status when supported.
-- `living.sessions` owns the bounded changing-session inventory;
-  `living.events` owns scoped canonical resource changes. Their behavioral
-  SQLite stores in `~/.coding-trajectory/living-sessions/` and
-  `~/.coding-trajectory/living-events/` remain pending migration in the separate
-  Job B living redesign. Removing Core's `local.sqlite` is not that migration.
+- `living.sessions` owns bounded header-level session inventory with live state
+  and digests, without transcript ingestion. Global and project scopes use a
+  rolling horizon (72 hours by default); explicit run scopes have no horizon.
+- `living.events` owns a scoped current-resource snapshot with digests;
+  consumers derive changes by comparing complete passes. Digests cover retained
+  details, including in-place tool completion, even when requesting compact views.
+- Neither living method stores payloads, change history or source checkpoints.
+  Pages are live keysets, not frozen snapshots; absence from a complete pass
+  means the resource is no longer in that scope. Consumers own last-seen state.
 - Loop's `investigations.sqlite3` and `monitor.sqlite3` are product/user data,
   not Core derived caches, and remain intact.
 

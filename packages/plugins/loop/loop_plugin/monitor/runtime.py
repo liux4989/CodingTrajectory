@@ -2,7 +2,7 @@
 
 Dry-run evaluates bounded historical evidence through frozen Core methods.
 Refresh evaluates newly observed sessions discovered through the Core
-`living.sessions` change feed. Both paths are idempotent for the same watch
+`living.sessions` current inventory. Both paths are idempotent for the same watch
 revision, input scope, and observed evidence; changed evidence supersedes the
 previous evaluation instead of rewriting it.
 
@@ -333,94 +333,95 @@ def dry_run(store: MonitorStore, watch: Watch, *, max_sessions: int) -> DryRunRe
 
 
 def refresh(store: MonitorStore, watch: Watch, *, max_sessions: int) -> RefreshResult:
-    """Evaluate newly observed sessions from the local living.sessions feed."""
+    """Compare a complete scoped inventory with digests actually evaluated."""
     summary = EvaluationSummary()
     evaluations: list[Evaluation] = []
     findings: list[Finding] = []
     notes: list[str] = []
-    state = watch.refresh
-    after = state.cursor
-    through = state.watermark if after else None
-    remaining = False
-    processed = 0
+    # Failed/partial passes must never leave a previous caught-up claim in place.
+    state = watch.refresh.model_copy(update={"caught_up": False})
+    watch.refresh = state
+    watch.updated_at = _now()
+    store.save_watch(watch)
     with CoreFacade() as core:
-        member_ids: set[str] | None = None
-        if watch.scope.project_name:
-            try:
-                entrypoints, _total = resolve_scope_sessions(core, watch)
-            except MonitorCoreError as exc:
-                entrypoints = []
-                notes.append(f"Project scope resolved to no sessions: {exc.message}")
-            member_ids = set(entrypoints)
+        params = {"limit": 200, **watch.scope.model_dump(exclude_none=True)}
+        inventory: dict[str, dict[str, Any]] = {}
+        cursors: set[str] = set()
+        total = None
         while True:
-            page = core.call(
-                "living.sessions",
-                {
-                    "limit": 200,
-                    **({"after": after} if after else {}),
-                    **({"through": through} if through else {}),
-                },
-            )
-            watermark = page.get("through")
-            changes = page.get("changes") or []
-            for change in changes:
-                if processed >= max_sessions:
-                    remaining = True
-                    break
-                resource = change.get("resource") or {}
-                session_id = resource.get("session_id")
-                root_id = resource.get("root_session_id")
-                if member_ids is not None:
-                    # Project scope: the change belongs to an in-scope graph.
-                    # Evaluate the graph entrypoint so member turns are covered.
-                    in_scope = root_id in member_ids or session_id in member_ids
-                    target = root_id if root_id in member_ids else session_id
-                else:
-                    # Session scope: the scoped session (or a graph rooted at
-                    # it) changed. Evaluate the scoped session itself.
-                    in_scope = (
-                        session_id == watch.scope.session_id
-                        or root_id == watch.scope.session_id
+            page = core.call("living.sessions", params)
+            items = page["items"]
+            if (
+                page["issues"]
+                or page["returned"] != len(items)
+                or (total is not None and page["total"] != total)
+            ):
+                raise MonitorCoreError(
+                    "living.sessions", "Inventory pass is incomplete", code="partial_inventory"
+                )
+            total = page["total"]
+            for item in items:
+                session_id = item["session_id"]
+                if session_id in inventory:
+                    raise MonitorCoreError(
+                        "living.sessions", "Inventory pass repeats a session", code="partial_inventory"
                     )
-                    target = watch.scope.session_id
-                if change.get("operation") == "upsert" and in_scope and target:
-                    processed += 1
-                    try:
-                        written, emitted = _evaluate_session_turns(
-                            core=core,
-                            store=store,
-                            watch=watch,
-                            session_id=target,
-                            trigger="manual_refresh",
-                            summary=summary,
-                            emit_findings=watch.enabled,
-                        )
-                        evaluations.extend(written)
-                        if watch.enabled:
-                            findings.extend(emitted)
-                    except MonitorCoreError as exc:
-                        summary.errored += 1
-                        notes.append(str(exc))
-                after = change.get("cursor") or after
-            if remaining:
+                inventory[session_id] = item
+            cursor = page["next_cursor"]
+            if not cursor:
                 break
-            if not page.get("has_more"):
-                after = None
-                through = watermark
-                break
-            after = page.get("next_cursor") or after
-            through = watermark
+            if cursor in cursors:
+                raise MonitorCoreError(
+                    "living.sessions", "Inventory cursor did not advance", code="partial_inventory"
+                )
+            cursors.add(cursor)
+            params["cursor"] = cursor
+        if len(inventory) != total:
+            raise MonitorCoreError(
+                "living.sessions", "Inventory pass is incomplete", code="partial_inventory"
+            )
+
+        # Only a complete pass can establish absence and prune prior digests.
+        seen = {sid: digest for sid, digest in state.seen.items() if sid in inventory}
+        if state.rebaseline:
+            seen = {sid: item["digest"] for sid, item in inventory.items()}
+            notes.append("Rebaselined legacy refresh state without evaluating historical sessions.")
+        else:
+            changed = sorted(
+                (item for sid, item in inventory.items() if seen.get(sid) != item["digest"]),
+                key=lambda item: (datetime.fromisoformat(item["modified"]), item["session_id"]),
+            )
+            for item in changed[:max_sessions]:
+                session_id = item["session_id"]
+                try:
+                    written, emitted = _evaluate_session_turns(
+                        core=core,
+                        store=store,
+                        watch=watch,
+                        session_id=session_id,
+                        trigger="manual_refresh",
+                        summary=summary,
+                        emit_findings=watch.enabled,
+                    )
+                    evaluations.extend(written)
+                    if watch.enabled:
+                        findings.extend(emitted)
+                    seen[session_id] = item["digest"]
+                except MonitorCoreError as exc:
+                    summary.errored += 1
+                    notes.append(str(exc))
+        remaining = any(seen.get(sid) != item["digest"] for sid, item in inventory.items())
         watch.refresh = state.model_copy(
             update={
-                "cursor": after,
-                "watermark": through,
+                "seen": seen,
+                "rebaseline": False,
                 "last_run_at": _now(),
                 "caught_up": not remaining,
             }
         )
         watch.updated_at = _now()
         store.save_watch(watch)
-    if not processed:
+    if not summary.sessions_examined and not state.rebaseline and not summary.errored:
         notes.append("No in-scope session changes since the last refresh.")
     if remaining:
         notes.append(
@@ -433,5 +434,6 @@ def refresh(store: MonitorStore, watch: Watch, *, max_sessions: int) -> RefreshR
         findings=findings,
         summary=summary,
         remaining=remaining,
+        rebaselined=state.rebaseline,
         notes=notes,
     )

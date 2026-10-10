@@ -179,13 +179,13 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "living.events",
-            2,
+            3,
             LivingEventsRequest,
             LivingEventsResponse,
         ),
         ServiceContract(
             "living.sessions",
-            4,
+            5,
             LivingSessionsRequest,
             LivingSessionsResponse,
         ),

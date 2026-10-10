@@ -84,6 +84,24 @@ Monitor runs persist progress. After a failed or interrupted run, inspect partia
 results before resuming. Resume uses the original parameters and requires the
 same watch revision. Only one run can be active for a watch.
 
+Refresh reads a complete header-only `living.sessions` pass, with project or
+session filtering performed by Core. It compares the watch's persisted
+`{session_id: digest}` map and evaluates new or changed sessions in modified-time
+and identity order. At most `max_sessions` are evaluated per refresh; only those
+sessions advance their seen digests. Remaining changes stay pending, so bounded
+refreshes neither skip them nor repeatedly evaluate unchanged sessions.
+
+Seen entries absent from a complete pass are removed without evaluation. Failed
+or incomplete passes cannot prune the map. Core's inventory uses a rolling
+72-hour horizon for project/global scopes; a session watch ignores that horizon.
+The inventory's activity expiry can change a digest without a source append.
+
+Old persisted cursor/watermark watch state migrates to an empty digest map and
+a one-time rebaseline. The first refresh records the current digests without
+evaluations and reports `rebaselined`; later refreshes evaluate changes normally.
+New watches do not rebaseline. The migration preserves watch configuration,
+evaluation history and finding triage in the existing Monitor database.
+
 ## Local state and security
 
 | State | Default path | Override |

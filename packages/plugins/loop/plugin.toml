@@ -12,7 +12,7 @@ entry = "loop_plugin/main.py"
 "session.usage" = 5
 "session.request_usage" = 7
 "session.stats" = 5
-"living.sessions" = 4
+"living.sessions" = 5
 
 [[tools]]
 name = "web"
