@@ -30,7 +30,10 @@ from coding_trajectory.analysis.measurements import (
     extract_session_measurements,
 )
 from coding_trajectory.analysis.request_lineage import extract_user_request
-from coding_trajectory.analysis.tool_summary import summarize_tool_call
+from coding_trajectory.analysis.tool_summary import (
+    pending_plan_actions,
+    summarize_tool_call,
+)
 from coding_trajectory.analysis.tool_summary_shared import (
     AGENT_COLLAB,
     EDIT_FILE,
@@ -451,7 +454,7 @@ def _retain_item(
             resolution = f"file:{_portable_path(item.path)}"
         elif summary:
             resolution = f"tool:{summary['name']}"
-    semantic = {
+    semantic: dict[str, Any] = {
         key: value
         for key, raw in (
             ("verification_kind", verification),
@@ -459,6 +462,20 @@ def _retain_item(
         )
         if (value := _bounded(raw)) is not None
     }
+    if isinstance(item, PlanItem):
+        actions = (
+            retained.get("plan_actions", [])
+            if reconstructed
+            else pending_plan_actions(item.input)
+        )
+        semantic["plan_actions"] = list(
+            dict.fromkeys(
+                action
+                for raw in actions
+                if isinstance(raw, str)
+                and (action := _safe_detail_target(raw, cwd=session.cwd))
+            )
+        )[:64]
     path = (
         _portable_path(item.path, session.cwd)
         if isinstance(item, FileChangeItem)
@@ -589,7 +606,7 @@ def _output_evidence(
     item: Item,
     measurements: ItemMeasurements,
     summary: dict[str, Any] | None,
-    semantic: dict[str, str],
+    semantic: dict[str, Any],
     path: str | None,
     tokenizer: str,
     provider: str | None,

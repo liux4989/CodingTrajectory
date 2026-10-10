@@ -108,7 +108,7 @@ retain the existing standalone behavior. These scans do not ingest transcripts.
 ```sh
 uv run python scripts/check-core-protocol.py
 uv run python scripts/validate-local-first-source-selection.py
-uv run python scripts/benchmark-session-retrieval.py --command-activity-only --no-write
+uv run python scripts/benchmark-session-retrieval.py --no-write
 scripts/check-metrics-quality-gate.sh
 uv run python scripts/validate-metrics-baselines.py
 uv run python scripts/validate-amp-live.py
@@ -117,12 +117,20 @@ bun run --cwd packages/plugins/loop/web build
 uv run python scripts/check-loop.py
 ```
 
-The focused synthetic qualification covers command activity and retained replay.
-The full retrieval benchmark (`--no-write` without `--command-activity-only`) is
-diagnostic, not a CI gate: its pre-existing summary/search expectations do not
-all hold on retained evidence. Neither workflow needs private logs or remote
-credentials. Metric baselines use committed source evidence; do not replace
-expected values with fresh output.
+The full synthetic qualification covers command activity, retained summary
+semantics, search privacy/coverage, and ranking. Its v2 fixture places ranking
+signals in portable paths and sanitized command targets that retention preserves,
+not discarded patch/output bodies. Raw output sentinels are negative privacy
+controls, excluded from recall judgments. Exact changed paths are primary
+evidence; failed commands are operational evidence; successful retries and
+narrative/request matches provide context. Quality thresholds are unchanged.
+Summary retains up to 64 distinct pending plan actions, each sanitized and bounded
+to 280 characters; completed snapshots clear prior next actions. Verification
+labels use retained command descriptions, and nullable wire status means no
+observed outcome. The benchmark does not claim real-world retrieval quality;
+its projection-only timings remain diagnostic. Neither workflow needs private
+logs or remote credentials. Metric baselines use committed source evidence;
+do not replace expected values with fresh output.
 See [metrics validation](metrics-validation-quality-gate.md) for audit requirements.
 
 ## Release marker validation

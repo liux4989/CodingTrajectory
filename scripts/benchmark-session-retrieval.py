@@ -65,9 +65,9 @@ from coding_trajectory.service import (
 )
 
 BENCHMARK_NAME = "session-retrieval-synthetic"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_OUTPUT = (
-    REPO_ROOT / ".artifacts" / "benchmarks" / "session-retrieval-synthetic-v1.json"
+    REPO_ROOT / ".artifacts" / "benchmarks" / "session-retrieval-synthetic-v2.json"
 )
 _TOKEN_RE = re.compile(r"[\w./:@+-]+", re.UNICODE)
 
@@ -191,7 +191,7 @@ def build_synthetic_fixture() -> SyntheticFixture:
             started_at=started_at + timedelta(seconds=3),
             completed_at=started_at + timedelta(seconds=4),
             status=ToolStatus.FAILED.value,
-            command="python -c 'validate_auth_cache()'",
+            command="python -c 'validate_auth_cache(\"ranking-signal\")'",
             exit_code=1,
             output="ranking-signal validation failed",
         ),
@@ -204,13 +204,13 @@ def build_synthetic_fixture() -> SyntheticFixture:
             completed_at=started_at + timedelta(seconds=6),
             status=ToolStatus.COMPLETED.value,
             tool_name="apply_patch",
-            path="src/auth/cache.py",
+            path="src/ranking-signal/auth/cache.py",
             operation="edit",
             input={
-                "path": "src/auth/cache.py",
+                "path": "src/ranking-signal/auth/cache.py",
                 "patch": "Add authentication cache with ranking-signal marker",
             },
-            output="updated src/auth/cache.py",
+            output="updated src/ranking-signal/auth/cache.py",
         ),
         CommandExecutionItem(
             item_id=ids["ranking_recovery"],
@@ -220,7 +220,7 @@ def build_synthetic_fixture() -> SyntheticFixture:
             started_at=started_at + timedelta(seconds=7),
             completed_at=started_at + timedelta(seconds=8),
             status=ToolStatus.COMPLETED.value,
-            command="python -c 'validate_auth_cache()'",
+            command="python -c 'validate_auth_cache(\"ranking-signal\")'",
             exit_code=0,
             output="validation recovered",
         ),
@@ -276,9 +276,12 @@ def build_synthetic_fixture() -> SyntheticFixture:
             completed_at=started_at + timedelta(minutes=1, seconds=4),
             status=ToolStatus.COMPLETED.value,
             tool_name="apply_patch",
-            path="src/auth/cache.py",
+            path="src/ranking-signal/auth/cache.py",
             operation="edit",
-            input={"path": "src/auth/cache.py", "patch": "Stabilize cache keys"},
+            input={
+                "path": "src/ranking-signal/auth/cache.py",
+                "patch": "Stabilize cache keys",
+            },
             output="updated cache key handling",
         ),
         CommandExecutionItem(
@@ -441,18 +444,31 @@ def build_synthetic_fixture() -> SyntheticFixture:
     def event_identity(kind: str, event_id: UUID) -> str:
         return f"{kind}:event:{event_id}"
 
+    # v2 judgments follow committed retention rules, not benchmark output:
+    # paths/command targets survive; patch text and output bodies do not.
+    # Exact changed paths are material (3), a failed matching command is
+    # operational evidence (2), retry/request/narrative context is supporting
+    # evidence (1). Raw output sentinels are separate negative privacy controls.
     search_cases = [
         SearchCase(
             name="structural-ranking",
             query="ranking-signal",
             judgments=[
                 RelevanceJudgment(
-                    identity=item_identity("tool_result", "ranking_failure"),
+                    identity=item_identity("file_change", "first_change"),
                     relevance=3,
                 ),
                 RelevanceJudgment(
-                    identity=item_identity("file_change", "first_change"),
+                    identity=item_identity("file_change", "second_change"),
+                    relevance=3,
+                ),
+                RelevanceJudgment(
+                    identity=item_identity("tool_call", "ranking_failure"),
                     relevance=2,
+                ),
+                RelevanceJudgment(
+                    identity=item_identity("tool_call", "ranking_recovery"),
+                    relevance=1,
                 ),
                 RelevanceJudgment(
                     identity=event_identity("user_message", first_request_id),
@@ -466,7 +482,7 @@ def build_synthetic_fixture() -> SyntheticFixture:
         ),
         SearchCase(
             name="path-search",
-            query="src/auth/cache.py",
+            query="src/ranking-signal/auth/cache.py",
             mode="path",
             judgments=[
                 RelevanceJudgment(
@@ -475,15 +491,6 @@ def build_synthetic_fixture() -> SyntheticFixture:
                 RelevanceJudgment(
                     identity=item_identity("file_change", "second_change"), relevance=3
                 ),
-            ],
-        ),
-        SearchCase(
-            name="tail-preservation",
-            query="tail-sentinel",
-            judgments=[
-                RelevanceJudgment(
-                    identity=item_identity("tool_result", "tail_output"), relevance=3
-                )
             ],
         ),
         SearchCase(
@@ -502,10 +509,10 @@ def build_synthetic_fixture() -> SyntheticFixture:
         ),
         SearchCase(
             name="unresolved-failure",
-            query="failed-validation",
+            query="mypy",
             judgments=[
                 RelevanceJudgment(
-                    identity=item_identity("tool_result", "unresolved_check"),
+                    identity=item_identity("tool_call", "unresolved_check"),
                     relevance=3,
                 )
             ],
@@ -599,7 +606,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
     expected_operations = next(
         entry["operations"]
         for entry in summary["changes"]
-        if entry["path"] == "src/auth/cache.py"
+        if entry["path"] == "src/ranking-signal/auth/cache.py"
     )
     first_turn_summary = _dispatch(
         store,
@@ -728,8 +735,8 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             len(summary["recent_activity"]) == 12
             and summary["truncation"]["recent_activity"]["truncated"] is True
         ),
-        "non_outcome_activity_omits_status": all(
-            "status" not in entry
+        "non_outcome_activity_has_no_status": all(
+            entry.get("status") is None
             for entry in summary["recent_activity"]
             if entry.get("kind")
             in {
@@ -1005,11 +1012,22 @@ def evaluate_search(fixture: SyntheticFixture, store: DocumentStore) -> dict[str
     ranking_case = next(
         case for case in case_results if case["name"] == "structural-ranking"
     )
-    tail_case = next(
-        case for case in case_results if case["name"] == "tail-preservation"
+    tail = _dispatch(
+        store,
+        "session.search",
+        {"session_id": str(fixture.root_session_id), "query": "tail-sentinel"},
     )
-    expected_first = f"tool_result:item:{fixture.ids['ranking_failure']}"
-    expected_second = f"file_change:item:{fixture.ids['first_change']}"
+    raw_failure = _dispatch(
+        store,
+        "session.search",
+        {"session_id": str(fixture.root_session_id), "query": "failed-validation"},
+    )
+    expected_mutations = {
+        f"file_change:item:{fixture.ids['first_change']}",
+        f"file_change:item:{fixture.ids['second_change']}",
+    }
+    expected_failure = f"tool_call:item:{fixture.ids['ranking_failure']}"
+    expected_recovery = f"tool_call:item:{fixture.ids['ranking_recovery']}"
     invariants = {
         "all_evidence_resolves": all_references_resolve,
         "private_reasoning_excluded": private["total"] == 0,
@@ -1020,22 +1038,33 @@ def evaluate_search(fixture: SyntheticFixture, store: DocumentStore) -> dict[str
         "turn_scope_isolated": wrong_turn["total"] == 0 and right_turn["total"] == 1,
         "limit_and_truncation_truthful": (
             len(bounded["matches"]) == 2
-            and bounded["total"] == 4
+            and bounded["total"] == 6
             and bounded["truncated"] is True
         ),
         "kind_filter_honored": (
-            kind_filtered["total"] == 1
-            and kind_filtered["matches"][0]["kind"] == "file_change"
+            kind_filtered["total"] == 2
+            and all(
+                match["kind"] == "file_change" for match in kind_filtered["matches"]
+            )
         ),
-        "long_tail_match_preserved": tail_case["matching_documents"] == 1,
+        "discarded_output_is_not_searchable": tail["total"] == 0
+        and raw_failure["total"] == 0,
         "long_field_coverage_truthful": (
-            tail_case["coverage"]["searchable"] in {"preview", "facts_only"}
-            and tail_case["coverage"]["measurement"] == "complete"
-            and "content_complete" not in tail_case["coverage"]
-            and bool(tail_case["warnings"])
+            tail["coverage"]["searchable"] in {"preview", "facts_only"}
+            and tail["coverage"]["measurement"] == "complete"
+            and "content_complete" not in tail["coverage"]
+            and bool(tail["warnings"])
         ),
-        "structural_failure_precedes_mutation": ranking_case["current_order"][:2]
-        == [expected_first, expected_second],
+        "exact_path_matches_lead_retained_command_matches": set(
+            ranking_case["current_order"][:2]
+        )
+        == expected_mutations,
+        "failed_command_precedes_successful_retry": (
+            expected_failure in ranking_case["current_order"]
+            and expected_recovery in ranking_case["current_order"]
+            and ranking_case["current_order"].index(expected_failure)
+            < ranking_case["current_order"].index(expected_recovery)
+        ),
         "deterministic_response": deterministic,
     }
     aggregates = {

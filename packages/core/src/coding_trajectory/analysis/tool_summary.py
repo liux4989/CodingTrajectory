@@ -39,6 +39,32 @@ _OUTCOMELESS_ACTIVITY_KINDS = frozenset(
 )
 
 
+def pending_plan_actions(value: Any) -> list[str]:
+    """Extract explicit unfinished actions from a plan-tool snapshot."""
+    actions: list[str] = []
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, list):
+            stack.extend(reversed(current))
+            continue
+        if not isinstance(current, dict):
+            continue
+        status = str(current.get("status") or "").casefold()
+        text = next(
+            (
+                current.get(key)
+                for key in ("content", "text", "task", "step", "name")
+                if isinstance(current.get(key), str) and current.get(key).strip()
+            ),
+            None,
+        )
+        if text and status not in {"completed", "done", "cancelled", "canceled"}:
+            actions.append(str(text).strip())
+        stack.extend(reversed(list(current.values())))
+    return list(dict.fromkeys(actions))
+
+
 def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
     """Return outcome-bearing activity facts retained into compact sessions.
 

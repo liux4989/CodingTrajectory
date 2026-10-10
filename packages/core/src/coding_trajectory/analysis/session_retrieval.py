@@ -20,7 +20,10 @@ from coding_trajectory.analysis.activity_flow import (
 from coding_trajectory.analysis.item_details import _classify_item
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
 from coding_trajectory.analysis.request_lineage import extract_user_request
-from coding_trajectory.analysis.tool_summary import summarize_tool_call
+from coding_trajectory.analysis.tool_summary import (
+    pending_plan_actions,
+    summarize_tool_call,
+)
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
 from coding_trajectory.contracts.session import (
     DEFAULT_SEARCH_KINDS,
@@ -201,7 +204,8 @@ def build_session_summary(
                     verification_label = (
                         _stringify(item.command)
                         if item.command
-                        else signals.label(item)
+                        else (signals.tool_summary(item) or {}).get("description")
+                        or signals.label(item)
                     )
                     verification.append(
                         _RankedSummaryItem(
@@ -635,7 +639,7 @@ def _chronicle_semantics(item: Item) -> dict[str, Any]:
 
 
 def _pending_plan_actions_for_item(item: PlanItem) -> list[str]:
-    actions = _pending_plan_actions(item.input)
+    actions = pending_plan_actions(item.input)
     if actions:
         return actions
     retained = _chronicle_semantics(item).get("plan_actions")
@@ -829,31 +833,6 @@ def _explicit_decisions(text: str) -> list[str]:
         if normalized and _EXPLICIT_DECISION_RE.match(normalized):
             decisions.append(normalized)
     return decisions
-
-
-def _pending_plan_actions(value: Any) -> list[str]:
-    actions: list[str] = []
-    stack = [value]
-    while stack:
-        current = stack.pop()
-        if isinstance(current, list):
-            stack.extend(reversed(current))
-            continue
-        if not isinstance(current, dict):
-            continue
-        status = str(current.get("status") or "").casefold()
-        text = next(
-            (
-                current.get(key)
-                for key in ("content", "text", "task", "step", "name")
-                if isinstance(current.get(key), str) and current.get(key).strip()
-            ),
-            None,
-        )
-        if text and status not in {"completed", "done", "cancelled", "canceled"}:
-            actions.append(str(text).strip())
-        stack.extend(reversed(list(current.values())))
-    return list(dict.fromkeys(actions))
 
 
 def _search_documents(
