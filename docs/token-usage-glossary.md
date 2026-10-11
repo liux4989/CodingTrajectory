@@ -143,10 +143,9 @@ For Claude, stream records with the same provider response ID repeat or advance
 a cumulative output count. Use the highest count once per response within its
 turn; recorded usage totals and cost estimates continue to include every record.
 Missing response IDs make Claude output speed unavailable. The ID is retained
-on canonical usage observations and published request facts, so measurements
-retention and prepared reads use the same numerator. Previously published facts
-without those IDs cannot reconstruct the corrected speed. Other vendors keep
-their existing output-token accounting.
+on canonical usage observations and preserved by in-memory retention, so local
+detail reads use the same numerator. Other vendors keep their existing
+output-token accounting.
 The time includes processing the prompt and waiting for the first output token.
 Codex includes reasoning in its output count. When a provider reports reasoning
 separately, it is not added to the output count used here.
@@ -194,9 +193,8 @@ own speeds. Combined runtime measurements cover the main session and exclude
 overlapping subagents. Model usage covers the selected session's turns.
 
 Counts use the selected tokenizer, normally `cl100k_base` to approximate Amp tokens,
-with a fallback that works offline. Published results retain the counts and the
-evidence for their live timing. Older saved results without that evidence cannot
-be given an estimate.
+with a fallback that works offline. Retained runs preserve the counts and live
+timing evidence. Sources without that evidence cannot be given an estimate.
 
 The measured time includes prompt processing, waiting for the first token, plugin
 work, and other waiting outside tool runs. This estimate differs from
@@ -205,10 +203,10 @@ model only when the source identifies that model. Amp provider usage, billed cos
 `output_tokens_per_second`, and `decode_tokens_per_second` remain unavailable
 without separate evidence.
 
-Before publishing new measurements, update the readers, code that determines
-which evidence to trust, and collectors together. Local preparation detects
-source and Core code changes automatically. Adding new source evidence to
-existing remote results requires explicitly authorized republication.
+When changing measurement semantics, update the adapters, evidence rules, and
+retention together. Local detail reads reconstruct requested runs from current
+logs and compute measurements on request. Validate changes against the
+[audited metric baselines](metrics-validation-quality-gate.md).
 
 ## Visible tokens and images
 
@@ -223,9 +221,9 @@ An encrypted `compaction` block has no readable token count. Its
 `unknown`. Readable estimates remain unscaled: assigning the hidden summary's
 tokens to user input or agent work would invent a breakdown. Historical usage
 allocated to evicted items is preserved independently of the summary's size.
-Prepared facts retain replacement text sizes and an encrypted-compaction runtime
-marker, without retaining the text or ciphertext. Existing published facts that
-lack this evidence cannot reconstruct it; local preparation refreshes from logs.
+In-memory retention preserves replacement text sizes and an encrypted-compaction
+runtime marker, without retaining the text or ciphertext. Each detail request
+reconstructs this evidence from local logs.
 
 Visible tokens are estimates of the input and output text we can read, counted
 with a tokenizer. For sizing, inline base64 image data is replaced by a marker
@@ -233,5 +231,5 @@ saying the image was omitted. Only kept details, such as image type and dimensio
 contribute to visible token counts and context breakdowns. These counts do not
 estimate the provider's image-token cost.
 
-Reusable local results refresh when source content or Core code changes.
-Published remote snapshots retain their saved measurements until republished.
+Core retains runs only within one request or explicit batch. Later requests
+read current source evidence; Core keeps no saved measurement snapshots.

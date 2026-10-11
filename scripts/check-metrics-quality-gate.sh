@@ -17,7 +17,7 @@ else
   changed_paths="$(printf '%s\n%s\n' "$committed_paths" "$working_paths" | sed '/^$/d' | sort -u)"
 fi
 
-trigger_pattern='^(packages/core/src/coding_trajectory/(ingestion|metrics|analysis)/|packages/core/src/coding_trajectory/(contracts|service|runtime)\.py$|docs/token-usage-glossary\.md$|validation/metrics/|scripts/validate-metrics-baselines\.py$)'
+trigger_pattern='^(packages/core/src/coding_trajectory/((ingestion|metrics|analysis|contracts|service)/|(discovery(_metadata|_paths)?|living_(events|sessions)|project_identity|query|runtime|token_counter)\.py$)|docs/token-usage-glossary\.md$|validation/(metrics/|core-protocol\.json$)|scripts/(validate-metrics-baselines\.py|check-metrics-quality-gate\.sh)$)'
 
 if ! grep -Eq "$trigger_pattern" <<<"$changed_paths"; then
   echo "metrics quality gate: skipped (no metric-sensitive paths changed)"

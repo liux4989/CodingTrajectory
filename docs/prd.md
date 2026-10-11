@@ -208,7 +208,10 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - Provider-specific payloads remain in transcript `data` and canonical `vendor_data` only when they are useful to CT; unused raw log properties are skipped instead of modeled.
 - Core ingestion may apply a consumer-neutral retention policy after canonical identifiers are stabilized. `trajectory` retains replay evidence; `measurements` retains hierarchy, usage, runtime, reported cost, tool outcomes, and reconciliation inputs while releasing transcript bodies. Both policies preserve the same canonical facts for their shared metric contracts.
 - Retention policy must not introduce consumer concepts such as waste scores, rankings, dashboard cards, default horizons, or UI labels. Those remain projection-layer decisions, and immutable vendor logs remain the evidence authority for lazy detail reconstruction.
-- Request-scoped retained graphs are in-memory reconstructions, not a persistent SQLite format or canonical compatibility boundary. Core vendor compatibility and versioned public API contracts remain separate responsibilities; living-store migration and Loop product/user data have their own ownership.
+- Request-scoped retained graphs are in-memory reconstructions, not a persistent
+  SQLite format or canonical compatibility boundary. Core vendor compatibility
+  and versioned public API contracts remain separate responsibilities. Living
+  queries are stateless; Loop owns persisted investigations and Monitor state.
 
 # Activity Projection Layer
 - Activity projections have three separate layers: immutable vendor evidence, canonical item lifecycle reconstruction, and compact presentation. A presentation summary never replaces its underlying item evidence.

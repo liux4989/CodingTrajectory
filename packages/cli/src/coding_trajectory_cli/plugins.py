@@ -8,9 +8,10 @@ plugin root instead of hardcoding a command table.
 Plugin processes run from the same environment as the ``ct`` CLI and call the
 versioned service API in process through
 :class:`coding_trajectory.runtime.PluginApiClient`, which reuses one
-``ServiceRuntime`` (shared stores and index cache) instead of paying
-subprocess and rediscovery cost per call. The only core<->plugin coupling is
-the service contract surface plus the ``requires_methods`` version check.
+``ServiceRuntime`` to avoid a subprocess per call. Each call discovers fresh
+source topology and retains requested runs only for that request or explicit
+batch. The core<->plugin coupling is the service contract surface plus the
+``requires_methods`` version check.
 """
 
 from __future__ import annotations

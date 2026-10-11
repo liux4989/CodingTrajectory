@@ -105,10 +105,6 @@ def _select_session_graph(session_graph: SessionGraph, session_id: str) -> Sessi
     )
 
 
-def _resolve_historical_graph(store: DocumentStore, raw_id: str | None) -> SessionGraph:
-    return _resolve_session_graph(store, raw_id)
-
-
 def _graph_handler(
     build: Callable[[dict[str, Any], SessionGraph], Any],
 ) -> ServiceHandler:
@@ -117,7 +113,7 @@ def _graph_handler(
     @wraps(build)
     def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
         root_session_id = params["root_session_id"]
-        session_graph = _resolve_historical_graph(context.store, root_session_id)
+        session_graph = _resolve_session_graph(context.store, root_session_id)
         from coding_trajectory.analysis.orchestration_runs import (
             orchestration_run_for_entrypoint,
         )
@@ -140,7 +136,7 @@ def _session_handler(
     @wraps(build)
     def wrapper(params: dict[str, Any], context: ServiceContext) -> Any:
         session_id = params["session_id"]
-        session_graph = _resolve_historical_graph(context.store, session_id)
+        session_graph = _resolve_session_graph(context.store, session_id)
         selected_graph = _select_session_graph(session_graph, session_id)
         return _public_output_for_session_graph(
             selected_graph, build(params, selected_graph)
@@ -234,7 +230,7 @@ def _handle_session_overview(params: dict[str, Any], context: ServiceContext) ->
     from coding_trajectory.analysis.overview import build_overview
 
     return build_overview(
-        _resolve_historical_graph(context.store, params["session_id"]),
+        _resolve_session_graph(context.store, params["session_id"]),
         method="session.overview",
         params=params,
     )
@@ -284,7 +280,7 @@ def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any
     )
 
     session_id = params["session_id"]
-    session_graph = _resolve_historical_graph(context.store, session_id)
+    session_graph = _resolve_session_graph(context.store, session_id)
     tree = build_conversation_tree(session_graph)
     run = orchestration_run_for_entrypoint(session_graph, _parse_user_id(session_id))
     tree["selected_branch_id"] = str(run.root_session_id)
@@ -401,7 +397,7 @@ def _handle_graph_overview(params: dict[str, Any], context: ServiceContext) -> A
     from coding_trajectory.analysis.overview import build_overview
 
     return build_overview(
-        _resolve_historical_graph(context.store, params["root_session_id"]),
+        _resolve_session_graph(context.store, params["root_session_id"]),
         method="graph.overview",
         params=params,
     )
@@ -450,7 +446,7 @@ def _handle_session_events(
     """
     from coding_trajectory.ingestion.indexes import build_session_graph_index
 
-    session_graph = _resolve_historical_graph(context.store, params["session_id"])
+    session_graph = _resolve_session_graph(context.store, params["session_id"])
     session_graph = _select_session_graph(session_graph, params["session_id"])
     selected_turn_id = params.get("turn_id")
     index = build_session_graph_index(session_graph)
@@ -636,7 +632,7 @@ def _handle_session_items(
 ) -> dict[str, Any]:
     """Return bounded metadata, measurements, and processed output evidence."""
 
-    session_graph = _resolve_historical_graph(context.store, params["session_id"])
+    session_graph = _resolve_session_graph(context.store, params["session_id"])
     session_graph = _select_session_graph(session_graph, params["session_id"])
     selected_turn_id = params.get("turn_id")
     types_filter = set(params["types"]) if params.get("types") else None

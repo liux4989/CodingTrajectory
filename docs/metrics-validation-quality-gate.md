@@ -16,7 +16,11 @@ uv run python scripts/validate-metrics-baselines.py
 The wrapper selects metric-sensitive changes. With no arguments, it checks the
 worktree and branch changes against `origin/main`. The direct command always
 runs the full active baseline set. Run both before committing metric-sensitive changes.
-See the wrapper for the exact trigger paths.
+The gate covers ingestion, metrics, analysis, contracts, and service packages;
+discovery, living queries, project identity, query, runtime, and token counting;
+the glossary, protocol snapshot, metric evidence, validator, and wrapper itself.
+See the wrapper for the exact trigger paths. With explicit arguments, it checks
+the paths reported by `git diff --name-only` for those arguments.
 
 The validator uses production ingestion, graph assembly, and contract-validated
 service calls. It checks source hashes, provenance, expected fields, and

@@ -227,12 +227,14 @@ Graph API methods require `root_session_id`. Session methods use `session_id`.
 Model usage and tool usage have no dedicated CLI commands.
 The API protocol remains `ct.api.v1`. Response metadata describes local live
 retained evidence (`source: local`, `freshness: live`, `content_scope: retained`)
-and contains no prepared-view identity. `living` change-feed behavior still uses
-the existing SQLite stores in `~/.coding-trajectory/living-events/` and
-`~/.coding-trajectory/living-sessions/`, pending the separate Job B living redesign.
-Those stores have not migrated with Core's `local.sqlite` removal. Loop's
-`investigations.sqlite3` and `monitor.sqlite3` remain product/user data, not Core
-derived caches.
+and contains no prepared-view identity. Both living methods are stateless.
+`living.sessions` reads topology and file metadata. `living.events` requires a
+root or session scope and returns retained resource snapshots with digests.
+Consumers compare complete passes and keep their own last-seen state.
+Core no longer reads or updates `local.sqlite`, `living-events/`, or
+`living-sessions/`. Loop's `investigations.sqlite3` and `monitor.sqlite3` remain
+product/user data. See [operations](operations.md#read-local-evidence) for scope,
+horizon, and digest rules.
 
 ## Diagnostics and plugins
 

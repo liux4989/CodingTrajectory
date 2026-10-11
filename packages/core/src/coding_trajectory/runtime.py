@@ -147,16 +147,9 @@ class ServiceRuntime:
         params = self._validate(method, params)
         if method.startswith("project.") or method == "living.sessions":
             store, note = DocumentStore.from_session_graphs([]), "(source metadata)"
-        elif method == "living.events":
-            store, note = resolve_store(
-                params["scope"],
-                global_scope=self.global_scope,
-                current_dir=self.current_dir,
-                cache=self.cache,
-            )
         else:
             store, note = resolve_store(
-                params,
+                params["scope"] if method == "living.events" else params,
                 global_scope=self.global_scope,
                 current_dir=self.current_dir,
                 cache=self.cache,

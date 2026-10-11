@@ -1,4 +1,4 @@
-"""Service layer implementing the session-api.json contract.
+"""Service layer implementing the versioned public Core contracts.
 
 Split into ``serializers`` (output shaping and id parsing), ``store``
 (discovery-backed stores and request-scoped in-memory ownership), and
