@@ -1,17 +1,15 @@
-"""Lossless local script source artifacts from transcript inputs."""
+"""Read-only script source references into original transcript inputs."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from coding_trajectory.ingestion.execution_models import SourceArtifact
+from coding_trajectory.ingestion.execution_models import SourceReference
 from coding_trajectory.ingestion.models import Item, Session, Vendor
 from coding_trajectory.query import DocumentError
 
@@ -143,77 +141,19 @@ def _native_command_source(
     return text, pointer, "shell"
 
 
-def materialize_bytes(path: Path, content: bytes) -> None:
-    """Atomically install complete private content, preserving an existing file."""
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
-        temporary = Path(stream.name)
-        os.chmod(temporary, 0o600)
-        stream.write(content)
-    try:
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.read_bytes() != content:
-                raise DocumentError(
-                    "existing artifact differs from its content digest"
-                ) from None
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def materialize_source(
-    evidence: ToolSourceEvidence, directory: Path | None = None
-) -> SourceArtifact:
-    source_bytes = evidence.source_text.encode("utf-8")
-    digest = hashlib.sha256(source_bytes).hexdigest()
-    extension = {"javascript": "js", "shell": "sh", "text": "txt"}[evidence.language]
-    directory = (
-        directory.resolve() if directory else Path.cwd() / ".artifacts" / "tool-sources"
-    )
-    path = directory / f"{evidence.item.item_id}-{digest}.{extension}"
-    artifact = SourceArtifact(
+def source_reference(evidence: ToolSourceEvidence) -> SourceReference:
+    """Locate literal source in its authoritative log without exporting files."""
+    return SourceReference(
         session_id=str(evidence.item.session_id),
         item_id=str(evidence.item.item_id),
         tool_name=evidence.item.tool_name,
         source_field=evidence.source_field,
         language=evidence.language,
-        path=str(path),
-        link=f"[Full source](<{path}>)",
-        provenance_path=str(path.with_suffix(path.suffix + ".json")),
-        source_sha256=digest,
+        link=f"[Open source log](<{evidence.source_log}>)",
+        record_indices=[row["_ct_record_index"] for row in evidence.records],
+        record_digests=[row["_ct_record_sha256"] for row in evidence.records],
+        source_sha256=hashlib.sha256(evidence.source_text.encode("utf-8")).hexdigest(),
         source_log=str(evidence.source_log),
         source_log_sha256=evidence.source_log_sha256,
         provider_call_id=getattr(evidence.item, "tool_call_id", None),
     )
-    path = Path(artifact.path)
-    # Validate ownership before materializing anything. Keep exports immutable
-    # and preserve the first source-log snapshot when live logs later append.
-    if path.exists() and path.read_bytes() != source_bytes:
-        raise DocumentError("existing source export differs from its content digest")
-    provenance_path = Path(artifact.provenance_path)
-    if provenance_path.exists():
-        existing = SourceArtifact.model_validate_json(provenance_path.read_bytes())
-        if (
-            existing.item_id != artifact.item_id
-            or existing.source_sha256 != artifact.source_sha256
-        ):
-            raise DocumentError(
-                "existing source provenance does not match the selected item"
-            )
-        artifact = existing
-    materialize_bytes(path, source_bytes)
-    content = (artifact.model_dump_json(indent=2) + "\n").encode("utf-8")
-    # Two concurrent requests can fence different append-only snapshots for
-    # the same source. Keep the first matching receipt, never overwrite it.
-    try:
-        materialize_bytes(provenance_path, content)
-    except DocumentError:
-        existing = SourceArtifact.model_validate_json(provenance_path.read_bytes())
-        if (
-            existing.item_id != artifact.item_id
-            or existing.source_sha256 != artifact.source_sha256
-        ):
-            raise
-        artifact = existing
-    return artifact

@@ -195,7 +195,8 @@ activity or lifecycle records end that pairing window. This also restores contex
 eviction accounting for newer rollouts that omit the legacy event.
 
 Existing session commands share `Turn → execution unit → item references`.
-Overview renders script executions with Open source and result links and external
+Overview renders script executions with Open source log links, original-log
+result references, and external
 call composition. Summary uses the same units; items/events/search/tool usage link
 items through `script_id` and resolve parents in the response's `execution_units`
 layer. Direct tools stay direct item references. Stats group script-owned content

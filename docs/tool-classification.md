@@ -130,7 +130,7 @@ ct session search SESSION_ID QUERY
 ct session usage SESSION_ID --output json
 ```
 
-Overview places script units within each turn, with an **Open source** link and
+Overview places script units within each turn, with an **Open source log** link and
 observed composition beneath the script. Items/events/search/tool usage carry
 `script_id` references. Their `execution_units` response layer resolves the
 parents for returned evidence, including when an item page omits its parent.
@@ -142,9 +142,10 @@ continue to work through this hierarchy.
 
 Each script has four parts:
 
-- **Source:** complete literal input exported losslessly with an Open source
-  link, content digest, provider identity, and original log provenance. Exports
-  are local references; Core responses contain no raw code body. Native shell
+- **Source:** a reference to the original log with record indices and digests,
+  source field, content digest, and provider identity. The Open source log link
+  opens that log; it does not point to an extracted script. Core responses
+  contain no raw code body. Native shell
   text comes from the actual shell argument, preserving whitespace that command
   previews may normalize. An argv vector is not rewritten into invented code.
 - **External calls:** observed native calls and explicit host inventories
@@ -165,8 +166,13 @@ proof it remains unknown, even when the observed-call list is empty. Source-only
 candidates are not exhaustive code analysis; agents read full source for deeper
 understanding. No invocation list claims to explain program control flow.
 
-Source, argument, and output artifacts are content-addressed, privately created
-under ignored `.artifacts/tool-sources/`, and never executed during extraction.
-The first matching source export preserves its original snapshot provenance as
-logs append. Missing literal source stays a direct tool item; no code is invented.
+Source, argument, and output evidence stays in the original session logs.
+Execution-layer construction reads those logs and creates no exported source,
+provenance, argument, or result files. References identify the selected log
+snapshot and records; record digests allow evidence checks after a live log
+appends. Native item/event identities locate arguments, and inventory pointers
+locate host-recorded arguments. Missing literal source stays a direct tool item;
+no code is invented. Full evidence remains available while the original logs
+are retained. Previously generated files under `.artifacts/tool-sources/` or
+the user cache are no longer used and can be removed manually.
 There are no separate source or script inspection commands.

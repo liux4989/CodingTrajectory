@@ -87,9 +87,10 @@ Coverage fields distinguish observed, derived, partial, and unavailable data.
 Retention is independent of publication. Standard queries retain bounded previews,
 semantic tool descriptions, operational evidence, provenance, and measurements.
 They do not expose arbitrary raw vendor payloads as canonical history. Script
-units link to privately created local source/argument/output artifacts and original
-logs. Full source is extracted losslessly; raw artifact bodies stay outside the
-canonical response. Observed calls and source-only candidates are distinct, and
+units reference source, arguments, and outputs in the original logs using record
+indices, digests, and provider/item identities. Analysis creates no evidence
+exports; full source is read losslessly and raw bodies stay outside the canonical
+response. Observed calls and source-only candidates are distinct, and
 the execution layer does not reconstruct program order.
 
 **Warning:** retained content and local logs can contain private information.

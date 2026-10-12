@@ -8,15 +8,15 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field
 
 
-class SourceArtifact(BaseModel):
+class SourceReference(BaseModel):
     session_id: str
     item_id: str
     tool_name: str | None = None
     source_field: str
     language: str
-    path: str
     link: str
-    provenance_path: str
+    record_indices: list[int]
+    record_digests: list[str]
     source_sha256: str
     source_log: str
     source_log_sha256: str
@@ -79,7 +79,7 @@ class ToolScriptExecution(BaseModel):
     turn_id: str
     item_id: str
     tool_name: str | None = None
-    source: SourceArtifact
+    source: SourceReference
     source_preview: str | None = Field(default=None, max_length=280)
     source_preview_truncated: bool = False
     open_source_link: str

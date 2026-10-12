@@ -15,15 +15,14 @@ from coding_trajectory.ingestion.execution_models import (
     DirectItemReference,
     ExecutionResult,
     ExternalCall,
-    SourceArtifact,
+    SourceReference,
     ToolScriptExecution,
 )
 from coding_trajectory.ingestion.execution_sources import (
     ToolSourceEvidence,
     _extract_source,
     _native_command_source,
-    materialize_bytes,
-    materialize_source,
+    source_reference,
 )
 from coding_trajectory.ingestion.models import Item, Session
 from coding_trajectory.query import DocumentError
@@ -323,7 +322,7 @@ def _output_chunks(
         if not isinstance(message, dict):
             continue
         if message.get("role") == "toolResult" and message.get("toolCallId") == origin:
-            chunks.append({"record_index": index, "value": message.get("content")})
+            chunks.append({"record_index": index, "record_sha256": row.get("_ct_record_sha256"), "value": message.get("content")})
         content = message.get("content", [])
         if isinstance(content, list):
             for block in content:
@@ -333,7 +332,7 @@ def _output_chunks(
                     and block.get("tool_use_id") == origin
                 ):
                     chunks.append(
-                        {"record_index": index, "value": block.get("content")}
+                        {"record_index": index, "record_sha256": row.get("_ct_record_sha256"), "value": block.get("content")}
                     )
     if (
         not call_id
@@ -346,12 +345,18 @@ def _output_chunks(
     return chunks
 
 
-def _materialize_result(source: SourceArtifact, payload: Any) -> dict[str, str]:
-    content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-    digest = hashlib.sha256(content).hexdigest()
-    path = Path(source.path).parent / f"{source.item_id}-{digest}.result.json"
-    materialize_bytes(path, content)
-    return {"path": str(path), "link": f"[Open result](<{path}>)", "sha256": digest}
+def _output_reference(
+    evidence: ToolSourceEvidence, chunks: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Refer to recorded outputs without duplicating their bodies on disk."""
+    return {
+        "source_log": str(evidence.source_log),
+        "source_log_sha256": evidence.source_log_sha256,
+        "record_indices": [c["record_index"] for c in chunks if "record_index" in c],
+        "record_digests": [c.get("record_sha256") for c in chunks if "record_index" in c],
+        "item_ids": [c["item_id"] for c in chunks if "item_id" in c],
+        "provider_call_id": getattr(evidence.item, "tool_call_id", None),
+    }
 
 
 def _banner_text(value: Any) -> str:
@@ -441,7 +446,7 @@ def _continuations(
 
 
 def build_tool_script(
-    evidence: ToolSourceEvidence, source: SourceArtifact
+    evidence: ToolSourceEvidence, source: SourceReference
 ) -> ToolScriptExecution:
     observed, source_only = _native_calls(evidence)
     native_observed = observed
@@ -477,7 +482,7 @@ def build_tool_script(
     if continuation_ids:
         chunks = _output_chunks(evidence, continuation_ids=continuation_ids)
     output_ref = (
-        _materialize_result(source, {"emitted_output": chunks}) if chunks else None
+        _output_reference(evidence, chunks) if chunks else None
     )
     # Only a transport banner establishes a runtime checkpoint. Emitted text
     # mentioning a running cell is not evidence that this invocation yielded.
@@ -530,7 +535,14 @@ def build_tool_script(
                 else json.dumps(value, ensure_ascii=False)
             )
             call.arguments_ref = (
-                _materialize_result(source, {"arguments": value})
+                {
+                    "source_log": str(evidence.source_log),
+                    "source_log_sha256": evidence.source_log_sha256,
+                    **call.evidence_ref,
+                    "item_id": call.item_id,
+                    "provider_call_id": call.provider_call_id,
+                    "selection": "call_arguments",
+                }
                 if call.observation == "observed"
                 else None
             )
@@ -557,7 +569,7 @@ def build_tool_script(
         source=source,
         source_preview=sanitize_argument_preview(evidence.source_text),
         source_preview_truncated=len(evidence.source_text) > 280,
-        open_source_link=f"[Open source](<{source.path}>)",
+        open_source_link=source.link,
         context_refs=_context(evidence),
         observed_external_calls=observed,
         source_only_calls=source_only,
@@ -746,8 +758,8 @@ def build_session_execution_layer(
                 source_log_sha256=snapshot_digest,
                 records=root_records,
             )
-            artifact = materialize_source(evidence)
-            script = build_tool_script(evidence, artifact)
+            reference = source_reference(evidence)
+            script = build_tool_script(evidence, reference)
             scripts[str(item.item_id)] = script
             owned.update(script.item_ids)
     for turn in session.turns:
