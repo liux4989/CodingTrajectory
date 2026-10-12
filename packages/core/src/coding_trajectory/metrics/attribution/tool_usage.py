@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from coding_trajectory.analysis.content_size import scoped_content_size_cache
 from coding_trajectory.ingestion.models import SessionGraph, is_tool_shaped_item
@@ -24,7 +25,6 @@ from coding_trajectory.metrics.models import (
 )
 from coding_trajectory.metrics.pricing import PriceRule
 from coding_trajectory.token_counter import session_scoped
-
 
 
 @session_scoped
@@ -63,6 +63,9 @@ def build_session_graph_tool_usage_uncached(
     full = precomputed_metrics or _build_full_metrics(session_graph)
 
     tool_items: list[ToolItemFlat] = []
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
+
+    execution_index = build_session_graph_index(session_graph)
     item_real_token_costs: list[ItemRealTokenCostFlat] = []
     selected_allocated_costs: list[AllocatedRealTokenCost | None] = []
     pricing_rule_cache: dict[tuple[str | None, str], PriceRule | None] = {}
@@ -107,6 +110,9 @@ def build_session_graph_tool_usage_uncached(
                 )
             )
 
+    for item in tool_items:
+        if script := execution_index.script_by_item_id.get(item.item_id):
+            item.script_id = script.unit_id
     payload = SessionGraphToolUsageFlat(
         root_session_id=full.root_session_id,
         tool_item_count=len(tool_items),

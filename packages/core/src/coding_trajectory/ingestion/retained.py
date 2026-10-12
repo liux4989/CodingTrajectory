@@ -15,7 +15,6 @@ import re
 from datetime import datetime
 from pathlib import PurePath
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -30,6 +29,7 @@ from coding_trajectory.analysis.measurements import (
     extract_session_measurements,
 )
 from coding_trajectory.analysis.request_lineage import extract_user_request
+from coding_trajectory.analysis.tool_arguments import sanitize_argument_preview
 from coding_trajectory.analysis.tool_summary import (
     pending_plan_actions,
     summarize_tool_call,
@@ -50,6 +50,7 @@ from coding_trajectory.analysis.tool_summary_shared import (
     WRITE_FILE,
 )
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
+from coding_trajectory.ingestion.execution_models import DirectItemReference
 from coding_trajectory.ingestion.graph import canonical_spawn_origins
 from coding_trajectory.ingestion.indexes import (
     SessionGraphIndex,
@@ -342,6 +343,15 @@ def _retain_session(
                 user_request_event_id=request_id,
                 event_ids=list(dict.fromkeys(ids)),
                 team_state=_retain_team_state(turn.team_state),
+                execution_units=[
+                    unit.model_copy(deep=True) for unit in turn.execution_units
+                ]
+                or [
+                    DirectItemReference(
+                        unit_id=str(item.item_id), item_id=str(item.item_id)
+                    )
+                    for item in sorted(turn.items, key=lambda value: value.sequence)
+                ],
                 items=[
                     _retain_item(
                         item, session, turn, item_ids, completions, tokenizer, provider
@@ -559,7 +569,7 @@ def _tool_summary(
         and item.vendor_data.get("published_fact_projection") is True
     ):
         return None
-    raw = measurements.tool_summary or summarize_tool_call(item)
+    raw = summarize_tool_call(item)
     if not isinstance(raw, dict) or not (name := _bounded(raw.get("name"))):
         return None
     summary: dict[str, Any] = {"name": name}
@@ -571,6 +581,9 @@ def _tool_summary(
         "activity_outcome",
         "activity_fidelity",
         "activity_wrapper_status",
+        "activity_hidden_reason",
+        "classification",
+        "detail_basis",
     ):
         if (value := _bounded(raw.get(key))) is not None:
             summary[key] = value
@@ -580,7 +593,12 @@ def _tool_summary(
     if isinstance(description, str) and (
         target := _safe_detail_target(description, cwd=cwd)
     ):
+        raw_detail = raw.get("detail")
+        raw_detail = raw_detail if isinstance(raw_detail, dict) else {}
         kind = (
+            raw_detail.get("kind") if raw.get("detail_basis") == "arguments" else None
+        )
+        kind = kind or (
             "coordination"
             if name in {TODO_LIST, SUBAGENT_TASK, AGENT_COLLAB, SESSION_HANDOFF}
             else _DETAIL_KINDS.get(name, "tool")
@@ -592,7 +610,9 @@ def _tool_summary(
             detail={
                 "kind": kind,
                 "target": target,
-                "scope": None,
+                "scope": _safe_detail_target(raw_detail["scope"], cwd=cwd)
+                if isinstance(raw_detail.get("scope"), str)
+                else None,
                 "truncated": truncated,
                 "safety": "sanitized",
             },
@@ -870,31 +890,7 @@ def _portable_path(value: str | None, cwd: str | None = None) -> str | None:
 
 
 def _safe_detail_target(value: str, *, cwd: str | None) -> str | None:
-    normalized = " ".join(value.split()).strip()
-    normalized = re.sub(
-        r"https?://[^\s'\"]+", lambda match: _safe_url(match.group(0)), normalized
-    )
-    normalized = re.sub(
-        r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*", r"\1 [redacted]", normalized
-    )
-    normalized = re.sub(
-        r"(?i)((?:password|passwd|token|secret|api[-_]?key|authorization|cookie)"
-        r"\s*[:=]\s*|--(?:password|passwd|token|secret|api[-_]?key|authorization|cookie)\s+)"
-        r"(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
-        r"\1[redacted]",
-        normalized,
-    )
-    return _preview(normalized)
-
-
-def _safe_url(value: str) -> str:
-    try:
-        parsed = urlsplit(value)
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port is not None else ""
-    except ValueError:
-        return "[url]"
-    return urlunsplit((parsed.scheme, f"{host}{port}", parsed.path, "", ""))
+    return sanitize_argument_preview(value, cwd=cwd)
 
 
 __all__ = [

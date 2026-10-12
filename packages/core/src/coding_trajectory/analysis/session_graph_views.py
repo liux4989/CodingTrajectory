@@ -520,7 +520,9 @@ def _turn_nav_node(
             "status": turn.status,
             "user_request": user_request,
             "activity": build_overview_flows(
-                turn.items, flatten_commands=session.vendor == Vendor.CODEX_CLI
+                turn.items,
+                flatten_commands=session.vendor == Vendor.CODEX_CLI,
+                execution_units=turn.execution_units,
             ),
             "refs": {
                 "item_ids": [str(item.item_id) for item in turn.items],

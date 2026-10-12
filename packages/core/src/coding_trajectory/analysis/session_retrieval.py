@@ -666,8 +666,18 @@ def _recent_activity_cells(
     cells: list[_RankedSummaryItem] = []
     for turn in turns:
         items_by_id = {str(item.item_id): item for item in turn.items}
-        for item_run in _summary_activity_item_runs(turn.items, signals):
-            for cell in build_flows(item_run, flatten_commands=flatten_commands):
+        for item_run in _summary_activity_item_runs(
+            turn.items,
+            signals,
+            script_item_ids={
+                u.item_id for u in turn.execution_units if u.kind == "tool_script"
+            },
+        ):
+            for cell in build_flows(
+                item_run,
+                flatten_commands=flatten_commands,
+                execution_units=turn.execution_units,
+            ):
                 if is_control_only_activity_cell(cell):
                     continue
                 item_ids = _activity_cell_item_ids(cell)
@@ -690,6 +700,9 @@ def _recent_activity_cells(
                     "label": _activity_cell_label(cell, signals, representative),
                     "references": references,
                 }
+                if cell.get("type") == "tool_script":
+                    value["script_id"] = cell["script"]["unit_id"]
+                    references["script_id"] = cell["script"]["unit_id"]
                 status = _activity_cell_status(cell, signals, representative)
                 if status is not None:
                     value["status"] = status
@@ -704,7 +717,7 @@ def _recent_activity_cells(
 
 
 def _summary_activity_item_runs(
-    items: list[Item], signals: _ItemSignals
+    items: list[Item], signals: _ItemSignals, *, script_item_ids: set[str] | None = None
 ) -> list[list[Item]]:
     """Return visible runs for the canonical activity-cell projection.
 
@@ -724,7 +737,10 @@ def _summary_activity_item_runs(
         # The canonical projector ignores reasoning and superseded transport
         # wrappers without flushing its active cell. Mirror that behavior;
         # only summary's self-retrieval exclusion introduces an extra boundary.
-        if isinstance(item, ReasoningItem) or not signals.activity_visible(item):
+        if isinstance(item, ReasoningItem) or (
+            not signals.activity_visible(item)
+            and str(item.item_id) not in (script_item_ids or set())
+        ):
             continue
         active.append(item)
     if active:
@@ -741,6 +757,8 @@ def _activity_cell_item_ids(cell: dict[str, Any]) -> list[str]:
 
 
 def _activity_cell_kind(cell: dict[str, Any], representative: Item) -> str:
+    if cell.get("type") == "tool_script":
+        return "tool_script"
     if cell.get("type") == "background_terminal_wait":
         return "background_terminal_wait"
     if cell.get("activity_kind") == "background_terminal_interaction":
@@ -754,6 +772,8 @@ def _activity_cell_label(
     cell: dict[str, Any], signals: _ItemSignals, representative: Item
 ) -> str:
     cell_type = cell.get("type")
+    if cell_type == "tool_script":
+        return f"Tool script · {cell.get('name') or 'executor'}"
     count = cell.get("count")
     if cell_type == "background_terminal_wait":
         suffix = f" ({count} polls)" if isinstance(count, int) and count > 1 else ""
@@ -778,6 +798,8 @@ def _activity_cell_label(
 def _activity_cell_status(
     cell: dict[str, Any], signals: _ItemSignals, representative: Item
 ) -> str | None:
+    if cell.get("type") == "tool_script":
+        return cell["script"]["result"]["lifecycle"]
     if (
         isinstance(representative, AgentMessageItem)
         or cell.get("type") == "background_terminal_wait"

@@ -221,6 +221,11 @@ def _render_markdown_table(rows: list[str]) -> list[str]:
 def _trim_terminal_line(line: str, *, limit: int = TERMINAL_LINE_LIMIT) -> str:
     if len(line) <= limit:
         return line
+    item_suffix = re.fullmatch(r"(\s*-\s+)(.+?)(\s+\(items [^)]+\))", line)
+    if item_suffix:
+        prefix, text, suffix = item_suffix.groups()
+        text_limit = max(limit - len(prefix) - len(suffix), 16)
+        return f"{prefix}{truncate_text_preview(text, max_len=text_limit)}{suffix}"
     bracket_suffix = re.fullmatch(r"(\s*-\s+\S+\s+)(.+?)(\s+\[[^\]]+\])", line)
     if bracket_suffix:
         prefix, text, suffix = bracket_suffix.groups()
@@ -986,7 +991,9 @@ def render_usage_line(usage: dict[str, Any]) -> str:
             + (usage.get("cache_write_tokens") or 0)
             + usage["completion_tokens"]
         )
-        parts.append(f"prompt + output (including cache) {format_tokens(prompt_completion)}")
+        parts.append(
+            f"prompt + output (including cache) {format_tokens(prompt_completion)}"
+        )
     if "cost_usd" in usage:
         parts.append(f"reported cost {format_cost(usage.get('cost_usd'))}")
     return "  ".join(parts)

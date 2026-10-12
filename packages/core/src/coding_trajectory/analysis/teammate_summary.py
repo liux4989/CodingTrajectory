@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
-import re
 from typing import Any
 
 from coding_trajectory.analysis.activity_flow import build_flows
@@ -292,8 +292,16 @@ def _build_lead_flow(
                     event["task_id"] = task_match.group(1)
             flow.append(event)
 
-    for item in build_flows(turn.items):
-        if item.get("type") == "tool_call":
+    for item in build_flows(turn.items, execution_units=turn.execution_units):
+        if item.get("type") == "tool_script":
+            flow.append(
+                {
+                    "type": "lead_tool_script",
+                    "script_id": item["script"]["unit_id"],
+                    "item_ids": item["item_ids"],
+                }
+            )
+        elif item.get("type") == "tool_call":
             flow.append({"type": "lead_tool_call", **_public_tool_flow_item(item)})
         elif item.get("type") == "tool_call_group":
             flow.append(

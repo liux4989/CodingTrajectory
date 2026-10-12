@@ -17,6 +17,10 @@ from coding_trajectory.analysis.tool_summary_shared import (
     SEARCH_TEXT,
 )
 from coding_trajectory.ingestion.common import prune_nones
+from coding_trajectory.ingestion.execution_models import (
+    ExecutionUnit,
+    ToolScriptExecution,
+)
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
     Item,
@@ -69,15 +73,15 @@ def is_control_only_activity_cell(item: dict[str, Any]) -> bool:
 
 
 def is_low_value_activity_cell(item: dict[str, Any]) -> bool:
-    """Whether an admitted semantic cell lacks overview-level information."""
+    """Whether a cell lacks both an action identity and a subject."""
 
     if item.get("type") == "tool_call_group":
-        return not item.get("descriptions") and int(item.get("count") or 0) < 2
+        return not item.get("name") and not item.get("descriptions")
     if item.get("type") != "tool_call":
         return False
     if item.get("activity_kind") == "background_terminal_interaction":
         return False
-    return not item.get("description")
+    return not item.get("name") and not item.get("description")
 
 
 def project_tool_activity(item: Item) -> dict[str, Any] | None:
@@ -96,10 +100,39 @@ def project_tool_activity(item: Item) -> dict[str, Any] | None:
 
 
 def build_flows(
-    items: list[Item], *, flatten_commands: bool = False
+    items: list[Item],
+    *,
+    flatten_commands: bool = False,
+    execution_units: list[ExecutionUnit] | None = None,
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
+    scripts = {
+        u.item_id: u
+        for u in execution_units or []
+        if isinstance(u, ToolScriptExecution)
+    }
+    owned = {
+        identity
+        for u in scripts.values()
+        for identity in u.item_ids
+        if identity != u.item_id
+    }
     for item in items:
+        identity = str(item.item_id)
+        if identity in scripts:
+            script = scripts[identity]
+            result.append(
+                {
+                    "type": "tool_script",
+                    "name": script.tool_name,
+                    "item_id": identity,
+                    "item_ids": script.item_ids,
+                    "script": script.model_dump(mode="json"),
+                }
+            )
+            continue
+        if identity in owned:
+            continue
         if is_tool_shaped_item(item):
             activity = project_tool_activity(item)
             if activity is not None:
@@ -130,10 +163,15 @@ def build_flows(
 
 
 def build_overview_flows(
-    items: list[Item], *, flatten_commands: bool = False
+    items: list[Item],
+    *,
+    flatten_commands: bool = False,
+    execution_units: list[ExecutionUnit] | None = None,
 ) -> list[dict[str, Any]]:
     compacted: list[dict[str, Any]] = []
-    for item in build_flows(items, flatten_commands=flatten_commands):
+    for item in build_flows(
+        items, flatten_commands=flatten_commands, execution_units=execution_units
+    ):
         if is_control_only_activity_cell(item) or is_low_value_activity_cell(item):
             continue
         if item.get("type") == "assistant_response":
@@ -153,6 +191,10 @@ def build_overview_flows(
         compact = _compact_flow_item(item)
         if (
             compacted
+            # An unfamiliar name identifies the tool, not an identical action.
+            # Missing descriptions cannot prove that separate calls did the
+            # same work, so keep their individual evidence rows.
+            and item.get("classification") != "identity"
             and not (flatten_commands and compact.get("tool") == RUN_COMMAND)
             and _same_projected_tool_action(compacted[-1], compact)
         ):
@@ -164,6 +206,15 @@ def build_overview_flows(
 
 
 def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("type") == "tool_script":
+        return {
+            "tool": item.get("name") or "Tool script",
+            "kind": "tool_script",
+            "item_ids": item["item_ids"],
+            "script_id": item["script"]["unit_id"],
+            "target": item["script"].get("source_preview"),
+            "status": item["script"]["result"]["lifecycle"],
+        }
     if item.get("type") == "assistant_response":
         return {"text": item.get("text")}
 
@@ -206,6 +257,21 @@ def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
 
     if item.get("type") == "tool_call":
         outcome_bearing = item.get("activity_kind") not in _OUTCOMELESS_ACTIVITY_KINDS
+        if item.get("classification") == "identity":
+            return prune_nones(
+                {
+                    "tool": item.get("name"),
+                    "target": item.get("description"),
+                    "status": item.get("status"),
+                    "item_ids": [item["item_id"]] if item.get("item_id") else None,
+                    "outcome": public_activity_outcome(item.get("activity_outcome"))
+                    if outcome_bearing
+                    else None,
+                    "wrapper_status": item.get("activity_wrapper_status")
+                    if outcome_bearing
+                    else None,
+                }
+            )
         profile = tool_optimization_profile(
             str(item.get("name") or ""),
             _profile_name(item),
@@ -319,6 +385,8 @@ def _tool_activity_group_key(
 ) -> tuple[str, str | None, str | None] | None:
     if item.get("type") != "tool_call":
         return None
+    if item.get("classification") == "identity":
+        return None
     if item.get("activity_source") != "agent":
         return None
 
@@ -335,8 +403,8 @@ def _tool_activity_group_key(
             return ("background_terminal_wait", identity, None)
         return None
     if item.get("activity_kind") == "command":
-        # Keep each command's description and evidence ID together. Subjectless
-        # commands still pass through the overview's low-value visibility gate.
+        # Keep each command's description and evidence ID together, including
+        # commands for which only the action identity was retained.
         if flatten_commands:
             return None
         if item.get("activity_outcome") == "succeeded":

@@ -2,33 +2,9 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
-from coding_trajectory.analysis.tool_summary_shared import (
-    AGENT_COLLAB,
-    EDIT_FILE,
-    LIST_FILES,
-    PUBLIC_ACTIVITY_CONCEPTS,
-    READ_FILE,
-    RUN_COMMAND,
-    SEARCH_TEXT,
-    SHELL_TOOL_NAMES,
-    SUBAGENT_TASK,
-    TODO_LIST,
-    VENDOR_TOOL_CONCEPT,
-    WEB_FETCH,
-    WEB_SEARCH,
-    WRITE_FILE,
-    first_str,
-    short_command,
-    short_path,
-)
-from coding_trajectory.analysis.tool_summary_shell import (
-    SHELL_CHAIN_PREFIX,
-    classify_shell,
-    shell_cmd,
-)
+from coding_trajectory.analysis.tool_arguments import tool_argument_detail
 from coding_trajectory.ingestion.models import Item, ToolStatus
 
 _EXPANDED_EXEC_TOOL_NAME = "codex_exec_expanded"
@@ -85,6 +61,7 @@ def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
     metadata: dict[str, str | bool] = {}
     if raw_activity.get("hidden_from_overview") is True:
         metadata["hidden"] = True
+        metadata["hidden_reason"] = str(raw_activity.get("reason") or "adapter_hidden")
     activity_kind = raw_activity.get("kind")
     if isinstance(activity_kind, str):
         metadata["kind"] = activity_kind
@@ -122,35 +99,25 @@ def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
 
 
 def summarize_tool_call(item: Item) -> dict[str, Any] | None:
-    measurements = getattr(item, "measurements", None)
-    if measurements is not None and measurements.tool_summary:
-        return _finalize_activity_summary(dict(measurements.tool_summary))
-    # The remote-boundary scrubber deliberately removes content-derived tool
-    # summaries while retaining the body-free canonical item. Fall through to
-    # its bounded compact marker/tool identity instead of erasing the activity.
-    tool_name_raw = getattr(item, "tool_name", None)
-    tool_name = (tool_name_raw or "").strip() if isinstance(tool_name_raw, str) else ""
-    if not tool_name:
-        tool_name = {
-            "command_execution": "exec_command",
-            "file_change": "apply_patch",
-            "plan": "update_plan",
-        }.get(item.kind, "")
-    if not tool_name:
-        return None
+    """Describe every tool by its recorded identity, independent of its input.
 
-    # These are adapter-owned semantic markers used only after static Codex
-    # exec reconstruction. They survive measurements retention without raw
-    # wrapper code, stdin characters, or terminal identities.
+    Predefined aliases and semantic inference are disabled. Literal argument
+    details and adapter lifecycle evidence remain independent of categorization.
+    """
+    tool_name_raw = getattr(item, "tool_name", None)
+    tool_name = tool_name_raw.strip() if isinstance(tool_name_raw, str) else ""
     if tool_name == _EXPANDED_EXEC_TOOL_NAME:
         return None
+
+    # Compact markers preserve explicit control evidence without retaining
+    # terminal identifiers or raw interaction text. They are not categories.
     if tool_name.startswith(_BACKGROUND_WAIT_TOOL_PREFIX):
         identity_key = tool_name.removeprefix(_BACKGROUND_WAIT_TOOL_PREFIX)
         if not identity_key:
             return None
         return {
-            "name": RUN_COMMAND,
-            "optimization_profile": "activity:background_terminal_wait",
+            "name": "write_stdin",
+            "classification": "identity",
             "activity_kind": "background_terminal_wait",
             "activity_source": "agent",
             "activity_fidelity": "derived_static",
@@ -159,265 +126,85 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         }
     if tool_name == _BACKGROUND_INTERACTION_TOOL_NAME:
         return {
-            "name": "Interacted with background terminal",
-            "optimization_profile": "activity:background_terminal_interaction",
+            "name": "write_stdin",
+            "classification": "identity",
             "activity_kind": "background_terminal_interaction",
             "activity_source": "agent",
             "activity_fidelity": "derived_static",
             "activity_wrapper_status": "completed",
         }
+    if not tool_name:
+        if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
+            return None
+        tool_name = item.kind.replace("_", " ").capitalize()
 
-    tool_input = (
-        item.command
-        if item.kind == "command_execution"
-        else getattr(item, "input", None)
+    measurements = getattr(item, "measurements", None)
+    result = (
+        dict(measurements.tool_summary)
+        if measurements is not None and measurements.tool_summary
+        else {}
     )
-    # Adapters already identify canonical command items. A provider's transport
-    # name must not turn their shell semantics into an unknown generic tool.
-    classification_name = (
-        "exec_command"
-        if item.kind == "command_execution" and tool_name not in SHELL_TOOL_NAMES
-        else tool_name
-    )
-    concept, description, optimization_profile = _classify(
-        classification_name, tool_input
-    )
-
-    result: dict[str, Any] = {"name": concept}
-    if optimization_profile:
-        result["optimization_profile"] = optimization_profile
-    if description:
-        result["description"] = description
-        label_prefix_length = (
-            len(SHELL_CHAIN_PREFIX) if description.startswith(SHELL_CHAIN_PREFIX) else 0
+    retained_detail = {
+        key: result[key]
+        for key in ("description", "description_truncated", "detail", "detail_basis")
+        if key in result and result.get("detail_basis") == "arguments"
+    }
+    # Canonical identity wins over old semantic labels. Retain only descriptions
+    # produced by generic argument extraction, never the old optimization path.
+    result["name"] = tool_name
+    result["classification"] = "identity"
+    for key in (
+        "description",
+        "description_truncated",
+        "detail",
+        "breakdown",
+        "optimization_profile",
+        "detail_basis",
+    ):
+        result.pop(key, None)
+    detail = tool_argument_detail(item)
+    if detail is not None:
+        result.update(
+            description=detail.description,
+            description_truncated=detail.truncated,
+            detail_basis="arguments",
+            detail={
+                "kind": detail.kind,
+                "target": detail.description,
+                "scope": detail.scope,
+                "truncated": detail.truncated,
+                "safety": "sanitized",
+            },
         )
-        if (
-            classification_name in SHELL_TOOL_NAMES
-            and len(" ".join((shell_cmd(tool_input) or "").split()))
-            + label_prefix_length
-            > 280
-        ):
-            result["description_truncated"] = True
-    if item.kind != "command_execution" and concept != RUN_COMMAND:
-        result["breakdown"] = _other_output_breakdown(tool_name, tool_input)
+    else:
+        result.update(retained_detail)
+
     status = getattr(item, "status", None)
     if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
         result["status"] = "failed"
     activity = _activity_metadata(item)
     if activity.get("hidden") is True:
         result["activity_hidden"] = True
-    if isinstance(activity.get("kind"), str):
-        result["activity_kind"] = activity["kind"]
-    if isinstance(activity.get("source"), str):
-        result["activity_source"] = activity["source"]
-    if isinstance(activity.get("outcome"), str):
-        result["activity_outcome"] = activity["outcome"]
-    if isinstance(activity.get("fidelity"), str):
-        result["activity_fidelity"] = activity["fidelity"]
-    if isinstance(activity.get("wrapper_status"), str):
-        result["activity_wrapper_status"] = activity["wrapper_status"]
-    terminal_identity = activity.get("background_terminal_identity")
-    if isinstance(terminal_identity, str) and terminal_identity:
-        result["background_terminal_identity"] = terminal_identity
-    if activity.get("kind") == "background_terminal_interaction":
-        # The canonical input retains the exact keystrokes for detail views,
-        # but overview must not disclose them. This is a terminal interaction,
-        # not a shell command or an empty polling wait.
-        result["name"] = "Interacted with background terminal"
-        result["optimization_profile"] = "activity:background_terminal_interaction"
-        result.pop("description", None)
-    return _finalize_activity_summary(result)
-
-
-def _finalize_activity_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    """Apply the stable public-activity boundary to any retained summary.
-
-    Provider and transport names are open-ended. Default views admit only
-    canonical semantic concepts; unclassified calls stay available through
-    item detail regardless of status. This rule also applies to summaries
-    restored from compact history.
-    """
-
-    name = str(summary.get("name") or "")
-    description = summary.get("description")
-    if name == RUN_COMMAND and isinstance(description, str):
-        summary["description"] = short_command(description)
-    if (
-        name not in PUBLIC_ACTIVITY_CONCEPTS
-        and summary.get("activity_kind") != "background_terminal_interaction"
+        result["activity_hidden_reason"] = activity["hidden_reason"]
+    for source, target in (
+        ("kind", "activity_kind"),
+        ("source", "activity_source"),
+        ("outcome", "activity_outcome"),
+        ("fidelity", "activity_fidelity"),
+        ("wrapper_status", "activity_wrapper_status"),
+        ("background_terminal_identity", "background_terminal_identity"),
     ):
-        summary["activity_hidden"] = True
-    return summary
+        # Preserve retained adapter evidence when its raw metadata was dropped.
+        if target not in result and source in activity:
+            result[target] = activity[source]
 
-
-def _other_output_breakdown(tool_name: str, tool_input: Any) -> str:
-    """Return a compact label for output outside the known tool taxonomy.
-
-    The desktop ``exec`` tool can orchestrate several shell commands in one
-    tool item. Its output is therefore attributable to the wrapper as a whole,
-    not to each nested command independently. Preserve the nested labels when
-    available so session stats can expose the expensive wrapper call without
-    inventing an inner-command token split.
-    """
-    if tool_name != "exec" or not isinstance(tool_input, str):
-        return f"tool: {tool_name}"
-
-    labels = re.findall(r"\[\s*[\"']([^\"']{1,96})[\"']\s*,", tool_input)
-    unique_labels = list(
-        dict.fromkeys(label.strip() for label in labels if label.strip())
-    )
-    if unique_labels:
-        shown = ", ".join(unique_labels[:4])
-        remaining = len(unique_labels) - 4
-        suffix = f", +{remaining} more" if remaining > 0 else ""
-        count_label = "command" if len(unique_labels) == 1 else "commands"
-        return f"exec ({len(unique_labels)} {count_label}): {shown}{suffix}"
-    commands = _embedded_exec_commands(tool_input)
-    if commands:
-        command_descriptions = [
-            classify_shell("exec_command", {"cmd": command})[1] or "command"
-            for command in commands
-        ]
-        unique_descriptions = list(dict.fromkeys(command_descriptions))
-        shown = ", ".join(unique_descriptions[:4])
-        remaining = len(unique_descriptions) - 4
-        suffix = f", +{remaining} more" if remaining > 0 else ""
-        count_label = "command" if len(unique_descriptions) == 1 else "commands"
-        return f"exec ({len(unique_descriptions)} {count_label}): {shown}{suffix}"
-    return "exec orchestration"
-
-
-def _embedded_exec_commands(value: str) -> list[str]:
-    commands: list[str] = []
-    for match in re.finditer(r"\bcmd\s*:\s*([\"'`])", value):
-        quote = match.group(1)
-        start = match.end()
-        cursor = start
-        while cursor < len(value):
-            if value[cursor] == "\\":
-                cursor += 2
-                continue
-            if value[cursor] == quote:
-                command = value[start:cursor].strip()
-                if command:
-                    commands.append(command)
-                break
-            cursor += 1
-    return commands
-
-
-def _classify(tool_name: str, tool_input: Any) -> tuple[str, str | None, str | None]:
-    if tool_name in SHELL_TOOL_NAMES:
-        concept, description, profile = classify_shell(tool_name, tool_input)
-        return concept, description, profile
-
-    concept = VENDOR_TOOL_CONCEPT.get(tool_name, tool_name)
-    description = _describe_structured(concept, tool_input)
-    return concept, description, None
-
-
-def _describe_structured(concept: str, tool_input: Any) -> str | None:
-    if not isinstance(tool_input, dict):
-        return None
-
-    if concept in {READ_FILE, EDIT_FILE, WRITE_FILE}:
-        direct_path = short_path(
-            first_str(
-                tool_input,
-                ("file_path", "path", "target_file", "absolute_path", "file"),
-            )
-        )
-        if direct_path is not None:
-            return direct_path
-        paths = tool_input.get("paths")
-        if isinstance(paths, list):
-            visible_paths = [
-                short_path(path)
-                for path in paths
-                if isinstance(path, str) and path.strip()
-            ]
-            if len(visible_paths) == 1:
-                return visible_paths[0]
-            if visible_paths:
-                shown = ", ".join(visible_paths[:2])
-                suffix = (
-                    f", +{len(visible_paths) - 2}" if len(visible_paths) > 2 else ""
-                )
-                return f"{len(visible_paths)} files: {shown}{suffix}"
-        return None
-
-    if concept == SEARCH_TEXT:
-        pattern = first_str(tool_input, ("pattern", "query", "regex"))
-        scope = short_path(
-            first_str(tool_input, ("path", "include", "include_pattern", "dir_path"))
-        )
-        if pattern and scope:
-            return f"{pattern!r} within {scope}"
-        if pattern:
-            return repr(pattern)
-        return scope
-
-    if concept == LIST_FILES:
-        return short_path(
-            first_str(tool_input, ("path", "dir_path", "pattern", "directory"))
-        )
-
-    if concept == WEB_FETCH:
-        direct_url = first_str(tool_input, ("url", "uri"))
-        if direct_url is not None:
-            return direct_url
-        action = tool_input.get("action")
-        if isinstance(action, dict):
-            target = first_str(action, ("url", "uri"))
-            if target is not None:
-                return target
-        for key in ("open", "click", "find", "screenshot"):
-            operations = tool_input.get(key)
-            if not isinstance(operations, list):
-                continue
-            for operation in operations:
-                if not isinstance(operation, dict):
-                    continue
-                target = first_str(operation, ("url", "uri"))
-                if target is None:
-                    ref = first_str(operation, ("ref_id",))
-                    target = (
-                        ref if ref and ref.startswith(("http://", "https://")) else None
-                    )
-                if target is not None:
-                    return target
-        return None
-
-    if concept == WEB_SEARCH:
-        direct_query = first_str(tool_input, ("query", "q"))
-        if direct_query is not None:
-            return direct_query
-        for key in ("search_query", "image_query"):
-            queries = tool_input.get(key)
-            if not isinstance(queries, list):
-                continue
-            for query in queries:
-                if not isinstance(query, dict):
-                    continue
-                nested_query = first_str(query, ("query", "q"))
-                if nested_query is not None:
-                    return nested_query
-        return None
-
-    if concept == TODO_LIST:
-        todos = (
-            tool_input.get("todos") or tool_input.get("plan") or tool_input.get("items")
-        )
-        if isinstance(todos, list):
-            return f"{len(todos)} item(s)"
-        return first_str(tool_input, ("explanation", "text"))
-
-    if concept in {SUBAGENT_TASK, AGENT_COLLAB}:
-        detail = first_str(
-            tool_input, ("subagent_type", "agent_type", "description", "prompt")
-        )
-        if detail is not None:
-            return detail
-        return first_str(tool_input, ("action", "task_name", "target"))
-
-    return None
+    if result.get("activity_kind") in _OUTCOMELESS_ACTIVITY_KINDS:
+        result.pop("activity_outcome", None)
+    if result.get("activity_hidden") is True and not result.get(
+        "activity_hidden_reason"
+    ):
+        if result.get("activity_fidelity") == "observed_wrapper":
+            result["activity_hidden_reason"] = "static_exec_expansion"
+        else:
+            result.pop("activity_hidden", None)
+    return result

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
+from coding_trajectory.ingestion.execution_models import ToolScriptExecution
 from coding_trajectory.ingestion.models import (
     Event,
     Item,
@@ -31,6 +32,8 @@ class SessionGraphIndex:
     turns_by_id: dict[UUID, Turn]
     items_by_id: dict[UUID, Item]
     items_by_tool_call_id: dict[str, Item]
+    scripts_by_id: dict[str, ToolScriptExecution]
+    script_by_item_id: dict[UUID, ToolScriptExecution]
     events_by_id: dict[UUID, Event]
     items_by_event_id: dict[UUID, Item]
     session_by_turn_id: dict[UUID, UUID]
@@ -52,10 +55,17 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
     items_by_event_id: dict[UUID, Item] = {}
     session_by_turn_id: dict[UUID, UUID] = {}
     session_by_item_id: dict[UUID, UUID] = {}
+    scripts_by_id: dict[str, ToolScriptExecution] = {}
+    script_by_item_id: dict[UUID, ToolScriptExecution] = {}
 
     for session in session_graph.sessions:
         sessions_by_id[session.session_id] = session
         for turn in session.turns:
+            for unit in turn.execution_units:
+                if isinstance(unit, ToolScriptExecution):
+                    scripts_by_id[unit.unit_id] = unit
+                    for identity in unit.item_ids:
+                        script_by_item_id[UUID(identity)] = unit
             turns_by_id[turn.turn_id] = turn
             session_by_turn_id[turn.turn_id] = session.session_id
             for item in turn.items:
@@ -111,6 +121,8 @@ def build_session_graph_index(session_graph: SessionGraph) -> SessionGraphIndex:
         turns_by_id=turns_by_id,
         items_by_id=items_by_id,
         items_by_tool_call_id=items_by_tool_call_id,
+        scripts_by_id=scripts_by_id,
+        script_by_item_id=script_by_item_id,
         events_by_id=events_by_id,
         items_by_event_id=items_by_event_id,
         session_by_turn_id=session_by_turn_id,

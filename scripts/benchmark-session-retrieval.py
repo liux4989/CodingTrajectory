@@ -758,7 +758,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             )
         ),
         "command_labels_preserve_distinguishing_context": (
-            [entry.get("cmd") for entry in distinguished_command_activities]
+            [entry.get("target") for entry in distinguished_command_activities]
             == [
                 "uv run ruff check packages/core/src",
                 "uv run ruff check packages/cli/src",
@@ -768,7 +768,7 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             )
         ),
         "successful_commands_remain_flat": (
-            [entry.get("cmd") for entry in flattened_successful_commands]
+            [entry.get("target") for entry in flattened_successful_commands]
             == [
                 "uv run ruff check packages/core/src",
                 "uv run ruff check packages/cli/src",
@@ -779,15 +779,18 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             )
         ),
         "shell_behavior_survives_command_transport": (
-            semantic_read_activity.get("name") == "ReadFile"
-            and semantic_read_activity.get("description") == "docs/example.md"
+            semantic_read_activity.get("name") == "Command execution"
+            and semantic_read_activity.get("description")
+            == "sed -n '1,20p' docs/example.md"
             and "cmd" not in semantic_read_activity
-            and build_overview_flows([semantic_read_item])[0].get("path")
-            == "docs/example.md"
+            and build_overview_flows([semantic_read_item])[0].get("target")
+            == "sed -n '1,20p' docs/example.md"
         ),
         "control_only_waits_stay_detail_only": (
             len(internal_wait_activity) == 1
-            and internal_wait_activity[0].get("type") == "background_terminal_wait"
+            and internal_wait_activity[0].get("type") == "tool_call"
+            and internal_wait_activity[0].get("activity_kind")
+            == "background_terminal_wait"
             and public_wait_activity == []
             and all(
                 entry.get("kind") != "background_terminal_wait"
@@ -1089,7 +1092,7 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def evaluate_command_activity() -> dict[str, Any]:
-    """Qualify provider-asymmetric command projection without provider data."""
+    """Qualify generic command evidence across provider transports."""
 
     started = datetime(2026, 1, 2, tzinfo=UTC)
 
@@ -1219,7 +1222,11 @@ def evaluate_command_activity() -> dict[str, Any]:
     direct_recent = direct_summary["recent_activity"]
     roundtrip_recent = roundtrip_summary["recent_activity"]
 
-    expected_descriptions = ["'qualification-marker' within .", "find . -type f"]
+    # Expectations come from the authored command inputs, not from projected
+    # output. Generic identity retains literal arguments and individual refs;
+    # it does not classify shell behavior or coalesce equal-looking calls.
+    expected_commands = ["rg qualification-marker .", "find . -type f"]
+    expected_reads = ["cat docs/alpha.md", "sed -n '1,20p' docs/beta.md"]
     pi_shape = [
         {k: v for k, v in item.items() if k != "item_ids"} for item in pi_activity
     ]
@@ -1227,54 +1234,53 @@ def evaluate_command_activity() -> dict[str, Any]:
         {k: v for k, v in item.items() if k != "item_ids"} for item in claude_activity
     ]
     checks = {
-        "pi_no_fidelity_groups": len(pi_activity) == 1
-        and pi_activity[0].get("count") == 2
-        and pi_activity[0].get("commands") == expected_descriptions,
-        "claude_no_fidelity_groups": claude_shape == pi_shape,
+        "pi_no_fidelity_keeps_individual_calls": len(pi_activity) == 2
+        and [item.get("target") for item in pi_activity] == expected_commands
+        and all("count" not in item for item in pi_activity),
+        "claude_no_fidelity_matches_pi": claude_shape == pi_shape,
         "codex_observed_details_retained": len(codex_activity) == 2
         and len(observed_cells) == 2
         and all("count" not in item for item in observed_cells)
-        and codex_activity[0].get("query") == expected_descriptions[0]
-        and codex_activity[1].get("path") == expected_descriptions[1],
-        "failed_cells_retain_details_and_outcomes": len(failed_activity) == 2
+        and [item.get("target") for item in codex_activity] == expected_commands,
+        "failed_calls_retain_details_and_outcomes": len(failed_activity) == 2
         and len(failed_cells) == 2
         and all(item.get("outcome") == "failed" for item in failed_activity),
         "command_details_not_replaced_by_placeholders": all(
-            build_overview_flows([item])[0].get("cmd") == "custom-check"
+            build_overview_flows([item])[0].get("target") == "custom-check"
             for item in command_items
         ),
-        "shell_reads_keep_distinct_targets": [
-            build_overview_flows([item])[0].get("path") for item in read_items
+        "shell_reads_keep_literal_commands": [
+            build_overview_flows([item])[0].get("target") for item in read_items
         ]
-        == ["docs/alpha.md", "docs/beta.md"],
-        "grouped_reads_keep_targets": len(read_activity) == 1
-        and read_activity[0].get("count") == 2
-        and read_activity[0].get("commands") == ["docs/alpha.md", "docs/beta.md"],
-        "failed_reads_keep_target_and_outcome": len(repeated_read_failure) == 1
-        and repeated_read_failure[0].get("path") == "docs/alpha.md"
-        and repeated_read_failure[0].get("count") == 2
-        and repeated_read_failure[0].get("outcome") == "failed",
+        == expected_reads,
+        "reads_are_not_coalesced": len(read_activity) == 2
+        and [item.get("target") for item in read_activity] == expected_reads
+        and all("count" not in item for item in read_activity),
+        "failed_reads_keep_individual_outcomes": len(repeated_read_failure) == 2
+        and all(
+            item.get("target") == expected_reads[0] and item.get("outcome") == "failed"
+            for item in repeated_read_failure
+        ),
         "read_targets_survive_retention": build_session_graph_overview(read_graph)
         == build_session_graph_overview(read_roundtrip),
-        "repeated_failure_keeps_count_outcome_and_refs": repeated_failure
-        == [
-            {
-                "tool": "RunCommand",
-                "status": "failed",
-                "count": 2,
-                "cmd": "custom-check",
-                "item_ids": [str(command_items[0].item_id), str(_uuid(740))],
-                "outcome": "failed",
-            }
-        ],
-        "projections_preserve_classified_details": "qualification-marker"
+        "repeated_failure_keeps_individual_refs": len(repeated_failure) == 2
+        and [item.get("item_ids") for item in repeated_failure]
+        == [[str(command_items[0].item_id)], [str(_uuid(740))]]
+        and all(
+            item.get("target") == "custom-check"
+            and item.get("outcome") == "failed"
+            and "count" not in item
+            for item in repeated_failure
+        ),
+        "projections_preserve_argument_details": "qualification-marker"
         in _canonical_json([pi_activity, codex_activity, failed_activity]),
         "overview_retention_parity": direct_overview == roundtrip_overview,
         "observed_retention_parity": build_session_graph_overview(codex_graph)
         == build_session_graph_overview(codex_roundtrip_graph),
         "summary_retention_parity": direct_recent == roundtrip_recent,
-        "summary_renderer_preserves_grouping": len(direct_recent) == 1
-        and direct_recent[0].get("label") == "Ran 2 commands",
+        "summary_preserves_individual_commands": len(direct_recent) == 2
+        and [entry.get("label") for entry in direct_recent]
+        == [f"Command execution: {command}" for command in expected_commands],
     }
     return {
         "checks": checks,

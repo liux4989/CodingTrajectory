@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "status": "fail",
+  "pricing_artifact_version": "2026-07-15-baseline-v1",
+  "cases": [
+    {
+      "case": "codex-fork-runtime",
+      "provider": "codex_cli",
+      "status": "pass",
+      "assertions": 40,
+      "structural_assertions": 13,
+      "invariants": 12,
+      "differences": []
+    },
+    {
+      "case": "claude-stream-cache",
+      "provider": "claude_code",
+      "status": "pass",
+      "assertions": 45,
+      "structural_assertions": 9,
+      "invariants": 12,
+      "differences": []
+    },
+    {
+      "case": "pi-reported-cost",
+      "provider": "pi",
+      "status": "fail",
+      "assertions": 50,
+      "structural_assertions": 9,
+      "invariants": 12,
+      "differences": [
+        {
+          "case": "pi-reported-cost",
+          "surface": "session.overview",
+          "scope": "$.turns[0].activities[0]",
+          "field": "$.turns[0].activities[0].tool",
+          "expected": "RunCommand",
+          "actual": "bash",
+          "source_refs": [
+            "source/session.jsonl:5-6"
+          ],
+          "audit_ref": "audit.md#identity-preserving-tool-visibility",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        },
+        {
+          "case": "pi-reported-cost",
+          "surface": "session.overview",
+          "scope": "$.turns[0].activities[1]",
+          "field": "$.turns[0].activities[1].tool",
+          "expected": "RunCommand",
+          "actual": "bash",
+          "source_refs": [
+            "source/session.jsonl:7-8"
+          ],
+          "audit_ref": "audit.md#identity-preserving-tool-visibility",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        },
+        {
+          "case": "pi-reported-cost",
+          "surface": "session.overview",
+          "scope": "$.turns[0].activities[2]",
+          "field": "$.turns[0].activities[2].tool",
+          "expected": "RunCommand",
+          "actual": "bash",
+          "source_refs": [
+            "source/session.jsonl:9-10"
+          ],
+          "audit_ref": "audit.md#identity-preserving-tool-visibility",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        },
+        {
+          "case": "pi-reported-cost",
+          "surface": "session.overview",
+          "scope": "$.turns[0].activities[3]",
+          "field": "$.turns[0].activities[3].tool",
+          "expected": "RunCommand",
+          "actual": "bash",
+          "source_refs": [
+            "source/session.jsonl:11-12"
+          ],
+          "audit_ref": "audit.md#identity-preserving-tool-visibility",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        }
+      ]
+    },
+    {
+      "case": "codex-interagent-turn",
+      "provider": "codex_cli",
+      "status": "pass",
+      "assertions": 66,
+      "structural_assertions": 19,
+      "invariants": 20,
+      "differences": []
+    }
+  ]
+}

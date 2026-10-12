@@ -70,7 +70,11 @@ def overview_rows(
             ]
             activities = [
                 flow
-                for flow in build_overview_flows(turn.items, flatten_commands=True)
+                for flow in build_overview_flows(
+                    turn.items,
+                    flatten_commands=True,
+                    execution_units=turn.execution_units,
+                )
                 if "tool" in flow
             ]
             text_trimmed = any(
@@ -87,6 +91,13 @@ def overview_rows(
             text_trimmed = text_trimmed or bool(
                 request_event and request_event.payload.get("preview_truncated")
             )
+            visible_ids = {
+                *[a["item_id"] for a in assistants[-8:]],
+                *[identity for a in activities[-8:] for identity in a["item_ids"]],
+            }
+            visible_units = [
+                u for u in turn.execution_units if u.unit_id in visible_ids
+            ][:100]
             row = OverviewTurn(
                 global_ordinal=len(turns),
                 session_id=str(session.session_id),
@@ -113,6 +124,7 @@ def overview_rows(
                 else None,
                 assistant_responses=assistants[-8:],
                 activities=activities[-8:],
+                execution_units=visible_units,
                 refs={
                     "item_ids": [str(item.item_id) for item in turn.items[:100]],
                     "user_request_event_id": str(turn.user_request_event_id)
@@ -124,6 +136,9 @@ def overview_rows(
                     "activities": _count(len(activities), 8),
                     "item_ids": _count(len(turn.items), 100),
                     "text_trimmed": bool(text_trimmed),
+                    "execution_units": _count(
+                        len(turn.execution_units), len(visible_units)
+                    ),
                 },
             )
             turns.append(row.model_dump(mode="json"))

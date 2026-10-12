@@ -25,6 +25,8 @@ SUBAGENT_TASK = "SubagentTask"
 AGENT_COLLAB = "AgentCollab"
 SESSION_HANDOFF = "SessionHandoff"
 
+# Legacy aliases remain available to structural item-kind consumers. Default
+# tool summaries and context categories use recorded identity directly.
 VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "Read": READ_FILE,
     "read": READ_FILE,
@@ -65,13 +67,18 @@ VENDOR_TOOL_CONCEPT: dict[str, str] = {
     "handoff_to": SESSION_HANDOFF,
 }
 
-# Default activity views expose a deliberately closed semantic vocabulary.
-# Unknown provider, transport, and future-native names remain canonical item
-# evidence until an adapter can map them to one of these stable concepts.
-PUBLIC_ACTIVITY_CONCEPTS: frozenset[str] = frozenset(VENDOR_TOOL_CONCEPT.values()) | {
-    EXPLORE,
-    RUN_COMMAND,
-}
+
+def tool_identity_label(name: str) -> str:
+    """Keep operations distinguishable in bounded provider-qualified labels.
+
+    Double-underscore namespaces are structural evidence, not a semantic
+    mapping. The grouping key still uses the complete recorded name.
+    """
+    parts = name.split("__")
+    if len(parts) > 1 and all(parts):
+        return f"{parts[-1]} ({'.'.join(parts[:-1])})"
+    return name
+
 
 SHELL_TOOL_NAMES: frozenset[str] = frozenset(
     {

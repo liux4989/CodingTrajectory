@@ -51,6 +51,39 @@ source and visibility rule, not regenerated command output.
 
 The numerator is generated (output) tokens: the five assistant messages (`source/session.jsonl:5,7,9,11,13`) report 65+47+52+53+50 = 267 output tokens. Over the same model-active denominator as above, the source-derived rate is `267 / 91.227` = 2.927 output tokens/second. It is an end-to-end model-active rate, so time to first token and prefill are included.
 
+## Identity-preserving tool visibility
+
+The generic visibility rule supersedes the subjectless omission in Flat command
+overview. A missing subject does not erase a recorded action identity. Committed
+lines 5, 7, 9, and 11 each identify a `bash` tool call; lines 6, 8, 10, and 12
+respectively supply the matching `toolCallId` and `isError: false`. The established
+shell mapping gives `RunCommand`, and each paired result proves `succeeded`.
+Empty sanitized arguments provide no command description, so none is invented.
+With command flattening there are four activities in source order: four
+`RunCommand` labels and four `succeeded` outcomes. Activity total and returned
+are both 4. Each asserted outcome references its own committed call/result pair.
+
+The prior gate failure is retained as `tool-visibility-migration-failure.json`.
+The new assertions were reconstructed from these source pairs rather than copied
+from the report. Source hashes, call IDs, runtime counts, usage, and costs remain
+unchanged. The source and projection cross-check is not independent
+organizational sign-off.
+
+## Generic tool identities
+
+Predefined display concepts are now disabled for all tools, including familiar
+ones. Committed lines 5, 7, 9, and 11 each contain `name: bash`. The four overview
+labels therefore become `bash` rather than the former inferred `RunCommand`.
+Each matched result on lines 6, 8, 10, and 12 still proves success through
+`toolCallId` and `isError: false`. The generic identity rule does not group these
+four lifecycles into a semantic command cell. Counts remain 4, outcomes remain
+`succeeded`, and usage, runtime, and cost expectations remain unchanged.
+
+The gate failure is preserved in `generic-tool-labels-migration-failure.json`.
+Replacement labels were read from committed source name fields, not from that
+report. Source hashes are unchanged. This source-based cross-check does not
+constitute independent organizational sign-off.
+
 ## Execution split
 
 The turn spans 91.461 seconds (source/session.jsonl:4,13). The four tool intervals (lines 5–12) total 0.081 + 0.056 + 0.023 + 0.074 = 0.234 seconds, leaving 91.227 seconds of estimated LLM time.

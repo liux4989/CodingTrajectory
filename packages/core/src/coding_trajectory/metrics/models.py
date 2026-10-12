@@ -859,6 +859,7 @@ class AttributionPolicy(BaseModel):
 
 
 class ToolItemFlat(BaseModel):
+    script_id: str | None = None
     item_id: UUID
     session_id: UUID
     turn_id: UUID
@@ -877,7 +878,13 @@ class ToolItemFlat(BaseModel):
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
-        for key in ("tool_name", "status", "input_summary", "output_original_tokens"):
+        for key in (
+            "script_id",
+            "tool_name",
+            "status",
+            "input_summary",
+            "output_original_tokens",
+        ):
             if data.get(key) is None:
                 data.pop(key, None)
         if data.get("output_truncated") is False:

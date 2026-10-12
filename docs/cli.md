@@ -194,6 +194,15 @@ context/usage metadata is paired with that record, not counted twice. Substantiv
 activity or lifecycle records end that pairing window. This also restores context
 eviction accounting for newer rollouts that omit the legacy event.
 
+Existing session commands share `Turn → execution unit → item references`.
+Overview renders script executions with Open source and result links and external
+call composition. Summary uses the same units; items/events/search/tool usage link
+items through `script_id` and resolve parents in the response's `execution_units`
+layer. Direct tools stay direct item references. Stats group script-owned content
+under Tool scripts; usage preserves item attribution and provider totals. Parent
+metadata accompanies selected children without adding rows to their paginated
+item/event ledgers. See [the execution contract](tool-classification.md#script-executions-between-turns-and-items).
+
 Events contain normalized types, status, timestamps, and references, not raw
 payloads. Item detail returns retained evidence, not an unrestricted raw log.
 The removed `--include-content`, `--filter`, and `--drop-turns` flags are not supported.

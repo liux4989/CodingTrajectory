@@ -10,6 +10,10 @@ from coding_trajectory.analysis.session_stats import (
     session_graph_title,
 )
 from coding_trajectory.ingestion.common import format_datetime, prune_nones
+from coding_trajectory.ingestion.execution_models import (
+    ToolScriptExecution,
+    TurnExecutionLayer,
+)
 from coding_trajectory.ingestion.models import (
     Event,
     EventType,
@@ -17,6 +21,75 @@ from coding_trajectory.ingestion.models import (
     SessionGraph,
     Vendor,
 )
+
+
+def attach_execution_layer(
+    graph: SessionGraph, payload: dict[str, Any], *, turn_id: str | None = None
+) -> dict[str, Any]:
+    """Project canonical parents for exactly the evidence returned by a view."""
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
+
+    index = build_session_graph_index(graph)
+    if (payload.get("page") or {}).get("direction") == "older":
+        # Overview already places canonical units inside each returned turn.
+        return payload
+    selected_ids: set[str] | None = None
+    for key in ("items", "events", "tool_items", "matches"):
+        if isinstance(payload.get(key), list):
+            selected_ids = set()
+            for row in payload[key]:
+                refs = row.get("references", row)
+                identity = refs.get("item_id")
+                if identity:
+                    selected_ids.add(str(identity))
+                script = (
+                    index.script_by_item_id.get(UUID(identity)) if identity else None
+                )
+                if script:
+                    refs["script_id"] = script.unit_id
+            break
+    visible_turns = (
+        {str(t["turn_id"]) for t in payload["turns"]}
+        if isinstance(payload.get("turns"), list) and payload["turns"]
+        else None
+    )
+    if isinstance(payload.get("requests"), list):
+        visible_turns = {str(row["turn_id"]) for row in payload["requests"]}
+    needed_parents = {
+        index.script_by_item_id[UUID(identity)].unit_id
+        for identity in selected_ids or set()
+        if UUID(identity) in index.script_by_item_id
+    }
+    layers = []
+    for session in graph.sessions:
+        for turn in session.turns:
+            turn_visible = (not turn_id or str(turn.turn_id) == str(turn_id)) and (
+                visible_turns is None or str(turn.turn_id) in visible_turns
+            )
+            units = [
+                u
+                for u in turn.execution_units
+                if u.unit_id in needed_parents
+                or turn_visible
+                and (
+                    selected_ids is None
+                    or selected_ids.intersection(
+                        u.item_ids
+                        if isinstance(u, ToolScriptExecution)
+                        else [u.item_id]
+                    )
+                )
+            ]
+            if units:
+                layers.append(
+                    TurnExecutionLayer(
+                        session_id=str(session.session_id),
+                        turn_id=str(turn.turn_id),
+                        units=units,
+                    ).model_dump(mode="json")
+                )
+    payload["execution_units"] = layers
+    return payload
 
 
 def _optional_positive_int(params: dict[str, Any], key: str) -> int | None:

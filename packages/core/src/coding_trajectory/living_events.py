@@ -239,11 +239,16 @@ def _project_graph(graph: SessionGraph) -> list[ProjectedResource]:
                             value
                             for value in build_overview_flows(
                                 turn.items,
+                                execution_units=turn.execution_units,
                                 flatten_commands=session.vendor == Vendor.CODEX_CLI,
                             )
                             if "text" not in value
                         ],
                         "item_count": len(turn.items),
+                        "execution_units": [
+                            unit.model_dump(mode="json")
+                            for unit in turn.execution_units
+                        ],
                     },
                 )
             )
@@ -260,6 +265,8 @@ def _project_graph(graph: SessionGraph) -> list[ProjectedResource]:
                 # Empty-output completion must remain observable on the SAME
                 # item. Historical item-details and metric contracts stay alone.
                 details["status"] = item.status
+                if script := index.script_by_item_id.get(item.item_id):
+                    details["script_id"] = script.unit_id
                 details.setdefault("event_ids", [])
                 resources.append(
                     ProjectedResource(

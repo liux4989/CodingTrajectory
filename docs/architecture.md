@@ -6,11 +6,15 @@ to detailed evidence.
 
 ## Canonical model
 
-The hierarchy is `SessionGraph → Session → Turn → Item`. Events provide the
-observed evidence for these resources.
+The hierarchy is `SessionGraph → Session → Turn → execution unit → Item`.
+Turns order direct item references and tool-script executions. Flat items retain
+the underlying evidence once; script membership is expressed through references.
+Events provide observed evidence for these resources.
 
 - A session represents one coding-agent thread.
 - A turn represents one interaction or an observed agent lifecycle.
+- An execution unit is a direct item reference or a script execution with source,
+  observed external calls, context references, and execution result evidence.
 - An item represents a message, tool operation, or another normalized action.
 - An event records a normalized observation and its hierarchy references.
 - A graph contains one orchestration run, including its spawned agents.
@@ -82,7 +86,11 @@ Coverage fields distinguish observed, derived, partial, and unavailable data.
 
 Retention is independent of publication. Standard queries retain bounded previews,
 semantic tool descriptions, operational evidence, provenance, and measurements.
-They do not expose arbitrary raw vendor payloads as canonical history.
+They do not expose arbitrary raw vendor payloads as canonical history. Script
+units link to privately created local source/argument/output artifacts and original
+logs. Full source is extracted losslessly; raw artifact bodies stay outside the
+canonical response. Observed calls and source-only candidates are distinct, and
+the execution layer does not reconstruct program order.
 
 **Warning:** retained content and local logs can contain private information.
 Bounded previews and description redaction are not a complete secret scanner.

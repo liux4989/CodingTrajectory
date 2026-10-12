@@ -8,7 +8,7 @@ import os
 import re
 import tomllib
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 from uuid import UUID
@@ -176,6 +176,12 @@ def _ingest_sessions(
                     vendor=vendor,
                     source=path,
                     retention=retention,
+                    source_byte_end=max(
+                        (o.span.byte_end for o in adapter.last_provenance.occurrences),
+                        default=None,
+                    )
+                    if adapter.last_provenance
+                    else None,
                 )
         except Exception as exc:
             if adapter.last_provenance is not None:
@@ -739,10 +745,10 @@ def _modified_since(
     since_days: int | None, *, modified_since: datetime | None = None
 ) -> datetime | None:
     if modified_since is not None:
-        return modified_since.astimezone(timezone.utc)
+        return modified_since.astimezone(UTC)
     if since_days is None:
         return None
-    return datetime.now(timezone.utc) - timedelta(days=since_days)
+    return datetime.now(UTC) - timedelta(days=since_days)
 
 
 def _all_files(
@@ -1451,6 +1457,7 @@ def stabilize_session(
     vendor: Vendor,
     source: Path,
     retention: CanonicalRetention = "trajectory",
+    source_byte_end: int | None = None,
 ) -> Session:
     # --- stabilize event IDs ---
     event_id_map: dict[object, object] = {}
@@ -1545,7 +1552,7 @@ def stabilize_session(
         for observation in session.context_usage
     ]
     cwd = _extract_session_cwd(session, source)
-    return session.model_copy(
+    stable_session = session.model_copy(
         update={
             "events": events,
             "turns": turns,
@@ -1556,3 +1563,11 @@ def stabilize_session(
             "cwd": cwd,
         }
     )
+
+    if retention != "measurements":
+        from coding_trajectory.ingestion.execution import build_session_execution_layer
+
+        return build_session_execution_layer(
+            stable_session, source, source_byte_end=source_byte_end
+        )
+    return stable_session

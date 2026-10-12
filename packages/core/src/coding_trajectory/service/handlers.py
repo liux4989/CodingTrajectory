@@ -86,6 +86,14 @@ def dispatch(
     except KeyError as exc:
         raise KeyError(f"no service handler registered for {method}") from exc
     result = handler(params, context)
+    if method.startswith(("session.", "graph.")) and not method.endswith(".tree"):
+        from coding_trajectory.service.serializers import attach_execution_layer
+
+        identity = params.get("session_id") or params.get("root_session_id")
+        graph = _resolve_session_graph(context.store, identity)
+        if method.startswith("session.") and method != "session.overview":
+            graph = _select_session_graph(graph, identity)
+        result = attach_execution_layer(graph, result, turn_id=params.get("turn_id"))
     return contract.validate_response(result)
 
 
@@ -748,6 +756,9 @@ def _canonical_item_record(
     )
     return {
         "item_id": str(item.item_id),
+        "script_id": index.script_by_item_id[item.item_id].unit_id
+        if item.item_id in index.script_by_item_id
+        else None,
         "session_id": str(item.session_id),
         "turn_id": str(item.turn_id),
         "event_ids": [str(event_id) for event_id in item.event_ids],

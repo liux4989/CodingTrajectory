@@ -131,6 +131,9 @@ def _overview_request_label(request: Any) -> str:
 
 
 def _overview_activity_label(activity: dict[str, Any]) -> str:
+    if activity.get("kind") == "tool_script":
+        preview = one_line(activity.get("target"), limit=180)
+        return f"Tool script · {activity.get('tool') or 'executor'} [{activity.get('status') or 'unknown'}]{': ' + preview if preview else ''}"
     if "compaction" in activity:
         return f"compaction: {activity.get('summary') or 'compaction'}"
     if "tool" in activity:
@@ -178,11 +181,19 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
             )
         if tool == "AgentCollab" and activity.get("task"):
             return f"Agent collaboration: {one_line(activity['task'], limit=72)}{annotation}"
-        for key in ("cmd", "path", "query", "url", "target", "items", "task", "session"):
+        for key in (
+            "cmd",
+            "path",
+            "query",
+            "url",
+            "target",
+            "items",
+            "task",
+            "session",
+        ):
             if activity.get(key):
-                return (
-                    f"{tool}{suffix}: {one_line(activity[key], limit=72)}{annotation}"
-                )
+                detail_limit = 180 if key == "target" else 72
+                return f"{tool}{suffix}: {one_line(activity[key], limit=detail_limit)}{annotation}"
         for key in ("commands", "paths", "queries", "urls", "targets"):
             values = activity.get(key)
             if isinstance(values, list) and values:
@@ -229,15 +240,29 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                     or "Request unavailable",
                 ]
             )
-            for response in turn["assistant_responses"]:
-                lines.append(f"Assistant: {response['preview']}")
-            for activity in turn["activities"]:
-                references = ", ".join(
-                    f"`{item_id}`" for item_id in activity["item_ids"]
-                )
-                lines.append(
-                    f"- {_overview_activity_label(activity)} (items {references})"
-                )
+            responses = {r["item_id"]: r for r in turn["assistant_responses"]}
+            activities = {
+                a.get("script_id") or a["item_ids"][0]: a for a in turn["activities"]
+            }
+            units = turn.get("execution_units") or [
+                *[{"kind": "item", "unit_id": key} for key in responses],
+                *[{"kind": "item", "unit_id": key} for key in activities],
+            ]
+            for unit in units:
+                identity = unit["unit_id"]
+                if identity in responses:
+                    lines.append(f"Assistant: {responses[identity]['preview']}")
+                if identity in activities:
+                    activity = activities[identity]
+                    references = ", ".join(
+                        f"`{item_id}`" for item_id in activity["item_ids"]
+                    )
+                    lines.append(
+                        f"- {_overview_activity_label(activity)} (items {references})"
+                    )
+                    if unit["kind"] == "tool_script":
+                        lines.append(f"  {unit['open_source_link']}")
+                        lines.extend(_render_script_composition(unit, indent="  "))
     page = payload["page"]
     lines.extend(
         [
@@ -248,6 +273,61 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     if page["next_cursor"]:
         lines.append(f"Older page: --cursor '{page['next_cursor']}'")
     return "\n".join(lines).rstrip()
+
+
+def _script_lookup(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        u["unit_id"]: u
+        for layer in payload.get("execution_units", [])
+        for u in layer["units"]
+        if u["kind"] == "tool_script"
+    }
+
+
+def _with_execution_sources(
+    text: str, payload: dict[str, Any], args: argparse.Namespace | None = None
+) -> str:
+    scripts = list(_script_lookup(payload).values())
+    if not scripts:
+        return text
+    detailed = bool(getattr(args, "details", False))
+    selected = scripts if detailed else scripts[-8:]
+    lines = [text, "", f"Tool scripts ({len(selected)} of {len(scripts)})", ""]
+    for script in selected:
+        preview = one_line(script.get("source_preview"), limit=100)
+        lines.append(
+            f"- {script.get('tool_name') or 'executor'} · `{script['unit_id']}`: {preview} · {script['open_source_link']}"
+        )
+        if detailed:
+            lines.extend(_render_script_composition(script, indent="  "))
+    return "\n".join(lines).rstrip()
+
+
+def _render_script_composition(
+    script: dict[str, Any], *, indent: str = ""
+) -> list[str]:
+    lines = []
+    for key, observation in (
+        ("observed_external_calls", "Observed"),
+        ("source_only_calls", "Source only"),
+    ):
+        for call in script.get(key) or []:
+            detail = one_line(call.get("arguments_preview"), limit=180)
+            outcome = f" [{call['outcome']}]" if call.get("outcome") else ""
+            duration = (
+                f" · {call['duration_ms']:g} ms"
+                if call.get("duration_ms") is not None
+                else ""
+            )
+            lines.append(
+                f"{indent}- {observation}: {call['tool_name']}{': ' + detail if detail else ''}{outcome}{duration}"
+            )
+    if script.get("inventory_coverage") == "unknown":
+        lines.append(f"{indent}- External-call inventory: unknown")
+    result = (script.get("result") or {}).get("emitted_output_ref")
+    if result:
+        lines.append(f"{indent}- {result['link']}")
+    return lines
 
 
 def _evidence_suffix(value: Any) -> str:
@@ -300,6 +380,11 @@ def _render_session_summary_text(payload: dict[str, Any]) -> str:
             lines.append(
                 f"- {label}{status_suffix}{_evidence_suffix(entry.get('references'))}"
             )
+            if entry.get("script_id"):
+                script = _script_lookup(payload).get(entry["script_id"])
+                if script:
+                    lines.append(f"  {script['open_source_link']}")
+                    lines.extend(_render_script_composition(script, indent="  "))
         lines.append("")
 
     for warning in payload.get("warnings") or []:
@@ -338,7 +423,7 @@ def _render_session_search_text(payload: dict[str, Any]) -> str:
             lines.extend(["", f"Showing {len(matches)} of {total} matches."])
     for warning in payload.get("warnings") or []:
         lines.extend(["", f"> Warning: {warning}"])
-    return "\n".join(lines).rstrip()
+    return _with_execution_sources("\n".join(lines).rstrip(), payload)
 
 
 def _render_session_tree_node(
@@ -630,6 +715,14 @@ def _format_allocated_usage(value: Any) -> str:
 def _render_session_stats_text(
     payload: dict[str, Any], args: argparse.Namespace | None = None
 ) -> str:
+    return _with_execution_sources(
+        _render_session_stats_body(payload, args), payload, args
+    )
+
+
+def _render_session_stats_body(
+    payload: dict[str, Any], args: argparse.Namespace | None = None
+) -> str:
     if getattr(args, "details", False):
         return _render_session_stats_details(payload)
 
@@ -746,9 +839,7 @@ def _append_stats_summary(lines: list[str], payload: dict[str, Any]) -> None:
             ]
         )
         for category in categories:
-            _render_context_category(
-                lines, category, category_width=32
-            )
+            _render_context_category(lines, category, category_width=32)
         lines.append("```")
 
 
@@ -870,9 +961,7 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
         f"{format_percent(used_percent)} of context window"
     )
     if billed_token_usage:
-        lines.append(
-            f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}"
-        )
+        lines.append(f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}")
         lines.append(RECORDED_USAGE_NOTE)
     _append_stats_cost(lines, payload, prefix="- ")
     lines.append(f"- {runtime_line}")
@@ -949,7 +1038,9 @@ def _render_session_stats_sections(
             f"{format_percent(used_percent)} of context window"
         )
         if billed_token_usage:
-            lines.append(f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}")
+            lines.append(
+                f"- Recorded tokens: {render_recorded_tokens(billed_token_usage)}"
+            )
             lines.append(RECORDED_USAGE_NOTE)
         _append_stats_cost(lines, section, prefix="- ")
         lines.append(
@@ -987,6 +1078,14 @@ def _render_session_stats_sections(
 
 
 def _render_session_usage_text(
+    payload: dict[str, Any], args: argparse.Namespace | None = None
+) -> str:
+    return _with_execution_sources(
+        _render_session_usage_body(payload, args), payload, args
+    )
+
+
+def _render_session_usage_body(
     payload: dict[str, Any], args: argparse.Namespace | None = None
 ) -> str:
     session_sections = [
@@ -1041,9 +1140,7 @@ def _render_session_usage_text(
         if runtime:
             timing_parts = []
             if runtime.get("execution_seconds") is not None:
-                timing_parts.append(
-                    _format_execution_time(runtime)
-                )
+                timing_parts.append(_format_execution_time(runtime))
             if runtime.get("wait_before_seconds") is not None:
                 timing_parts.append(
                     f"wait before {format_duration(runtime.get('wait_before_seconds'))}"
@@ -1484,7 +1581,9 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         "--limit", type=int, default=200, help="Maximum request rows per page (1–1000)."
     )
     session_request_usage.add_argument(
-        "--cursor", default=None, help="Continue a query-bound live page; keep selectors unchanged. Page size may change."
+        "--cursor",
+        default=None,
+        help="Continue a query-bound live page; keep selectors unchanged. Page size may change.",
     )
     add_json_output_flag(session_request_usage)
     session_request_usage.set_defaults(

@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from coding_trajectory.analysis.content_size import (
     event_text_size,
@@ -18,20 +18,7 @@ from coding_trajectory.analysis.content_size import (
 )
 from coding_trajectory.analysis.measurements import is_projection_only_item
 from coding_trajectory.analysis.tool_summary import summarize_tool_call
-from coding_trajectory.analysis.tool_summary_shared import (
-    AGENT_COLLAB,
-    EDIT_FILE,
-    LIST_FILES,
-    READ_FILE,
-    RUN_COMMAND,
-    SEARCH_TEXT,
-    SESSION_HANDOFF,
-    SUBAGENT_TASK,
-    TODO_LIST,
-    WEB_FETCH,
-    WEB_SEARCH,
-    WRITE_FILE,
-)
+from coding_trajectory.analysis.tool_summary_shared import tool_identity_label
 from coding_trajectory.ingestion.models import (
     ContextUsageObservation,
     EventType,
@@ -100,22 +87,6 @@ _STARTING_CONTEXT_LABELS = {
     "unattributed_context": "Unattributed context",
     "system_tools": "System tools",
 }
-_FILE_CONCEPT_LABELS = {
-    READ_FILE: "Files read",
-}
-_CONTEXT_CONCEPTS = frozenset(_FILE_CONCEPT_LABELS)
-_CODE_CHANGE_CONCEPTS = frozenset({EDIT_FILE, WRITE_FILE})
-_COORDINATION_CONCEPTS = frozenset(
-    {TODO_LIST, SUBAGENT_TASK, AGENT_COLLAB, SESSION_HANDOFF}
-)
-_OUTPUT_CONCEPT_LABELS = {
-    SEARCH_TEXT: "Search output",
-    LIST_FILES: "File listing output",
-    RUN_COMMAND: "Command output",
-    WEB_FETCH: "Web fetch output",
-    WEB_SEARCH: "Web search output",
-}
-_OTHER_TOOL_OUTPUT = "other_tool"
 
 
 @session_scoped
@@ -562,9 +533,12 @@ def _agent_work(
     allocated_usage_by_item: dict[UUID, dict[str, int]],
     boundaries: dict[UUID, datetime | None],
 ) -> tuple[_Measure, list[ContextCategoryFlat], _Measure]:
-    files: dict[str, _Measure] = defaultdict(_Measure)
     agent: dict[str, _Measure] = defaultdict(_Measure)
-    output: dict[str, _Measure] = defaultdict(_Measure)
+    tools: dict[str, _Measure] = defaultdict(_Measure)
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
+
+    index = build_session_graph_index(session_graph)
+    scripts: dict[str, dict[str, _Measure]] = defaultdict(lambda: defaultdict(_Measure))
     evicted = _Measure()
     has_agent_message_items = any(
         item.kind == "agent_message"
@@ -628,43 +602,67 @@ def _agent_work(
                         allocated_usage=allocated_usage_by_item.get(item.item_id),
                     )
                     continue
+                script = index.script_by_item_id.get(item.item_id)
+                if script:
+                    _add_tool_item(
+                        item,
+                        tools=scripts[script.unit_id],
+                        allocated_usage_by_item=allocated_usage_by_item,
+                        identity_override="Source and emitted output"
+                        if str(item.item_id) == script.item_id
+                        else None,
+                    )
+                    continue
                 children = projection_children.get(item.item_id, [])
                 if children:
                     _add_projected_tool_item(
                         item,
                         children,
-                        files=files,
-                        agent=agent,
-                        output=output,
+                        tools=tools,
                         allocated_usage_by_item=allocated_usage_by_item,
                     )
                     continue
                 _add_tool_item(
                     item,
-                    files=files,
-                    agent=agent,
-                    output=output,
+                    tools=tools,
                     allocated_usage_by_item=allocated_usage_by_item,
                 )
 
-    children = _assemble_agent_categories(files, agent, output)
+    children = _assemble_agent_categories(agent, tools)
+    script_categories = []
+    for script_id, measures in scripts.items():
+        script = index.scripts_by_id[script_id]
+        category = _parent(
+            f"script_{script_id}",
+            f"{script.tool_name or 'Tool script'} · {script_id[:8]}",
+            [
+                _category(
+                    f"script_{script_id}_{uuid5(NAMESPACE_URL, name)}", name, measure
+                )
+                for name, measure in sorted(measures.items())
+                if measure.items
+            ],
+        )
+        if category:
+            script_categories.append(category)
+    if category := _parent("tool_scripts", "Tool scripts", script_categories):
+        children.insert(0, category)
     return _measure_from_categories(children), children, evicted
 
 
 def _assemble_agent_categories(
-    files: dict[str, _Measure],
     agent: dict[str, _Measure],
-    output: dict[str, _Measure],
+    tools: dict[str, _Measure],
 ) -> list[ContextCategoryFlat]:
-    """Shape accumulated file/agent/output measures into the composition children tree."""
-    file_children = [
+    """Partition tool content by recorded identity, without semantic buckets."""
+    tool_children = [
         _category(
-            _file_category_key(concept),
-            _FILE_CONCEPT_LABELS[concept],
-            files[concept],
+            f"tool_{uuid5(NAMESPACE_URL, f'codingtrajectory:tool:{name}')}",
+            tool_identity_label(name),
+            measure,
         )
-        for concept in _FILE_CONCEPT_LABELS
-        if files[concept].items
+        for name, measure in sorted(tools.items())
+        if measure.items
     ]
     message_children = (
         [
@@ -675,61 +673,14 @@ def _assemble_agent_categories(
         if agent["assistant_messages"].items
         else []
     )
-    coordination_children = [
-        _category(key, label, agent[key])
-        for key, label in (
-            ("todolist", "Plans / todos"),
-            ("subagenttask", "Subagent results"),
-            ("agentcollab", "Agent collaboration"),
-            ("sessionhandoff", "Handoffs"),
-        )
-        if agent[key].items
-    ]
-    code_children = [
-        _category(key, label, agent[key])
-        for key, label in (
-            ("editfile", "Edits / patches"),
-            ("writefile", "Files written"),
-        )
-        if agent[key].items
-    ]
-    agent_children = [
+    return [
         category
         for category in (
-            *message_children,
-            _parent("code_changes", "Code changes", code_children),
-            _parent("coordination", "Coordination", coordination_children),
+            _parent("tool_calls", "Tool calls", tool_children),
+            _parent("agent", "Agent", message_children),
         )
         if category is not None
     ]
-    output_children = [
-        _category(
-            f"output_{'command' if concept == RUN_COMMAND else concept.lower()}",
-            label,
-            output[concept],
-        )
-        for concept, label in _OUTPUT_CONCEPT_LABELS.items()
-        if output[concept].items
-    ]
-    if output[_OTHER_TOOL_OUTPUT].items:
-        output_children.append(
-            _category(
-                "output_other_tool",
-                "Other tool output",
-                output[_OTHER_TOOL_OUTPUT],
-            )
-        )
-
-    children = [
-        category
-        for category in (
-            _parent("files", "Files", file_children),
-            _parent("output", "Output", output_children),
-            _parent("agent", "Agent", agent_children),
-        )
-        if category is not None
-    ]
-    return children
 
 
 def _projection_children(items: list[Item]) -> dict[UUID, list[Item]]:
@@ -767,8 +718,7 @@ def _projection_parent_item_id(
     activity = vendor_data.get("activity")
     provenance = (
         activity.get("provenance")
-        if isinstance(activity, dict)
-        and isinstance(activity.get("provenance"), dict)
+        if isinstance(activity, dict) and isinstance(activity.get("provenance"), dict)
         else {}
     )
     parent_tool_call_id = provenance.get("parent_tool_call_id")
@@ -785,8 +735,7 @@ def _projection_sort_key(item: Item) -> tuple[int, int]:
     activity = vendor_data.get("activity")
     provenance = (
         activity.get("provenance")
-        if isinstance(activity, dict)
-        and isinstance(activity.get("provenance"), dict)
+        if isinstance(activity, dict) and isinstance(activity.get("provenance"), dict)
         else {}
     )
     nested_index = (
@@ -806,9 +755,7 @@ def _add_projected_tool_item(
     parent: Item,
     children: list[Item],
     *,
-    files: dict[str, _Measure],
-    agent: dict[str, _Measure],
-    output: dict[str, _Measure],
+    tools: dict[str, _Measure],
     allocated_usage_by_item: dict[UUID, dict[str, int]],
 ) -> None:
     input_size = item_input_size(parent)
@@ -821,22 +768,18 @@ def _add_projected_tool_item(
         )
         for item in children
     ]
-    token_shares = _allocate_integer(
-        input_size.tokens + output_size.tokens, weights
-    )
+    token_shares = _allocate_integer(input_size.tokens + output_size.tokens, weights)
     char_shares = _allocate_integer(input_size.chars + output_size.chars, weights)
     usage_shares = _allocate_usage(allocated_usage_by_item.get(parent.item_id), weights)
     for index, item in enumerate(children):
         summary = summarize_tool_call(item) or {}
-        concept = str(summary.get("name") or item.tool_name or item.kind)
+        identity = str(summary.get("name") or item.tool_name or item.kind)
         _add_tool_measure(
-            concept,
+            identity,
             tokens=token_shares[index],
             chars=char_shares[index],
             allocated_usage=usage_shares[index],
-            files=files,
-            agent=agent,
-            output=output,
+            tools=tools,
         )
 
 
@@ -870,10 +813,9 @@ def _allocate_usage(
 def _add_tool_item(
     item: Item,
     *,
-    files: dict[str, _Measure],
-    agent: dict[str, _Measure],
-    output: dict[str, _Measure],
+    tools: dict[str, _Measure],
     allocated_usage_by_item: dict[UUID, dict[str, int]],
+    identity_override: str | None = None,
 ) -> None:
     if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
         return
@@ -883,78 +825,41 @@ def _add_tool_item(
     if is_projection_only_item(item):
         return
     summary = summarize_tool_call(item) or {}
-    concept = str(summary.get("name") or item.tool_name or item.kind)
+    identity = identity_override or str(
+        summary.get("name") or item.tool_name or item.kind
+    )
     input_size = item_input_size(item)
     output_size = item_output_size(item)
     allocated_usage = allocated_usage_by_item.get(item.item_id)
     # Tool-use input args (the command, file path, search query, etc.) are part
     # of the resident tool_use block in every API request, so they are sized
-    # alongside the output for every concept - not just edits/coordination.
+    # alongside the output for every recorded tool identity.
     # Previously non-edit tools counted output only, undercounting Bash commands
     # and other input-heavy tool calls by their full argument size.
     tokens = input_size.tokens + output_size.tokens
     chars = input_size.chars + output_size.chars
     _add_tool_measure(
-        concept,
+        identity,
         tokens=tokens,
         chars=chars,
         allocated_usage=allocated_usage,
-        files=files,
-        agent=agent,
-        output=output,
+        tools=tools,
     )
 
 
 def _add_tool_measure(
-    concept: str,
+    identity: str,
     *,
     tokens: int,
     chars: int,
     allocated_usage: dict[str, int] | None,
-    files: dict[str, _Measure],
-    agent: dict[str, _Measure],
-    output: dict[str, _Measure],
+    tools: dict[str, _Measure],
 ) -> None:
-
-    if concept in _CONTEXT_CONCEPTS:
-        files[concept].add(
-            tokens=tokens,
-            chars=chars,
-            allocated_usage=allocated_usage,
-        )
-        return
-    if concept in _OUTPUT_CONCEPT_LABELS:
-        output[concept].add(
-            tokens=tokens,
-            chars=chars,
-            allocated_usage=allocated_usage,
-        )
-        return
-    if concept in _CODE_CHANGE_CONCEPTS:
-        agent[concept.lower()].add(
-            tokens=tokens,
-            chars=chars,
-            allocated_usage=allocated_usage,
-        )
-        return
-    if concept in _COORDINATION_CONCEPTS:
-        agent[concept.lower()].add(
-            tokens=tokens,
-            chars=chars,
-            allocated_usage=allocated_usage,
-        )
-        return
-    output[_OTHER_TOOL_OUTPUT].add(
+    tools[identity].add(
         tokens=tokens,
         chars=chars,
         allocated_usage=allocated_usage,
     )
-
-
-def _file_category_key(concept: str) -> str:
-    if concept in _CODE_CHANGE_CONCEPTS:
-        return concept.lower()
-    return f"context_{concept.lower()}"
 
 
 def _parent(

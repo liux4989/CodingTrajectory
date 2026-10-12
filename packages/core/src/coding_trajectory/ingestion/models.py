@@ -9,6 +9,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from coding_trajectory.ingestion.execution_models import ExecutionUnit
+
 
 class StrictModel(BaseModel):
     """Base for internal record models that reject unknown fields."""
@@ -404,6 +406,7 @@ class Turn(BaseModel):
     user_request_event_id: UUID | None = None  # ref into Session.events
     event_ids: list[UUID] = Field(default_factory=list)
     items: list[Item] = Field(default_factory=list)
+    execution_units: list[ExecutionUnit] = Field(default_factory=list)
     team_state: TeamTurnState | None = None
     status: TurnStatus = TurnStatus.COMPLETED
     # Both boundaries and every tool interval have live hook observations.

@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "status": "fail",
+  "pricing_artifact_version": "2026-07-15-baseline-v1",
+  "cases": [
+    {
+      "case": "codex-fork-runtime",
+      "provider": "codex_cli",
+      "status": "pass",
+      "assertions": 40,
+      "structural_assertions": 13,
+      "invariants": 12,
+      "differences": []
+    },
+    {
+      "case": "claude-stream-cache",
+      "provider": "claude_code",
+      "status": "pass",
+      "assertions": 45,
+      "structural_assertions": 9,
+      "invariants": 12,
+      "differences": []
+    },
+    {
+      "case": "pi-reported-cost",
+      "provider": "pi",
+      "status": "fail",
+      "assertions": 43,
+      "structural_assertions": 9,
+      "invariants": 12,
+      "differences": [
+        {
+          "case": "pi-reported-cost",
+          "surface": "session.overview",
+          "scope": "$.turns[0]",
+          "field": "$.turns[0].activities",
+          "expected": [],
+          "actual": [
+            {
+              "tool": "RunCommand",
+              "item_ids": [
+                "69cf1ff1-fc01-54bb-b79b-bf5257799fa4"
+              ],
+              "outcome": "succeeded"
+            },
+            {
+              "tool": "RunCommand",
+              "item_ids": [
+                "fd384a5c-2c8a-5334-a92f-85cbdef45db8"
+              ],
+              "outcome": "succeeded"
+            },
+            {
+              "tool": "RunCommand",
+              "item_ids": [
+                "64920b25-5230-5389-8b4d-9c0595b57b44"
+              ],
+              "outcome": "succeeded"
+            },
+            {
+              "tool": "RunCommand",
+              "item_ids": [
+                "8ae5f9b0-5a7b-5e6d-8c65-97a1f78f7e4d"
+              ],
+              "outcome": "succeeded"
+            }
+          ],
+          "source_refs": [
+            "source/session.jsonl:5-12"
+          ],
+          "audit_ref": "audit.md#flat-command-overview",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        },
+        {
+          "case": "pi-reported-cost",
+          "surface": "session.overview",
+          "scope": "$.turns[0].content_coverage.activities",
+          "field": "$.turns[0].content_coverage.activities.total",
+          "expected": 0,
+          "actual": 4,
+          "source_refs": [
+            "source/session.jsonl:5-12"
+          ],
+          "audit_ref": "audit.md#flat-command-overview",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        },
+        {
+          "case": "pi-reported-cost",
+          "surface": "session.overview",
+          "scope": "$.turns[0].content_coverage.activities",
+          "field": "$.turns[0].content_coverage.activities.returned",
+          "expected": 0,
+          "actual": 4,
+          "source_refs": [
+            "source/session.jsonl:5-12"
+          ],
+          "audit_ref": "audit.md#flat-command-overview",
+          "kind": "value",
+          "message": "output differs from audited source expectation"
+        }
+      ]
+    },
+    {
+      "case": "codex-interagent-turn",
+      "provider": "codex_cli",
+      "status": "pass",
+      "assertions": 66,
+      "structural_assertions": 19,
+      "invariants": 20,
+      "differences": []
+    }
+  ]
+}

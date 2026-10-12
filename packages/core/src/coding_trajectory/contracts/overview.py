@@ -8,6 +8,9 @@ from typing import Any, Literal
 from pydantic import Field, field_serializer
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
+from coding_trajectory.ingestion.execution_models import (
+    ExecutionUnit,
+)
 
 
 class OverviewPage(RequestModel):
@@ -32,6 +35,7 @@ class TurnContentCoverage(RequestModel):
     activities: ContentCount
     item_ids: ContentCount
     text_trimmed: bool
+    execution_units: ContentCount | None = None
 
 
 class OverviewSession(RequestModel):
@@ -78,6 +82,8 @@ class OverviewActivity(RequestModel):
     """
 
     tool: str
+    kind: Literal["tool_script"] | None = None
+    script_id: str | None = None
     item_ids: list[str] = Field(min_length=1)
     count: int | None = Field(default=None, ge=1)
     status: str | None = None
@@ -118,6 +124,7 @@ class OverviewTurn(RequestModel):
     user_request: OverviewRequestPreview | None
     assistant_responses: list[OverviewAssistant] = Field(max_length=8)
     activities: list[OverviewActivity] = Field(max_length=8)
+    execution_units: list[ExecutionUnit] = Field(default_factory=list, max_length=100)
     refs: OverviewReferences
     content_coverage: TurnContentCoverage
 
