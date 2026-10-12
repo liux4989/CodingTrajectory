@@ -31,6 +31,7 @@ class ExternalCall(BaseModel):
     provider_call_id: str | None = None
     evidence_ref: dict[str, Any]
     ownership_basis: str
+    source_tool_name: str | None = None
     arguments_preview: str | None = Field(default=None, max_length=280)
     arguments_ref: dict[str, Any] | None = None
     arguments_coverage: Literal[
@@ -87,6 +88,9 @@ class ToolScriptExecution(BaseModel):
     observed_external_calls: list[ExternalCall]
     source_only_calls: list[ExternalCall]
     inventory_coverage: Literal["complete", "partial", "unknown"]
+    source_analysis_coverage: Literal["partial", "syntax_errors", "not_supported"] = (
+        "not_supported"
+    )
     result: ExecutionResult
     inspection_log_ref: dict[str, str]
     local_only: bool = True
@@ -96,6 +100,8 @@ class DirectItemReference(BaseModel):
     kind: Literal["item"] = "item"
     unit_id: str
     item_id: str
+    source: SourceReference | None = None
+    open_source_link: str | None = None
 
 
 ExecutionUnit = Annotated[
@@ -107,3 +113,19 @@ class TurnExecutionLayer(BaseModel):
     session_id: str
     turn_id: str
     units: list[ExecutionUnit] = Field(default_factory=list)
+
+
+class ToolObservationCount(BaseModel):
+    tool_name: str
+    count: int = Field(ge=0)
+
+
+class ExecutionComposition(BaseModel):
+    scope: Literal["returned_execution_units"] = "returned_execution_units"
+    script_executions: int = Field(ge=0)
+    script_inventory_coverage: dict[Literal["complete", "partial", "unknown"], int]
+    observed_calls: list[ToolObservationCount]
+    source_only_sites: list[ToolObservationCount]
+    attribution: Literal["membership_does_not_allocate_content_or_usage"] = (
+        "membership_does_not_allocate_content_or_usage"
+    )

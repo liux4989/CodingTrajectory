@@ -195,14 +195,19 @@ activity or lifecycle records end that pairing window. This also restores contex
 eviction accounting for newer rollouts that omit the legacy event.
 
 Existing session commands share `Turn → execution unit → item references`.
-Overview renders script executions with Open source log links, original-log
-result references, and external
-call composition. Summary uses the same units; items/events/search/tool usage link
-items through `script_id` and resolve parents in the response's `execution_units`
-layer. Direct tools stay direct item references. Stats group script-owned content
-under Tool scripts; usage preserves item attribution and provider totals. Parent
-metadata accompanies selected children without adding rows to their paginated
-item/event ledgers. See [the execution contract](tool-classification.md#script-executions-between-turns-and-items).
+Overview places scripts in surrounding turn context, with source-record links,
+observed external-call details, explicit ownership evidence, and inventory
+coverage. Activity truncation is reported. Items/events/search/tool usage include
+`script_id` and resolve returned children's parents without adding ledger rows.
+Direct tools remain direct items, with source references where available.
+
+Stats separates external tool observations from the resident-content tree.
+Script IDs do not become categories: script source and unassigned emitted output
+retain content custody, while independently measured tool content aggregates by
+recorded identity. Source-only call sites are not execution counts. Usage keeps
+provider totals and original item attribution. Text and JSON retain the same
+execution/source references; terminal formatting preserves full link targets.
+See [the execution contract](tool-classification.md).
 
 Events contain normalized types, status, timestamps, and references, not raw
 payloads. Item detail returns retained evidence, not an unrestricted raw log.

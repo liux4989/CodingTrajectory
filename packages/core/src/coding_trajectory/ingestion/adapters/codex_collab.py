@@ -20,13 +20,6 @@ from coding_trajectory.ingestion.transcript import TranscriptRecord
 # Moved signatures keep their original ``_ParseState`` spelling.
 _ParseState = CodexParseState
 
-_CODEX_STATIC_COLLAB_NATIVE_TOOLS: dict[str, frozenset[str]] = {
-    "followup_task": frozenset({"resume_agent", "send_input"}),
-    "interrupt_agent": frozenset({"close_agent"}),
-    "send_message": frozenset({"send_input"}),
-    "spawn_agent": frozenset({"spawn_agent"}),
-    "wait_agent": frozenset({"wait"}),
-}
 
 def handle_native_collab_agent_tool_call(
     payload: dict,
@@ -71,10 +64,6 @@ def handle_native_collab_agent_tool_call(
         input_data=input_data,
         status=status,
         completed=completed,
-        predicate=lambda invocation: (
-            action
-            in _CODEX_STATIC_COLLAB_NATIVE_TOOLS.get(invocation.method, frozenset())
-        ),
         turn_id=_as_non_empty_str(payload.get("turn_id")),
         started_at=started_at,
         completed_at=completed_at,

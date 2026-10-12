@@ -34,21 +34,6 @@ from coding_trajectory.analysis.tool_summary import (
     pending_plan_actions,
     summarize_tool_call,
 )
-from coding_trajectory.analysis.tool_summary_shared import (
-    AGENT_COLLAB,
-    EDIT_FILE,
-    LIST_FILES,
-    READ_FILE,
-    RUN_COMMAND,
-    SEARCH_TEXT,
-    SESSION_HANDOFF,
-    SUBAGENT_TASK,
-    TODO_LIST,
-    VENDOR_TOOL_CONCEPT,
-    WEB_FETCH,
-    WEB_SEARCH,
-    WRITE_FILE,
-)
 from coding_trajectory.analysis.tool_summary_shell import classify_verification_command
 from coding_trajectory.ingestion.execution_models import DirectItemReference
 from coding_trajectory.ingestion.graph import canonical_spawn_origins
@@ -107,16 +92,6 @@ _CONTEXT_LABELS = {
     "retained_user_input": {"Retained requests"},
     "compacted_history": {"Compacted history"},
     "system_tools": {"System tools"},
-}
-_DETAIL_KINDS = {
-    READ_FILE: "file",
-    EDIT_FILE: "file",
-    WRITE_FILE: "file",
-    LIST_FILES: "file",
-    SEARCH_TEXT: "search",
-    RUN_COMMAND: "command",
-    WEB_FETCH: "web",
-    WEB_SEARCH: "web",
 }
 _LIFECYCLES = {
     "completed": "completed",
@@ -575,20 +550,16 @@ def _tool_summary(
     summary: dict[str, Any] = {"name": name}
     for key in (
         "status",
-        "optimization_profile",
         "activity_kind",
         "activity_source",
         "activity_outcome",
         "activity_fidelity",
         "activity_wrapper_status",
-        "activity_hidden_reason",
         "classification",
         "detail_basis",
     ):
         if (value := _bounded(raw.get(key))) is not None:
             summary[key] = value
-    if isinstance(raw.get("activity_hidden"), bool):
-        summary["activity_hidden"] = raw["activity_hidden"]
     description = raw.get("description")
     if isinstance(description, str) and (
         target := _safe_detail_target(description, cwd=cwd)
@@ -598,11 +569,7 @@ def _tool_summary(
         kind = (
             raw_detail.get("kind") if raw.get("detail_basis") == "arguments" else None
         )
-        kind = kind or (
-            "coordination"
-            if name in {TODO_LIST, SUBAGENT_TASK, AGENT_COLLAB, SESSION_HANDOFF}
-            else _DETAIL_KINDS.get(name, "tool")
-        )
+        kind = kind or "tool"
         truncated = len(" ".join(description.split())) > 280 or bool(
             raw.get("description_truncated")
         )
@@ -651,14 +618,8 @@ def _output_evidence(
             facts["operation"] = _bounded(item.operation) or "unknown"
         if path:
             facts["path"] = path
-    elif (
-        isinstance(tool_name, str)
-        and (concept := VENDOR_TOOL_CONCEPT.get(tool_name)) is not None
-    ):
-        processor = "ct.output_evidence.tool.v1"
-        facts["concept"] = _bounded(concept) or "tool"
     else:
-        processor = "ct.output_evidence.unknown.v1"
+        processor = "ct.output_evidence.tool.v1"
     status = (
         str(getattr(item.status, "value", item.status)).casefold()
         if item.status is not None

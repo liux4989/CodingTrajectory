@@ -1,21 +1,10 @@
-"""Activity-flow projection helpers shared by overview and teammate views."""
+"""Shared identity-based projections of direct items and script executions."""
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from pydantic import BaseModel
-
 from coding_trajectory.analysis.projection_utils import truncate_text_preview
-from coding_trajectory.analysis.tool_optimization import tool_optimization_profile
-from coding_trajectory.analysis.tool_summary_shared import (
-    EXPLORE,
-    LIST_FILES,
-    READ_FILE,
-    RUN_COMMAND,
-    SEARCH_TEXT,
-)
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.execution_models import (
     ExecutionUnit,
@@ -27,76 +16,33 @@ from coding_trajectory.ingestion.models import (
     is_tool_shaped_item,
 )
 
-_OVERVIEW_TEXT_PREVIEW_LEN = 220
-
-_OUTCOMELESS_ACTIVITY_KINDS = frozenset(
-    {"background_terminal_wait", "background_terminal_interaction"}
-)
-_EXPLORATION_CONCEPTS: frozenset[str] = frozenset({READ_FILE, SEARCH_TEXT, LIST_FILES})
-_EXPLORATION_CELL_KEY = ("exploration", None, None)
-_COMMAND_CELL_KEY = ("command", None, None)
-_MAX_ACTIVITY_CELL_ITEMS = 32
-
-
-class _ToolActivityCell(BaseModel):
-    """One compactable, temporally contiguous activity cell."""
-
-    group_key: tuple[str, str | None, str | None]
-    items: list[dict[str, Any]]
-
 
 def public_activity_outcome(value: Any) -> str | None:
-    """Return only provider-backed terminal outcomes for public projections.
-
-    ``unknown`` is CT evidence bookkeeping for a statically reconstructed
-    activity. Codex has no matching terminal command status, so exposing it as
-    an execution outcome would invent UI semantics that the provider does not
-    have.
-    """
-
     return str(value) if value in {"succeeded", "failed"} else None
 
 
 def is_control_only_activity_cell(item: dict[str, Any]) -> bool:
-    """Whether a cell is retained evidence but not useful default activity.
-
-    Empty-stdin terminal polling records orchestration progress, not work or a
-    user-visible result. Keep the canonical items and their grouped cell for
-    detail consumers while excluding the cell from overview and summary.
-    Non-empty interaction remains visible because it changes terminal state.
-    """
-
-    return (
-        item.get("type") == "background_terminal_wait"
-        or item.get("activity_kind") == "background_terminal_wait"
-    )
+    # Control ownership is represented by the execution layer, not tool names.
+    return False
 
 
 def is_low_value_activity_cell(item: dict[str, Any]) -> bool:
-    """Whether a cell lacks both an action identity and a subject."""
-
-    if item.get("type") == "tool_call_group":
-        return not item.get("name") and not item.get("descriptions")
-    if item.get("type") != "tool_call":
-        return False
-    if item.get("activity_kind") == "background_terminal_interaction":
-        return False
-    return not item.get("name") and not item.get("description")
+    return (
+        item.get("type") == "tool_call"
+        and not item.get("name")
+        and not item.get("description")
+    )
 
 
 def project_tool_activity(item: Item) -> dict[str, Any] | None:
-    """Return one semantic tool activity, excluding transport envelopes."""
-
     if not is_tool_shaped_item(item):
         return None
-
     from coding_trajectory.analysis.tool_summary import summarize_tool_call
 
     summary = summarize_tool_call(item)
-    if summary is None or summary.get("activity_hidden") is True:
+    if summary is None:
         return None
-    summary.setdefault("item_id", str(item.item_id))
-    return {"type": "tool_call", **summary}
+    return {"type": "tool_call", **summary, "item_id": str(item.item_id)}
 
 
 def build_flows(
@@ -105,7 +51,6 @@ def build_flows(
     flatten_commands: bool = False,
     execution_units: list[ExecutionUnit] | None = None,
 ) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
     scripts = {
         u.item_id: u
         for u in execution_units or []
@@ -117,8 +62,12 @@ def build_flows(
         for identity in u.item_ids
         if identity != u.item_id
     }
+    result = []
+    roots = {unit.unit_id for unit in execution_units or []}
     for item in items:
         identity = str(item.item_id)
+        if execution_units and identity not in roots:
+            continue
         if identity in scripts:
             script = scripts[identity]
             result.append(
@@ -130,36 +79,18 @@ def build_flows(
                     "script": script.model_dump(mode="json"),
                 }
             )
+        elif identity in owned:
             continue
-        if identity in owned:
-            continue
-        if is_tool_shaped_item(item):
-            activity = project_tool_activity(item)
-            if activity is not None:
+        elif is_tool_shaped_item(item):
+            if activity := project_tool_activity(item):
                 result.append(activity)
-            continue
-        if isinstance(item, AgentMessageItem):
-            measurements = getattr(item, "measurements", None)
-            if measurements is not None:
-                if measurements.text_preview:
-                    result.append(
-                        {
-                            "type": "assistant_response",
-                            "text": measurements.text_preview,
-                            "item_id": str(item.item_id),
-                        }
-                    )
-                continue
-            text = (item.text or "").strip()
+        elif isinstance(item, AgentMessageItem):
+            text = item.measurements.text_preview if item.measurements else item.text
             if text:
                 result.append(
-                    {
-                        "type": "assistant_response",
-                        "text": text,
-                        "item_id": str(item.item_id),
-                    }
+                    {"type": "assistant_response", "text": text, "item_id": identity}
                 )
-    return _project_activity_cells(result, flatten_commands=flatten_commands)
+    return result
 
 
 def build_overview_flows(
@@ -168,439 +99,40 @@ def build_overview_flows(
     flatten_commands: bool = False,
     execution_units: list[ExecutionUnit] | None = None,
 ) -> list[dict[str, Any]]:
-    compacted: list[dict[str, Any]] = []
+    result = []
     for item in build_flows(
         items, flatten_commands=flatten_commands, execution_units=execution_units
     ):
-        if is_control_only_activity_cell(item) or is_low_value_activity_cell(item):
-            continue
-        if item.get("type") == "assistant_response":
-            text = _truncate_text(item.get("text"))
-            if text:
-                item_id = item.get("item_id")
-                compacted.append(
-                    prune_nones(
-                        {
-                            "text": text,
-                            "item_ids": [item_id] if isinstance(item_id, str) else None,
-                        }
-                    )
-                )
-            continue
-
-        compact = _compact_flow_item(item)
-        if (
-            compacted
-            # An unfamiliar name identifies the tool, not an identical action.
-            # Missing descriptions cannot prove that separate calls did the
-            # same work, so keep their individual evidence rows.
-            and item.get("classification") != "identity"
-            and not (flatten_commands and compact.get("tool") == RUN_COMMAND)
-            and _same_projected_tool_action(compacted[-1], compact)
-        ):
-            _merge_projected_tool_actions(compacted[-1], compact)
-        else:
-            compacted.append(compact)
-
-    return [prune_nones(item) for item in compacted]
-
-
-def _compact_flow_item(item: dict[str, Any]) -> dict[str, Any]:
-    if item.get("type") == "tool_script":
-        return {
-            "tool": item.get("name") or "Tool script",
-            "kind": "tool_script",
-            "item_ids": item["item_ids"],
-            "script_id": item["script"]["unit_id"],
-            "target": item["script"].get("source_preview"),
-            "status": item["script"]["result"]["lifecycle"],
-        }
-    if item.get("type") == "assistant_response":
-        return {"text": item.get("text")}
-
-    if item.get("type") == "tool_call_group":
-        profile = tool_optimization_profile(
-            str(item.get("name") or ""),
-            _profile_name(item),
-        )
-        exact_description = item.get("exact_description")
-        details = {
-            profile.detail_key: exact_description
-            if isinstance(exact_description, str)
-            else None,
-            profile.detail_list_key: item.get("descriptions")
-            if not isinstance(exact_description, str)
-            else None,
-        }
-        if profile.detail_counts_key:
-            details[profile.detail_counts_key] = item.get("description_counts")
-        return prune_nones(
-            {
-                "tool": item.get("name"),
-                "status": item.get("status"),
-                "count": item.get("count"),
-                **details,
-                "item_ids": item.get("item_ids"),
-                "outcome": public_activity_outcome(item.get("activity_outcome")),
-                "wrapper_status": item.get("activity_wrapper_status"),
-            }
-        )
-
-    if item.get("type") == "background_terminal_wait":
-        return prune_nones(
-            {
-                "tool": "Waited for background terminal",
-                "count": item.get("count"),
-                "item_ids": item.get("item_ids"),
-            }
-        )
-
-    if item.get("type") == "tool_call":
-        outcome_bearing = item.get("activity_kind") not in _OUTCOMELESS_ACTIVITY_KINDS
-        if item.get("classification") == "identity":
-            return prune_nones(
+        if item["type"] == "assistant_response":
+            result.append(
                 {
-                    "tool": item.get("name"),
-                    "target": item.get("description"),
-                    "status": item.get("status"),
-                    "item_ids": [item["item_id"]] if item.get("item_id") else None,
-                    "outcome": public_activity_outcome(item.get("activity_outcome"))
-                    if outcome_bearing
-                    else None,
-                    "wrapper_status": item.get("activity_wrapper_status")
-                    if outcome_bearing
-                    else None,
+                    "text": truncate_text_preview(item["text"], max_len=220),
+                    "item_ids": [item["item_id"]],
                 }
             )
-        profile = tool_optimization_profile(
-            str(item.get("name") or ""),
-            _profile_name(item),
-        )
-        return prune_nones(
-            {
-                "tool": item.get("name"),
-                "status": item.get("status"),
-                profile.detail_key: item.get("description"),
-                "item_ids": [item.get("item_id")]
-                if isinstance(item.get("item_id"), str)
-                else None,
-                "outcome": public_activity_outcome(item.get("activity_outcome"))
-                if outcome_bearing
-                else None,
-                "wrapper_status": (
-                    item.get("activity_wrapper_status") if outcome_bearing else None
-                ),
-            }
-        )
-
-    return item
-
-
-def _same_projected_tool_action(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    if "tool" not in left or "tool" not in right:
-        return False
-    ignored = {"count", "item_ids"}
-    return {key: value for key, value in left.items() if key not in ignored} == {
-        key: value for key, value in right.items() if key not in ignored
-    }
-
-
-def _merge_projected_tool_actions(
-    target: dict[str, Any], addition: dict[str, Any]
-) -> None:
-    target["count"] = int(target.get("count") or 1) + int(addition.get("count") or 1)
-    item_ids = [
-        item_id
-        for item_id in (*target.get("item_ids", []), *addition.get("item_ids", []))
-        if isinstance(item_id, str) and item_id
-    ]
-    if item_ids:
-        target["item_ids"] = item_ids
-    for key, values in addition.items():
-        if not key.endswith("_counts") or not isinstance(values, dict):
-            continue
-        existing = target.get(key)
-        if not isinstance(existing, dict):
-            target[key] = dict(values)
-            continue
-        for value, count in values.items():
-            existing[value] = int(existing.get(value) or 0) + int(count or 0)
-
-
-def _truncate_text(
-    value: Any, *, limit: int = _OVERVIEW_TEXT_PREVIEW_LEN
-) -> str | None:
-    text = truncate_text_preview(value, max_len=limit)
-    if not text:
-        return None
-    return text
-
-
-def _project_activity_cells(
-    items: list[dict[str, Any]], *, flatten_commands: bool
-) -> list[dict[str, Any]]:
-    """Project ordered tool facts into evidence-driven activity cells.
-
-    The active cell only accepts compatible, agent-originated successful tool
-    facts. Every other item flushes it, preserving the temporal boundary for
-    messages, commands, web activity, mutations, failures, and unknown forms.
-    """
-
-    projected: list[dict[str, Any]] = []
-    active: _ToolActivityCell | None = None
-
-    def flush_active() -> None:
-        nonlocal active
-        if active is None:
-            return
-        projected.extend(_project_tool_activity_cell(active))
-        active = None
-
-    for item in items:
-        group_key = _tool_activity_group_key(item, flatten_commands=flatten_commands)
-        if group_key is None:
-            flush_active()
-            projected.append(item)
-            continue
-
-        if (
-            active is not None
-            and active.group_key == group_key
-            and len(active.items) < _MAX_ACTIVITY_CELL_ITEMS
-        ):
-            active.items.append(item)
-            continue
-
-        flush_active()
-        active = _ToolActivityCell(group_key=group_key, items=[item])
-
-    flush_active()
-    return projected
-
-
-def _tool_activity_group_key(
-    item: dict[str, Any],
-    *,
-    flatten_commands: bool,
-) -> tuple[str, str | None, str | None] | None:
-    if item.get("type") != "tool_call":
-        return None
-    if item.get("classification") == "identity":
-        return None
-    if item.get("activity_source") != "agent":
-        return None
-
-    # Empty write_stdin calls are not commands. Codex presents a contiguous
-    # same-terminal polling run as one terminal wait, even though persisted
-    # history cannot prove when the underlying process completed.
-    if item.get("activity_kind") == "background_terminal_wait":
-        identity = item.get("background_terminal_identity")
-        if (
-            isinstance(identity, str)
-            and identity
-            and item.get("activity_wrapper_status") == "completed"
-        ):
-            return ("background_terminal_wait", identity, None)
-        return None
-    if item.get("activity_kind") == "command":
-        # Keep each command's description and evidence ID together, including
-        # commands for which only the action identity was retained.
-        if flatten_commands:
-            return None
-        if item.get("activity_outcome") == "succeeded":
-            return _COMMAND_CELL_KEY
-        return _exact_activity_group_key(item)
-    if item.get("activity_outcome") != "succeeded":
-        return _exact_activity_group_key(item)
-
-    name = str(item.get("name") or "")
-    profile_name = _profile_name(item)
-    profile = tool_optimization_profile(name, profile_name)
-    if not profile.group_repeated:
-        return _exact_activity_group_key(item)
-    if name in _EXPLORATION_CONCEPTS:
-        return _EXPLORATION_CELL_KEY
-    return ("repeated", name, profile_name)
-
-
-def _exact_activity_group_key(
-    item: dict[str, Any],
-) -> tuple[str, str | None, str | None]:
-    signature = json.dumps(
-        {
-            "description": item.get("description"),
-            "status": item.get("status"),
-            "outcome": item.get("activity_outcome"),
-            "wrapper_status": item.get("activity_wrapper_status"),
-            "profile": _profile_name(item),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return ("exact", str(item.get("name") or ""), signature)
-
-
-def _project_tool_activity_cell(cell: _ToolActivityCell) -> list[dict[str, Any]]:
-    if cell.group_key[0] == "background_terminal_wait":
-        return [_project_background_terminal_wait_cell(cell.items)]
-    if len(cell.items) == 1:
-        return [cell.items[0]]
-    if cell.group_key[0] == "exact":
-        return [_project_exact_tool_cell(cell.items)]
-    if cell.group_key == _COMMAND_CELL_KEY:
-        return [_project_command_cell(cell.items)]
-    if cell.group_key == _EXPLORATION_CELL_KEY:
-        return [_project_exploration_cell(cell.items)]
-    return [_project_repeated_tool_cell(cell.items)]
-
-
-def _project_exact_tool_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
-    first = items[0]
-    description = first.get("description")
-    item_ids = [
-        item["item_id"]
-        for item in items
-        if isinstance(item.get("item_id"), str) and item.get("item_id")
-    ]
-    return prune_nones(
-        {
-            "type": "tool_call_group",
-            "name": first.get("name"),
-            "optimization_profile": _profile_name(first),
-            "status": first.get("status"),
-            "count": len(items),
-            "exact_description": description if isinstance(description, str) else None,
-            "item_ids": item_ids or None,
-            "activity_outcome": first.get("activity_outcome"),
-            "activity_wrapper_status": first.get("activity_wrapper_status"),
-        }
-    )
-
-
-def _project_background_terminal_wait_cell(
-    items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Collapse one contiguous empty-stdin polling streak by terminal identity."""
-
-    item_ids = [
-        item["item_id"]
-        for item in items
-        if isinstance(item.get("item_id"), str) and item.get("item_id")
-    ]
-    return prune_nones(
-        {
-            "type": "background_terminal_wait",
-            "count": len(items),
-            "item_ids": item_ids or None,
-        }
-    )
-
-
-def _project_exploration_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
-    targets: list[str] = []
-    for item in items:
-        target = _exploration_target(item)
-        if target is not None:
-            targets.append(target)
-    item_ids = [
-        item["item_id"]
-        for item in items
-        if isinstance(item.get("item_id"), str) and item.get("item_id")
-    ]
-    return prune_nones(
-        {
-            "type": "tool_call_group",
-            "name": EXPLORE,
-            "optimization_profile": "activity:exploration",
-            "count": len(items),
-            "descriptions": targets or None,
-            "item_ids": item_ids or None,
-        }
-    )
-
-
-def _project_command_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
-    commands = [
-        item["description"]
-        for item in items
-        if isinstance(item.get("description"), str) and item.get("description")
-    ]
-    item_ids = [
-        item["item_id"]
-        for item in items
-        if isinstance(item.get("item_id"), str) and item.get("item_id")
-    ]
-    return prune_nones(
-        {
-            "type": "tool_call_group",
-            "name": RUN_COMMAND,
-            "optimization_profile": "activity:command",
-            "count": len(items),
-            "descriptions": commands or None,
-            "item_ids": item_ids or None,
-        }
-    )
-
-
-def _exploration_target(item: dict[str, Any]) -> str | None:
-    description = item.get("description")
-    if not isinstance(description, str) or not description:
-        return None
-    verb = {
-        READ_FILE: "read",
-        SEARCH_TEXT: "search",
-        LIST_FILES: "list",
-    }.get(str(item.get("name") or ""), "explore")
-    return f"{verb} {description}"
-
-
-def _project_repeated_tool_cell(items: list[dict[str, Any]]) -> dict[str, Any]:
-    profile = tool_optimization_profile(
-        str(items[0].get("name") or ""),
-        _profile_name(items[0]),
-    )
-    descriptions = [
-        item["description"]
-        for item in items
-        if isinstance(item.get("description"), str) and item.get("description")
-    ]
-    item_ids = [
-        item["item_id"]
-        for item in items
-        if isinstance(item.get("item_id"), str) and item.get("item_id")
-    ]
-    description_counts = (
-        _description_counts(descriptions) if profile.dedupe_repeated_details else None
-    )
-    if profile.dedupe_repeated_details:
-        descriptions = list(dict.fromkeys(descriptions))
-    grouped = prune_nones(
-        {
-            "type": "tool_call_group",
-            "name": items[0].get("name"),
-            "optimization_profile": _profile_name(items[0]),
-            "status": items[0].get("status"),
-            "count": len(items),
-            "descriptions": descriptions or None,
-            "description_counts": description_counts,
-            "item_ids": item_ids or None,
-        }
-    )
-    return [grouped]
-
-
-def _profile_name(item: dict[str, Any]) -> str | None:
-    profile = item.get("optimization_profile")
-    if isinstance(profile, str) and profile:
-        return profile
-    return None
-
-
-def _description_counts(descriptions: list[str]) -> dict[str, int] | None:
-    counts: dict[str, int] = {}
-    for description in descriptions:
-        counts[description] = counts.get(description, 0) + 1
-    repeated = {
-        description: count for description, count in counts.items() if count > 1
-    }
-    return repeated or None
+        elif item["type"] == "tool_script":
+            result.append(
+                {
+                    "tool": item.get("name") or "Tool script",
+                    "kind": "tool_script",
+                    "item_ids": item["item_ids"],
+                    "script_id": item["script"]["unit_id"],
+                    "target": item["script"].get("source_preview"),
+                    "status": item["script"]["result"]["lifecycle"],
+                }
+            )
+        else:
+            result.append(
+                prune_nones(
+                    {
+                        "tool": item.get("name"),
+                        "target": item.get("description"),
+                        "status": item.get("status"),
+                        "item_ids": [item["item_id"]],
+                        "outcome": public_activity_outcome(
+                            item.get("activity_outcome")
+                        ),
+                    }
+                )
+            )
+    return result

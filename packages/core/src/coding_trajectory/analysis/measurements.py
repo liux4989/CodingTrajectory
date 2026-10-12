@@ -89,7 +89,7 @@ def extract_item_measurements(item: Item) -> ItemMeasurements:
 
 
 def is_projection_only_item(item: Item) -> bool:
-    """Whether an item is a semantic child of provider-visible wrapper content."""
+    """Whether content has explicit custody in another provider-visible envelope."""
 
     measurements = item.measurements
     if measurements is not None and measurements.projection_only:
@@ -97,7 +97,10 @@ def is_projection_only_item(item: Item) -> bool:
     vendor_data = item.vendor_data
     activity = vendor_data.get("activity") if isinstance(vendor_data, dict) else None
     provenance = activity.get("provenance") if isinstance(activity, dict) else None
-    return isinstance(provenance, dict) and bool(provenance.get("parent_tool_call_id"))
+    return (
+        isinstance(provenance, dict)
+        and provenance.get("content_custody") == "script_envelope"
+    )
 
 
 def semantic_assistant_response_count(session: Session) -> int:

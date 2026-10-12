@@ -7,13 +7,6 @@ from typing import Any
 from coding_trajectory.analysis.tool_arguments import tool_argument_detail
 from coding_trajectory.ingestion.models import Item, ToolStatus
 
-_EXPANDED_EXEC_TOOL_NAME = "codex_exec_expanded"
-_BACKGROUND_WAIT_TOOL_PREFIX = "codex_background_terminal_wait:"
-_BACKGROUND_INTERACTION_TOOL_NAME = "codex_background_terminal_interaction"
-_OUTCOMELESS_ACTIVITY_KINDS = frozenset(
-    {"background_terminal_wait", "background_terminal_interaction"}
-)
-
 
 def pending_plan_actions(value: Any) -> list[str]:
     """Extract explicit unfinished actions from a plan-tool snapshot."""
@@ -46,9 +39,9 @@ def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
 
     Adapters may supply a stricter provenance record.  In its absence a
     canonical command/tool item is agent-produced, and a completed/failed
-    lifecycle is the provider's direct completion evidence.  A static Codex
-    wrapper deliberately supplies ``outcome=unknown`` and therefore wins over
-    the generic lifecycle fallback.
+    lifecycle is the provider's direct completion evidence.  An explicit
+    ``outcome=unknown`` prevents the generic lifecycle fallback from inventing
+    a terminal result.
     """
 
     vendor_data = getattr(item, "vendor_data", None)
@@ -59,9 +52,6 @@ def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
         else {}
     )
     metadata: dict[str, str | bool] = {}
-    if raw_activity.get("hidden_from_overview") is True:
-        metadata["hidden"] = True
-        metadata["hidden_reason"] = str(raw_activity.get("reason") or "adapter_hidden")
     activity_kind = raw_activity.get("kind")
     if isinstance(activity_kind, str):
         metadata["kind"] = activity_kind
@@ -70,21 +60,20 @@ def _activity_metadata(item: Item) -> dict[str, str | bool | int]:
     source = raw_activity.get("source")
     metadata["source"] = source if isinstance(source, str) else "agent"
 
-    if activity_kind not in _OUTCOMELESS_ACTIVITY_KINDS:
-        outcome = raw_activity.get("outcome")
-        if outcome not in {"succeeded", "failed", "unknown"}:
-            status = getattr(item, "status", None)
-            if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
-                outcome = "failed"
-            elif status in {
-                ToolStatus.COMPLETED,
-                ToolStatus.COMPLETED.value,
-                "completed",
-            }:
-                outcome = "succeeded"
-            else:
-                outcome = "unknown"
-        metadata["outcome"] = outcome
+    outcome = raw_activity.get("outcome")
+    if outcome not in {"succeeded", "failed", "unknown"}:
+        status = getattr(item, "status", None)
+        if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
+            outcome = "failed"
+        elif status in {
+            ToolStatus.COMPLETED,
+            ToolStatus.COMPLETED.value,
+            "completed",
+        }:
+            outcome = "succeeded"
+        else:
+            outcome = "unknown"
+    metadata["outcome"] = outcome
 
     fidelity = raw_activity.get("fidelity")
     if isinstance(fidelity, str):
@@ -106,33 +95,6 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
     """
     tool_name_raw = getattr(item, "tool_name", None)
     tool_name = tool_name_raw.strip() if isinstance(tool_name_raw, str) else ""
-    if tool_name == _EXPANDED_EXEC_TOOL_NAME:
-        return None
-
-    # Compact markers preserve explicit control evidence without retaining
-    # terminal identifiers or raw interaction text. They are not categories.
-    if tool_name.startswith(_BACKGROUND_WAIT_TOOL_PREFIX):
-        identity_key = tool_name.removeprefix(_BACKGROUND_WAIT_TOOL_PREFIX)
-        if not identity_key:
-            return None
-        return {
-            "name": "write_stdin",
-            "classification": "identity",
-            "activity_kind": "background_terminal_wait",
-            "activity_source": "agent",
-            "activity_fidelity": "derived_static",
-            "activity_wrapper_status": "completed",
-            "background_terminal_identity": identity_key,
-        }
-    if tool_name == _BACKGROUND_INTERACTION_TOOL_NAME:
-        return {
-            "name": "write_stdin",
-            "classification": "identity",
-            "activity_kind": "background_terminal_interaction",
-            "activity_source": "agent",
-            "activity_fidelity": "derived_static",
-            "activity_wrapper_status": "completed",
-        }
     if not tool_name:
         if item.kind not in {"tool_call", "command_execution", "file_change", "plan"}:
             return None
@@ -183,9 +145,6 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
     if status in {ToolStatus.FAILED, ToolStatus.FAILED.value, "failed"}:
         result["status"] = "failed"
     activity = _activity_metadata(item)
-    if activity.get("hidden") is True:
-        result["activity_hidden"] = True
-        result["activity_hidden_reason"] = activity["hidden_reason"]
     for source, target in (
         ("kind", "activity_kind"),
         ("source", "activity_source"),
@@ -198,13 +157,4 @@ def summarize_tool_call(item: Item) -> dict[str, Any] | None:
         if target not in result and source in activity:
             result[target] = activity[source]
 
-    if result.get("activity_kind") in _OUTCOMELESS_ACTIVITY_KINDS:
-        result.pop("activity_outcome", None)
-    if result.get("activity_hidden") is True and not result.get(
-        "activity_hidden_reason"
-    ):
-        if result.get("activity_fidelity") == "observed_wrapper":
-            result["activity_hidden_reason"] = "static_exec_expansion"
-        else:
-            result.pop("activity_hidden", None)
     return result

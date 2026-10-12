@@ -146,41 +146,6 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
         if activity.get("wrapper_status") == "failed":
             annotations.append("wrapper failed")
         annotation = f" [{'; '.join(annotations)}]" if annotations else ""
-        if tool == "RunCommand" and count and count != 1:
-            command = activity.get("cmd")
-            if isinstance(command, str) and command:
-                return f"RunCommand x{count}: {one_line(command, limit=72)}{annotation}"
-            commands = activity.get("commands")
-            if isinstance(commands, list) and len(commands) == 1:
-                return (
-                    f"RunCommand x{count}: {one_line(commands[0], limit=72)}"
-                    f"{annotation}"
-                )
-            command_word = "command" if count == 1 else "commands"
-            return f"Ran {count} {command_word}{annotation}"
-        if tool == "WebSearch":
-            query = activity.get("query")
-            if query:
-                return f"Searched the web for {one_line(query, limit=72)}{annotation}"
-            return f"Searched the web{annotation}"
-        if tool == "WebFetch":
-            target = activity.get("url")
-            if target:
-                return f"Browsed the web: {one_line(target, limit=72)}{annotation}"
-            return f"Browsed the web{annotation}"
-        if tool == "TodoList" and activity.get("items"):
-            return f"Updated plan: {one_line(activity['items'], limit=72)}{annotation}"
-        if tool == "EditFile" and activity.get("path"):
-            return (
-                f"Edited files{suffix}: {one_line(activity['path'], limit=72)}"
-                f"{annotation}"
-            )
-        if tool == "SubagentTask" and activity.get("task"):
-            return (
-                f"Subagent activity: {one_line(activity['task'], limit=72)}{annotation}"
-            )
-        if tool == "AgentCollab" and activity.get("task"):
-            return f"Agent collaboration: {one_line(activity['task'], limit=72)}{annotation}"
         for key in (
             "cmd",
             "path",
@@ -240,6 +205,13 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                     or "Request unavailable",
                 ]
             )
+            activity_coverage = (turn.get("content_coverage") or {}).get(
+                "activities", {}
+            )
+            if activity_coverage.get("truncated"):
+                lines.append(
+                    f"Activities: showing {activity_coverage['returned']} of {activity_coverage['total']}; earlier executions omitted from this overview."
+                )
             responses = {r["item_id"]: r for r in turn["assistant_responses"]}
             activities = {
                 a.get("script_id") or a["item_ids"][0]: a for a in turn["activities"]
@@ -255,13 +227,19 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                 if identity in activities:
                     activity = activities[identity]
                     references = ", ".join(
-                        f"`{item_id}`" for item_id in activity["item_ids"]
+                        f"`{item_id}`"
+                        for item_id in (
+                            [unit["unit_id"]]
+                            if unit["kind"] == "tool_script"
+                            else activity["item_ids"]
+                        )
                     )
                     lines.append(
                         f"- {_overview_activity_label(activity)} (items {references})"
                     )
-                    if unit["kind"] == "tool_script":
+                    if unit.get("open_source_link"):
                         lines.append(f"  {unit['open_source_link']}")
+                    if unit["kind"] == "tool_script":
                         lines.extend(_render_script_composition(unit, indent="  "))
     page = payload["page"]
     lines.extend(
@@ -287,18 +265,52 @@ def _script_lookup(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _with_execution_sources(
     text: str, payload: dict[str, Any], args: argparse.Namespace | None = None
 ) -> str:
-    scripts = list(_script_lookup(payload).values())
-    if not scripts:
-        return text
+    sources = [
+        u
+        for layer in payload.get("execution_units", [])
+        for u in layer["units"]
+        if u.get("source")
+    ]
+    composition = payload.get("execution_composition") or {}
+    observed = composition.get("observed_calls") or []
+    lines = [text]
+    if observed:
+        lines.extend(["", "External tool observations (returned execution scope)", ""])
+        lines.extend(
+            f"- {call['tool_name']}: {call['count']} observed calls"
+            for call in observed
+        )
+        coverage = composition.get("script_inventory_coverage") or {}
+        if coverage.get("partial") or coverage.get("unknown"):
+            lines.append(
+                "Script inventories are incomplete; these observations are not a complete execution count."
+            )
+        sites = sum(c["count"] for c in composition.get("source_only_sites") or [])
+        if sites:
+            lines.append(
+                f"Source-only call sites: {sites} (excluded from observed execution counts)."
+            )
+    if not sources:
+        return "\n".join(lines)
     detailed = bool(getattr(args, "details", False))
-    selected = scripts if detailed else scripts[-8:]
-    lines = [text, "", f"Tool scripts ({len(selected)} of {len(scripts)})", ""]
+    selected = sources if detailed else sources[-8:]
+    lines.extend(
+        [
+            "",
+            f"Execution sources ({len(selected)} of {len(sources)}; returned execution scope)",
+            "",
+        ]
+    )
     for script in selected:
         preview = one_line(script.get("source_preview"), limit=100)
-        lines.append(
-            f"- {script.get('tool_name') or 'executor'} · `{script['unit_id']}`: {preview} · {script['open_source_link']}"
+        tool = (
+            script.get("tool_name") or script["source"].get("tool_name") or "executor"
         )
-        if detailed:
+        lines.append(
+            f"- {tool} · `{script['unit_id']}`{': ' + preview if preview else ''}"
+        )
+        lines.append(f"  {script['open_source_link']}")
+        if detailed and script["kind"] == "tool_script":
             lines.extend(_render_script_composition(script, indent="  "))
     return "\n".join(lines).rstrip()
 
@@ -320,13 +332,35 @@ def _render_script_composition(
                 else ""
             )
             lines.append(
-                f"{indent}- {observation}: {call['tool_name']}{': ' + detail if detail else ''}{outcome}{duration}"
+                f"{indent}- {observation}: {call['tool_name']}{outcome}{duration}"
             )
-    if script.get("inventory_coverage") == "unknown":
-        lines.append(f"{indent}- External-call inventory: unknown")
+            if detail:
+                lines.append(f"{indent}  Arguments: {detail}")
+            if call.get("ownership_basis"):
+                lines.append(f"{indent}  Ownership: {call['ownership_basis']}")
+            arguments = call.get("arguments_ref") or {}
+            if arguments.get("path"):
+                lines.append(f"{indent}  [Open arguments](<{arguments['path']}>)")
+            elif arguments.get("source_log"):
+                lines.append(
+                    f"{indent}  [Original arguments](<{arguments['source_log']}>)"
+                )
+            result_ref = call.get("result_ref") or {}
+            if result_ref.get("source_log"):
+                lines.append(
+                    f"{indent}  [Original result log](<{result_ref['source_log']}>) · records {result_ref.get('record_indices', [])}"
+                )
+    lines.append(
+        f"{indent}- External-call inventory: {script.get('inventory_coverage', 'unknown')}; source analysis: {script.get('source_analysis_coverage', 'not_supported')}"
+    )
     result = (script.get("result") or {}).get("emitted_output_ref")
     if result:
-        lines.append(f"{indent}- {result['link']}")
+        if result.get("link"):
+            lines.append(f"{indent}- {result['link']}")
+        elif result.get("source_log"):
+            lines.append(
+                f"{indent}- [Original execution result](<{result['source_log']}>) · records {result.get('record_indices', [])}"
+            )
     return lines
 
 

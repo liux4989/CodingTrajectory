@@ -35,13 +35,9 @@ from coding_trajectory.ingestion.adapters.codex_context import (
     _context_source_observation,
     _record_context_source,
 )
-from coding_trajectory.ingestion.adapters.codex_exec_parser import (
-    extract_static_exec_invocations,
-)
 from coding_trajectory.ingestion.adapters.codex_state import (
     CodexParseState,
     _codex_command_activity_source,
-    _PendingExecWrapper,
     _tool_result_status,
     _tool_status,
 )
@@ -786,13 +782,6 @@ class CodexAdapter(BaseAdapter):
             if span is not None:
                 for entry in transcript[before:]:
                     entry.origin = span
-            if any(
-                entry.kind == "assistant_message"
-                and isinstance(entry.data.get("text"), str)
-                and bool(entry.data["text"].strip())
-                for entry in transcript[before:]
-            ):
-                state.activity_cell_epoch += 1
         return transcript
 
     def _translate_record(
@@ -917,19 +906,6 @@ class CodexAdapter(BaseAdapter):
             call_id = _as_non_empty_str(payload.get("call_id"))
             if tool_name == "exec" and call_id is not None:
                 state.exec_wrapper_call_ids.add(call_id)
-            invocations = (
-                extract_static_exec_invocations(tool_input)
-                if tool_name == "exec"
-                else None
-            )
-            if call_id is not None and invocations is not None:
-                state.pending_exec_wrappers[call_id] = _PendingExecWrapper(
-                    call_id=call_id,
-                    started_at=ts,
-                    call_record=call_record,
-                    invocations=invocations,
-                    turn_id=_as_non_empty_str(state.turn_context.get("turn_id")),
-                )
 
         elif inner_type == "custom_tool_call_output":
             raw_output = payload.get("output")
@@ -956,9 +932,6 @@ class CodexAdapter(BaseAdapter):
                         "status": wrapper_status.value,
                     },
                 )
-            )
-            codex_native_items.handle_static_exec_wrapper_output(
-                payload, ts, state, transcript
             )
 
         elif inner_type == "tool_search_call":

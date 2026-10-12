@@ -143,15 +143,26 @@ def _native_command_source(
 
 def source_reference(evidence: ToolSourceEvidence) -> SourceReference:
     """Locate literal source in its authoritative log without exporting files."""
+    origin = getattr(evidence.item, "tool_call_id", None)
+    source_rows = [
+        row
+        for row in evidence.records
+        if isinstance(row.get("payload"), dict)
+        and row["payload"].get("call_id") == origin
+        and row["payload"].get("type") in {"function_call", "custom_tool_call"}
+    ]
+    if not source_rows:
+        source_rows = evidence.records
+    line = source_rows[0]["_ct_record_index"] + 1 if source_rows else 1
     return SourceReference(
         session_id=str(evidence.item.session_id),
         item_id=str(evidence.item.item_id),
         tool_name=evidence.item.tool_name,
         source_field=evidence.source_field,
         language=evidence.language,
-        link=f"[Open source log](<{evidence.source_log}>)",
-        record_indices=[row["_ct_record_index"] for row in evidence.records],
-        record_digests=[row["_ct_record_sha256"] for row in evidence.records],
+        link=f"[Open source](<{evidence.source_log}:{line}>)",
+        record_indices=[row["_ct_record_index"] for row in source_rows],
+        record_digests=[row["_ct_record_sha256"] for row in source_rows],
         source_sha256=hashlib.sha256(evidence.source_text.encode("utf-8")).hexdigest(),
         source_log=str(evidence.source_log),
         source_log_sha256=evidence.source_log_sha256,

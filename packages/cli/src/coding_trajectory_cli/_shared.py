@@ -173,13 +173,17 @@ def selected_output(args: argparse.Namespace) -> str:
 
 def _strip_inline_markdown(text: str) -> str:
     text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    text = re.sub(
+        r"\[([^\]]+)\]\((<[^>]+>|[^)]+)\)",
+        lambda match: f"{match[1]} ({match[2].removeprefix('<').removesuffix('>')})",
+        text,
+    )
     return re.sub(r"`([^`]*)`", r"\1", text)
 
 
 def _normalize_terminal_text(text: str) -> str:
-    text = _strip_inline_markdown(text)
-    return UUID_PATTERN.sub(lambda match: match.group(0)[:8], text)
+    # Targets and evidence identifiers are navigation data, not previews.
+    return _strip_inline_markdown(text)
 
 
 def _is_markdown_table_separator(line: str) -> bool:
@@ -219,6 +223,8 @@ def _render_markdown_table(rows: list[str]) -> list[str]:
 
 
 def _trim_terminal_line(line: str, *, limit: int = TERMINAL_LINE_LIMIT) -> str:
+    if re.search(r"\((?:<)?(?:/|https?://)", line):
+        return line
     if len(line) <= limit:
         return line
     item_suffix = re.fullmatch(r"(\s*-\s+)(.+?)(\s+\(items [^)]+\))", line)
@@ -574,6 +580,8 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
     compaction = payload.get("compaction") or {}
     return drop_none(
         {
+            "execution_units": payload.get("execution_units", []),
+            "execution_composition": payload.get("execution_composition"),
             "id": payload.get("root_session_id") or payload.get("session_id"),
             "session_id": payload.get("session_id"),
             "role": payload.get("role"),
@@ -713,6 +721,8 @@ def compact_payload(method: str, payload: Any) -> Any:
         effort_changes = payload.get("effort_changes") or {}
         return drop_none(
             {
+                "execution_units": payload.get("execution_units", []),
+                "execution_composition": payload.get("execution_composition"),
                 "id": payload.get("session_id"),
                 "scope": payload.get("scope"),
                 "extra_billing": payload.get("extra_billing"),

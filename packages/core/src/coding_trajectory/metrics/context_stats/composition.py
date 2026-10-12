@@ -538,7 +538,8 @@ def _agent_work(
     from coding_trajectory.ingestion.indexes import build_session_graph_index
 
     index = build_session_graph_index(session_graph)
-    scripts: dict[str, dict[str, _Measure]] = defaultdict(lambda: defaultdict(_Measure))
+    script_content: dict[str, _Measure] = defaultdict(_Measure)
+    script_usage: dict[str, int] | None = None
     evicted = _Measure()
     has_agent_message_items = any(
         item.kind == "agent_message"
@@ -574,7 +575,6 @@ def _agent_work(
                     )
 
         for turn in session.turns:
-            projection_children = _projection_children(turn.items)
             for item in turn.items:
                 if is_projection_only_item(item):
                     continue
@@ -603,23 +603,20 @@ def _agent_work(
                     )
                     continue
                 script = index.script_by_item_id.get(item.item_id)
-                if script:
-                    _add_tool_item(
-                        item,
-                        tools=scripts[script.unit_id],
-                        allocated_usage_by_item=allocated_usage_by_item,
-                        identity_override="Source and emitted output"
-                        if str(item.item_id) == script.item_id
-                        else None,
-                    )
-                    continue
-                children = projection_children.get(item.item_id, [])
-                if children:
-                    _add_projected_tool_item(
-                        item,
-                        children,
-                        tools=tools,
-                        allocated_usage_by_item=allocated_usage_by_item,
+                if script and str(item.item_id) == script.item_id:
+                    # Source and emitted output retain their own content
+                    # custody. Observed membership does not partition bytes
+                    # or provider usage among calls guessed from the source.
+                    for key, size in (
+                        ("source", item_input_size(item)),
+                        ("unassigned_output", item_output_size(item)),
+                    ):
+                        if size.chars:
+                            script_content[key].add(
+                                tokens=size.tokens, chars=size.chars
+                            )
+                    script_usage = _sum_usage(
+                        script_usage, allocated_usage_by_item.get(item.item_id)
                     )
                     continue
                 _add_tool_item(
@@ -629,24 +626,20 @@ def _agent_work(
                 )
 
     children = _assemble_agent_categories(agent, tools)
-    script_categories = []
-    for script_id, measures in scripts.items():
-        script = index.scripts_by_id[script_id]
-        category = _parent(
-            f"script_{script_id}",
-            f"{script.tool_name or 'Tool script'} · {script_id[:8]}",
-            [
-                _category(
-                    f"script_{script_id}_{uuid5(NAMESPACE_URL, name)}", name, measure
-                )
-                for name, measure in sorted(measures.items())
-                if measure.items
-            ],
+    content_children = [
+        _category(f"script_{key}", label, script_content[key])
+        for key, label in (
+            ("source", "Script source"),
+            ("unassigned_output", "Unassigned emitted output"),
         )
-        if category:
-            script_categories.append(category)
-    if category := _parent("tool_scripts", "Tool scripts", script_categories):
-        children.insert(0, category)
+        if script_content[key].items
+    ]
+    if content_children:
+        measure = _sum(script_content.values())
+        measure.allocated_usage = script_usage
+        children.insert(
+            0, _category("script_content", "Script content", measure, content_children)
+        )
     return _measure_from_categories(children), children, evicted
 
 
@@ -681,133 +674,6 @@ def _assemble_agent_categories(
         )
         if category is not None
     ]
-
-
-def _projection_children(items: list[Item]) -> dict[UUID, list[Item]]:
-    item_ids_by_tool_call = {
-        tool_call_id: item.item_id
-        for item in items
-        if isinstance((tool_call_id := getattr(item, "tool_call_id", None)), str)
-        and tool_call_id
-    }
-    children: dict[UUID, list[Item]] = defaultdict(list)
-    for item in items:
-        if not is_projection_only_item(item):
-            continue
-        parent_item_id = _projection_parent_item_id(
-            item, item_ids_by_tool_call=item_ids_by_tool_call
-        )
-        if parent_item_id is not None:
-            children[parent_item_id].append(item)
-    for values in children.values():
-        values.sort(key=_projection_sort_key)
-    return children
-
-
-def _projection_parent_item_id(
-    item: Item, *, item_ids_by_tool_call: dict[str, UUID]
-) -> UUID | None:
-    vendor_data = item.vendor_data if isinstance(item.vendor_data, dict) else {}
-    chronicle = vendor_data.get("chronicle_projection")
-    if isinstance(chronicle, dict):
-        value = chronicle.get("parent_item_id")
-        try:
-            return UUID(str(value)) if value is not None else None
-        except ValueError:
-            return None
-    activity = vendor_data.get("activity")
-    provenance = (
-        activity.get("provenance")
-        if isinstance(activity, dict) and isinstance(activity.get("provenance"), dict)
-        else {}
-    )
-    parent_tool_call_id = provenance.get("parent_tool_call_id")
-    return (
-        item_ids_by_tool_call.get(parent_tool_call_id)
-        if isinstance(parent_tool_call_id, str)
-        else None
-    )
-
-
-def _projection_sort_key(item: Item) -> tuple[int, int]:
-    vendor_data = item.vendor_data if isinstance(item.vendor_data, dict) else {}
-    chronicle = vendor_data.get("chronicle_projection")
-    activity = vendor_data.get("activity")
-    provenance = (
-        activity.get("provenance")
-        if isinstance(activity, dict) and isinstance(activity.get("provenance"), dict)
-        else {}
-    )
-    nested_index = (
-        chronicle.get("nested_index")
-        if isinstance(chronicle, dict)
-        else provenance.get("nested_index")
-    )
-    return (
-        nested_index
-        if isinstance(nested_index, int) and not isinstance(nested_index, bool)
-        else item.sequence,
-        item.sequence,
-    )
-
-
-def _add_projected_tool_item(
-    parent: Item,
-    children: list[Item],
-    *,
-    tools: dict[str, _Measure],
-    allocated_usage_by_item: dict[UUID, dict[str, int]],
-) -> None:
-    input_size = item_input_size(parent)
-    output_size = item_output_size(parent)
-    weights = [
-        max(
-            item_input_size(item).tokens + item_output_size(item).tokens,
-            item_input_size(item).chars + item_output_size(item).chars,
-            1,
-        )
-        for item in children
-    ]
-    token_shares = _allocate_integer(input_size.tokens + output_size.tokens, weights)
-    char_shares = _allocate_integer(input_size.chars + output_size.chars, weights)
-    usage_shares = _allocate_usage(allocated_usage_by_item.get(parent.item_id), weights)
-    for index, item in enumerate(children):
-        summary = summarize_tool_call(item) or {}
-        identity = str(summary.get("name") or item.tool_name or item.kind)
-        _add_tool_measure(
-            identity,
-            tokens=token_shares[index],
-            chars=char_shares[index],
-            allocated_usage=usage_shares[index],
-            tools=tools,
-        )
-
-
-def _allocate_integer(total: int, weights: list[int]) -> list[int]:
-    if not weights:
-        return []
-    denominator = sum(weights)
-    shares = [(total * weight) // denominator for weight in weights]
-    remainder = total - sum(shares)
-    order = sorted(
-        range(len(weights)),
-        key=lambda index: (-(total * weights[index] % denominator), index),
-    )
-    for index in order[:remainder]:
-        shares[index] += 1
-    return shares
-
-
-def _allocate_usage(
-    usage: dict[str, int] | None, weights: list[int]
-) -> list[dict[str, int] | None]:
-    if usage is None:
-        return [None for _ in weights]
-    shares: list[dict[str, int]] = [{} for _ in weights]
-    for key, value in usage.items():
-        for index, share in enumerate(_allocate_integer(value, weights)):
-            shares[index][key] = share
-    return shares
 
 
 def _add_tool_item(

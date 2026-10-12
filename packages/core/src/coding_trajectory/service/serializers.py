@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 from uuid import UUID
 
@@ -89,6 +90,40 @@ def attach_execution_layer(
                     ).model_dump(mode="json")
                 )
     payload["execution_units"] = layers
+    observed: Counter[str] = Counter()
+    candidates: Counter[str] = Counter()
+    coverage: Counter[str] = Counter()
+    scripts = 0
+    for layer in layers:
+        for unit in layer["units"]:
+            if unit["kind"] == "tool_script":
+                scripts += 1
+                coverage[unit["inventory_coverage"]] += 1
+                observed.update(c["tool_name"] for c in unit["observed_external_calls"])
+                candidates.update(c["tool_name"] for c in unit["source_only_calls"])
+            else:
+                item = index.items_by_id.get(UUID(unit["item_id"]))
+                if item is not None and item.kind in {
+                    "tool_call",
+                    "command_execution",
+                    "file_change",
+                    "plan",
+                }:
+                    observed[item.tool_name or item.kind] += 1
+    payload["execution_composition"] = {
+        "scope": "returned_execution_units",
+        "script_executions": scripts,
+        "script_inventory_coverage": dict(coverage),
+        "observed_calls": [
+            {"tool_name": name, "count": count}
+            for name, count in sorted(observed.items())
+        ],
+        "source_only_sites": [
+            {"tool_name": name, "count": count}
+            for name, count in sorted(candidates.items())
+        ],
+        "attribution": "membership_does_not_allocate_content_or_usage",
+    }
     return payload
 
 

@@ -85,13 +85,16 @@ return retained canonical evidence, not arbitrary raw vendor payloads.
 Coverage fields distinguish observed, derived, partial, and unavailable data.
 
 Retention is independent of publication. Standard queries retain bounded previews,
-semantic tool descriptions, operational evidence, provenance, and measurements.
+argument-derived tool descriptions, operational evidence, provenance, and measurements.
 They do not expose arbitrary raw vendor payloads as canonical history. Script
 units reference source, arguments, and outputs in the original logs using record
 indices, digests, and provider/item identities. Analysis creates no evidence
 exports; full source is read losslessly and raw bodies stay outside the canonical
 response. Observed calls and source-only candidates are distinct, and
-the execution layer does not reconstruct program order.
+the execution layer does not reconstruct program order. JavaScript syntax trees
+identify source call sites independently of runtime observations. Stats uses
+recorded tool identities for composition and preserves unassigned script content
+without allocating wrapper bytes to source-inferred children.
 
 **Warning:** retained content and local logs can contain private information.
 Bounded previews and description redaction are not a complete secret scanner.

@@ -575,8 +575,7 @@ class _ItemSignals:
         summary input before those items can be coalesced into a cell.
         """
 
-        summary = self.tool_summary(item)
-        return not (summary and summary.get("activity_hidden") is True)
+        return True
 
     def structural_score(self, item: Item) -> float:
         score = 0.0

@@ -27,7 +27,10 @@ from pydantic import Field, field_validator, model_validator
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 from coding_trajectory.contracts.overview import OverviewResponse
-from coding_trajectory.ingestion.execution_models import TurnExecutionLayer
+from coding_trajectory.ingestion.execution_models import (
+    ExecutionComposition,
+    TurnExecutionLayer,
+)
 
 
 class SessionScopedRequest(RequestModel):
@@ -283,6 +286,7 @@ class TruncationStatus(ContractModel):
 
 class SessionSummaryResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     session_id: str
     selected_turn_id: str | None = None
     latest_turn_status: str | None = None
@@ -318,6 +322,7 @@ class SearchMatch(ContractModel):
 
 class SessionSearchResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     session_id: str
     selected_turn_id: str | None = None
     query: SearchQuery
@@ -342,6 +347,7 @@ class GraphOverviewResponse(OverviewResponse):
 
 class SessionStatsResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     root_session_id: str | None = None
     scope: str | None = None
     vendor: str | None = None
@@ -358,6 +364,7 @@ class SessionStatsResponse(ContractModel):
 
 class SessionUsageResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     session_id: str
     scope: str | None = None
     selected_turn_id: str | None = None
@@ -375,6 +382,7 @@ class SessionUsageResponse(ContractModel):
 
 class SessionModelUsageResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     root_session_id: str
     vendor: str | None = None
     project: str | None = None
@@ -393,6 +401,7 @@ class SessionModelUsageResponse(ContractModel):
 
 class SessionRequestUsageResponse(PagedResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     root_session_id: str
     request_count: int = 0
     usage: dict[str, Any] = Field(default_factory=dict)
@@ -403,6 +412,7 @@ class SessionRequestUsageResponse(PagedResponse):
 
 class SessionToolUsageResponse(PagedResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     root_session_id: str
     tool_item_count: int = 0
     tool_output_chars: int = 0
@@ -566,6 +576,7 @@ class CanonicalEventRecord(ContractModel):
 
 class SessionEventsResponse(PagedResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     root_session_id: str | None = None
     events: list[CanonicalEventRecord] = Field(default_factory=list)
     next_cursor: str | None = None
@@ -575,6 +586,7 @@ class SessionEventsResponse(PagedResponse):
 
 class CliSessionEventsResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     id: str | None = None
     matches: list[dict[str, Any]] = Field(default_factory=list)
     next_cursor: str | None = None
@@ -582,6 +594,7 @@ class CliSessionEventsResponse(ContractModel):
 
 class SessionItemsResponse(PagedResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     root_session_id: str | None = None
     items: list[CanonicalItemRecord] = Field(default_factory=list)
     next_cursor: str | None = None
@@ -628,6 +641,7 @@ class CliCanonicalItemRecord(ContractModel):
 
 class CliSessionItemsResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     id: str | None = None
     items: list[CliCanonicalItemRecord] = Field(default_factory=list)
     next_cursor: str | None = None
@@ -654,6 +668,7 @@ class CliSessionOverviewResponse(ContractModel):
 
 class CliSessionStatsResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     id: str
     scope: str | None = None
     vendor: str | None = None
@@ -670,6 +685,7 @@ class CliSessionStatsResponse(ContractModel):
 
 class CliSessionUsageResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
+    execution_composition: ExecutionComposition | None = None
     id: str
     scope: str | None = None
     runtime: dict[str, Any] | None = None

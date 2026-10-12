@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from coding_trajectory.analysis.tool_arguments import sanitize_argument_preview
+from coding_trajectory.analysis.tool_arguments import (
+    sanitize_argument_preview,
+    tool_argument_detail,
+)
 from coding_trajectory.ingestion.execution_models import (
     ContextReferences,
     DirectItemReference,
@@ -25,6 +29,11 @@ from coding_trajectory.ingestion.execution_sources import (
     source_reference,
 )
 from coding_trajectory.ingestion.models import Item, Session
+from coding_trajectory.ingestion.source_calls import (
+    SourceCall,
+    argument_strings,
+    source_calls,
+)
 from coding_trajectory.query import DocumentError
 
 
@@ -86,6 +95,7 @@ def _native_calls(
                 else getattr(item, "input", None)
             )
             native_id = provenance.get("native_command_id") if native else None
+            recorded_duration = None
             if native_id:
                 for row in evidence.records:
                     payload = row.get("payload", {})
@@ -94,6 +104,17 @@ def _native_calls(
                         arguments = {
                             key: raw[key] for key in ("command", "cwd") if key in raw
                         }
+                        duration = raw.get("duration")
+                        if isinstance(duration, dict):
+                            seconds, nanos = duration.get("secs"), duration.get("nanos")
+                            if all(
+                                isinstance(value, (int, float))
+                                and not isinstance(value, bool)
+                                for value in (seconds, nanos)
+                            ):
+                                value = seconds * 1000 + nanos / 1_000_000
+                                if math.isfinite(value) and value >= 0:
+                                    recorded_duration = value
                         break
             call = ExternalCall(
                 observation="observed" if native else "source_only",
@@ -105,16 +126,24 @@ def _native_calls(
                     "source_offset": provenance.get("source_offset"),
                 },
                 ownership_basis=str(
-                    provenance.get("relationship_basis") or "static_parent_match"
+                    provenance.get("relationship_basis") or "provider_parent_id"
                 ),
+                source_tool_name=provenance.get("source_tool_name"),
                 arguments_ref={"value": arguments},
+                arguments_preview=(
+                    detail.description
+                    if (detail := tool_argument_detail(item))
+                    else None
+                ),
                 arguments_coverage=("recorded" if native else "source_reconstructed")
                 if arguments is not None
                 else "not_recorded",
                 outcome=outcome if outcome in {"succeeded", "failed"} else None,
                 started_at=item.started_at if native else None,
                 completed_at=item.completed_at if native else None,
-                duration_ms=max(
+                duration_ms=recorded_duration
+                if recorded_duration is not None
+                else max(
                     (item.completed_at - item.started_at).total_seconds() * 1000, 0
                 )
                 if native and item.completed_at
@@ -306,6 +335,10 @@ def _output_chunks(
                     "stdout",
                     "stderr",
                     "exit_code",
+                    "results",
+                    "result",
+                    "error",
+                    "content_items",
                 )
                 if key in item
             }
@@ -322,7 +355,13 @@ def _output_chunks(
         if not isinstance(message, dict):
             continue
         if message.get("role") == "toolResult" and message.get("toolCallId") == origin:
-            chunks.append({"record_index": index, "record_sha256": row.get("_ct_record_sha256"), "value": message.get("content")})
+            chunks.append(
+                {
+                    "record_index": index,
+                    "record_sha256": row.get("_ct_record_sha256"),
+                    "value": message.get("content"),
+                }
+            )
         content = message.get("content", [])
         if isinstance(content, list):
             for block in content:
@@ -332,7 +371,11 @@ def _output_chunks(
                     and block.get("tool_use_id") == origin
                 ):
                     chunks.append(
-                        {"record_index": index, "record_sha256": row.get("_ct_record_sha256"), "value": block.get("content")}
+                        {
+                            "record_index": index,
+                            "record_sha256": row.get("_ct_record_sha256"),
+                            "value": block.get("content"),
+                        }
                     )
     if (
         not call_id
@@ -353,7 +396,9 @@ def _output_reference(
         "source_log": str(evidence.source_log),
         "source_log_sha256": evidence.source_log_sha256,
         "record_indices": [c["record_index"] for c in chunks if "record_index" in c],
-        "record_digests": [c.get("record_sha256") for c in chunks if "record_index" in c],
+        "record_digests": [
+            c.get("record_sha256") for c in chunks if "record_index" in c
+        ],
         "item_ids": [c["item_id"] for c in chunks if "item_id" in c],
         "provider_call_id": getattr(evidence.item, "tool_call_id", None),
     }
@@ -449,6 +494,35 @@ def build_tool_script(
     evidence: ToolSourceEvidence, source: SourceReference
 ) -> ToolScriptExecution:
     observed, source_only = _native_calls(evidence)
+    candidates, source_coverage = (
+        source_calls(evidence.source_text)
+        if evidence.language == "javascript"
+        else ([], "not_supported")
+    )
+    matched_offsets = {
+        (call.evidence_ref or {}).get("source_offset") for call in observed
+    }
+    for candidate in candidates:
+        if candidate.source_byte_start in matched_offsets:
+            continue
+        source_only.append(
+            ExternalCall(
+                observation="source_only",
+                tool_name=candidate.tool_name,
+                evidence_ref={
+                    "source_byte_start": candidate.source_byte_start,
+                    "source_byte_end": candidate.source_byte_end,
+                },
+                ownership_basis="source_call_site",
+                arguments_ref={"value": candidate.arguments}
+                if candidate.arguments_static
+                else None,
+                arguments_preview=sanitize_argument_preview(candidate.expression),
+                arguments_coverage="source_reconstructed"
+                if candidate.arguments_static
+                else "not_recorded",
+            )
+        )
     native_observed = observed
     inventories, coverage = _inventories(evidence)
     # Prefer one observed inventory surface instead of counting matching native
@@ -471,6 +545,18 @@ def build_tool_script(
                     native.result_ref,
                     native.result_coverage,
                 )
+    source_only = [
+        call
+        for call in source_only
+        if not any(
+            candidate.tool_name == call.tool_name
+            and candidate.arguments_coverage == "recorded"
+            and (candidate.arguments_ref or {}).get("value") is not None
+            and (candidate.arguments_ref or {}).get("value")
+            == (call.arguments_ref or {}).get("value")
+            for candidate in observed
+        )
+    ]
     chunks = _output_chunks(evidence)
     continuation_ids, runtime_id = _continuations(evidence, chunks)
     controls = [
@@ -481,9 +567,7 @@ def build_tool_script(
     ]
     if continuation_ids:
         chunks = _output_chunks(evidence, continuation_ids=continuation_ids)
-    output_ref = (
-        _output_reference(evidence, chunks) if chunks else None
-    )
+    output_ref = _output_reference(evidence, chunks) if chunks else None
     # Only a transport banner establishes a runtime checkpoint. Emitted text
     # mentioning a running cell is not evidence that this invocation yielded.
     orchestration = (
@@ -529,10 +613,13 @@ def build_tool_script(
     for call in [*observed, *source_only]:
         value = (call.arguments_ref or {}).get("value")
         if value is not None:
-            call.arguments_preview = sanitize_argument_preview(
-                value
-                if isinstance(value, str)
-                else json.dumps(value, ensure_ascii=False)
+            call.arguments_preview = (
+                call.arguments_preview
+                or sanitize_argument_preview(
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False)
+                )
             )
             call.arguments_ref = (
                 {
@@ -573,7 +660,10 @@ def build_tool_script(
         context_refs=_context(evidence),
         observed_external_calls=observed,
         source_only_calls=source_only,
-        inventory_coverage=coverage,
+        inventory_coverage="partial"
+        if coverage == "unknown" and observed
+        else coverage,
+        source_analysis_coverage=source_coverage,
         result=ExecutionResult(
             invocation_status=evidence.item.status,
             lifecycle=lifecycle,
@@ -611,6 +701,128 @@ def build_tool_script(
             ).hexdigest(),
         },
     )
+
+
+def _bind_external_calls(session: Session, records: list[dict[str, Any]]) -> None:
+    """Observe native calls independently; infer ownership only from evidence.
+
+    Literal argument overlap inside one recorded execution interval is an
+    inference, never a provider parent ID or a claim about branch execution.
+    Ambiguous parents remain direct items. Repeated runtime calls remain
+    separate observations even when they match the same loop call site.
+    """
+    raw_by_id = {}
+    raw_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in records:
+        payload = row.get("payload", {})
+        raw = payload.get("item", {}) if isinstance(payload, dict) else {}
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str):
+            raw_by_id[raw["id"]] = payload
+            raw_rows_by_id.setdefault(raw["id"], []).append(row)
+    for turn in session.turns:
+        roots: list[tuple[Item, list[SourceCall]]] = []
+        for item in turn.items:
+            if item.kind != "tool_call":
+                continue
+            try:
+                text, _, language = _extract_source(item, None, session.vendor)
+            except DocumentError:
+                continue
+            if language == "javascript":
+                roots.append((item, source_calls(text)[0]))
+        for item in turn.items:
+            activity, provenance = _activity(item)
+            if activity.get("fidelity") != "observed_native":
+                continue
+            native_id = provenance.get("native_command_id") or provenance.get(
+                "native_item_id"
+            )
+            payload = raw_by_id.get(native_id, {})
+            raw = payload.get("item", {})
+            explicit = next(
+                (
+                    payload.get(key) or raw.get(key)
+                    for key in (
+                        "parent_tool_call_id",
+                        "originating_call_id",
+                        "parent_call_id",
+                    )
+                    if payload.get(key) or raw.get(key)
+                ),
+                None,
+            )
+            arguments = (
+                item.command
+                if item.kind == "command_execution"
+                else getattr(item, "input", None)
+            )
+            if item.kind == "command_execution":
+                try:
+                    literal = _native_command_source(
+                        item, raw_rows_by_id.get(native_id, []), None
+                    )
+                except DocumentError:
+                    literal = None
+                if literal:
+                    arguments = {
+                        **(arguments if isinstance(arguments, dict) else {}),
+                        "cmd": literal[0],
+                    }
+            subjects = argument_strings(arguments)
+            matches = []
+            for root, candidates in roots:
+                origin = getattr(root, "tool_call_id", None)
+                if explicit and explicit == origin:
+                    matches.append((root, None, "provider_parent_id"))
+                    continue
+                if (
+                    explicit
+                    or root.completed_at is None
+                    or not (root.started_at <= item.started_at <= root.completed_at)
+                ):
+                    continue
+                compatible = []
+                for candidate in candidates:
+                    if not candidate.arguments_static or not subjects.intersection(
+                        argument_strings(candidate.arguments)
+                    ):
+                        continue
+                    if isinstance(arguments, dict) and isinstance(
+                        candidate.arguments, dict
+                    ):
+                        common = arguments.keys() & candidate.arguments.keys()
+                        if any(
+                            isinstance(arguments[key], (str, int, bool))
+                            and arguments[key] != candidate.arguments[key]
+                            for key in common
+                        ):
+                            continue
+                    compatible.append(candidate)
+                if compatible:
+                    # A parent can be inferred even if repeated call sites
+                    # cannot be disambiguated. Do not invent a source offset.
+                    matches.append(
+                        (
+                            root,
+                            compatible[0] if len(compatible) == 1 else None,
+                            "inferred_arguments_and_interval",
+                        )
+                    )
+            if len(matches) != 1:
+                continue
+            root, candidate, basis = matches[0]
+            provenance.update(
+                parent_tool_call_id=root.tool_call_id,
+                relationship_basis=basis,
+                content_custody="script_envelope",
+            )
+            if candidate:
+                provenance.update(
+                    source_offset=candidate.source_byte_start,
+                    source_tool_name=candidate.tool_name,
+                )
+            activity["provenance"] = provenance
+            item.vendor_data["activity"] = activity
 
 
 def build_session_execution_layer(
@@ -676,6 +888,7 @@ def build_session_execution_layer(
                 record_groups.setdefault(identity, []).append(row)
     for identity, runtime_id in waits.items():
         record_groups.setdefault(runtime_id, []).extend(record_groups.get(identity, []))
+    _bind_external_calls(session, records)
     child_identities: dict[str, set[str]] = {}
     for turn in session.turns:
         for item in turn.items:
@@ -687,11 +900,13 @@ def build_session_execution_layer(
                     for i in (
                         getattr(item, "tool_call_id", None),
                         provenance.get("native_command_id"),
+                        provenance.get("native_item_id"),
                     )
                     if i
                 )
     snapshot_digest = hashlib.sha256(snapshot).hexdigest()
     scripts: dict[str, ToolScriptExecution] = {}
+    direct_sources: dict[str, SourceReference] = {}
     owned: set[str] = set()
     for turn in session.turns:
         for item in turn.items:
@@ -759,6 +974,11 @@ def build_session_execution_layer(
                 records=root_records,
             )
             reference = source_reference(evidence)
+            # Shell operations are direct invocations with source attachments;
+            # a source-text argument does not by itself prove orchestration.
+            if language == "shell" or field in {"cmd", "command", "shell", "source"}:
+                direct_sources[str(item.item_id)] = reference
+                continue
             script = build_tool_script(evidence, reference)
             scripts[str(item.item_id)] = script
             owned.update(script.item_ids)
@@ -769,6 +989,14 @@ def build_session_execution_layer(
             if identity in scripts:
                 units.append(scripts[identity])
             elif identity not in owned:
-                units.append(DirectItemReference(unit_id=identity, item_id=identity))
+                reference = direct_sources.get(identity)
+                units.append(
+                    DirectItemReference(
+                        unit_id=identity,
+                        item_id=identity,
+                        source=reference,
+                        open_source_link=reference.link if reference else None,
+                    )
+                )
         turn.execution_units = units
     return session

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from coding_trajectory.analysis.concepts import TOOL_CONCEPT_MAP, ItemKind
+from coding_trajectory.analysis.concepts import ItemKind
 from coding_trajectory.analysis.projection_utils import truncate_with_ref
 from coding_trajectory.ingestion.common import prune_nones
 from coding_trajectory.ingestion.indexes import (
@@ -88,11 +88,6 @@ def _classify_item(item: Item) -> ItemKind:
     if isinstance(item, CommandExecutionItem):
         return ItemKind.COMMAND_EXECUTION
 
-    tool_name = getattr(item, "tool_name", None)
-    if tool_name:
-        concept = TOOL_CONCEPT_MAP.get(tool_name)
-        if concept is not None:
-            return concept
     return ItemKind.TOOL_CALL
 
 

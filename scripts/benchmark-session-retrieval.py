@@ -786,16 +786,14 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             and build_overview_flows([semantic_read_item])[0].get("target")
             == "sed -n '1,20p' docs/example.md"
         ),
-        "control_only_waits_stay_detail_only": (
+        "unowned_controls_remain_direct": (
             len(internal_wait_activity) == 1
             and internal_wait_activity[0].get("type") == "tool_call"
             and internal_wait_activity[0].get("activity_kind")
             == "background_terminal_wait"
-            and public_wait_activity == []
-            and all(
-                entry.get("kind") != "background_terminal_wait"
-                for entry in summary["recent_activity"]
-            )
+            and len(public_wait_activity) == 1
+            and public_wait_activity[0].get("item_ids")
+            == [str(background_wait_item.item_id)]
         ),
         "private_reasoning_excluded": "private-sentinel" not in serialized,
         "self_retrieval_excluded": "self-sentinel" not in serialized,
