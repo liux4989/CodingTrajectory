@@ -1,39 +1,27 @@
 # CLI guide
 
-Use `ct` to find a session, read its context, and inspect retained evidence.
+Use `ct` to find a session, read its context, and inspect local canonical evidence.
 Run examples from the repository root after `uv sync --all-packages --locked`.
 Replace uppercase IDs and shell variables with values for your selected source.
 
-## Select a source
-
-Put `--source` before the command path:
+## Read local sources
 
 ```sh
-uv run ct --source local project list
-uv run ct --source auto project list
+uv run ct project list
 ```
 
-- `local` reads host-local sources without remote fallback.
-- `auto` (the default) reads local sources only.
-- `shared` and `remote` are recognized but fail explicitly with
-  `method_unavailable`; they never silently read local evidence.
-
-There is no remote fallback, connection profile, or credential configuration.
-Queries never publish data. The `collector`, `connection`, and `api serve`
-commands are no longer supported.
-
-Historical and inventory queries discover fresh topology per request. Only
-selected runs and their canonical dependencies are ingested, retained, and
-redacted in memory, with reuse limited to one request or explicit API batch.
-There is no cross-request topology or graph cache; Core no longer uses
-`~/.coding-trajectory/local.sqlite`. Repeated detail reads of large runs repeat
-ingestion. Native metrics and public vNext cursors stay unchanged.
+Queries read host-local logs directly. `--source`, connection profiles,
+collectors, remote fallback, and `api serve` are unsupported. Queries never
+publish data. Topology is discovered fresh per request; only selected runs and
+their canonical dependencies are ingested. Reuse is limited to a request or
+explicit batch, with no persisted topology/graph cache. Large repeated reads
+repeat ingestion while preserving complete normalized content and native metrics.
 
 Commands accepting `--agent-vendor` support the Core `Vendor` values:
 `codex_cli`, `claude_code`, `pi`, and `amp`. For example:
 
 ```sh
-uv run ct --source local project sessions --agent-vendor amp --limit 20
+uv run ct project sessions --agent-vendor amp --limit 20
 ```
 
 ## Read a session
@@ -41,48 +29,47 @@ uv run ct --source local project sessions --agent-vendor amp --limit 20
 1. List projects:
 
    ```sh
-   uv run ct --source local project list --output json
+   uv run ct project list --output json
    ```
 
 2. List sessions for an ID returned by that source:
 
    ```sh
-   uv run ct --source local project sessions --project-id PROJECT_ID --limit 20
+   uv run ct project sessions --project-id PROJECT_ID --limit 20
    ```
 
 3. Read the selected session brief:
 
    ```sh
-   uv run ct --source local session summary SESSION_ID
+   uv run ct session summary SESSION_ID
    ```
 
 4. Read its recent chronology:
 
    ```sh
-   uv run ct --source local session overview SESSION_ID --turns 5
+   uv run ct session overview SESSION_ID --turns 5
    ```
 
 5. Resolve a relevant item:
 
    ```sh
-   uv run ct --source local session items SESSION_ID ITEM_ID --output json
+   uv run ct session items SESSION_ID ITEM_ID --output json
    ```
 
 6. Resolve an event when its envelope is needed:
 
    ```sh
-   uv run ct --source local session events SESSION_ID --event-id EVENT_ID --output json
+   uv run ct session events SESSION_ID --event-id EVENT_ID --output json
    ```
 
 Project names are convenience selectors, not identity. Use an ID when names are
 ambiguous. Local project IDs identify host locations; moving a directory changes
 its ID.
 
-Inventory, overview, search, and detail responses support pagination. Pass
-`next_cursor` as `--cursor` and keep the method, scope, selectors, and filters
-unchanged; page size may change. Cursors are query-bound continuations over live local evidence, not
-snapshot pins. Evidence can change between pages; no immutable view selection
-is supported.
+Inventory, overview, search, and detail responses return all matching resources
+by default. Optional `--limit N` selects results; `--turns N` selects the latest
+overview turns. Positive limits have no hard maximum. `--cursor` is removed.
+Ordering is deterministic per call, and logs can change between calls.
 
 `project sessions` returns discovery cards: session identity, project, title and
 preview, vendors, member session IDs, and modification time. Read session usage
@@ -96,9 +83,9 @@ warnings.
 | `session tree SESSION_ID` | Conversation forks and branch structure |
 | `session summary SESSION_ID` | Objective, outcome, verification, and unresolved work |
 | `session overview SESSION_ID` | Chronological turns and activity references |
-| `session search SESSION_ID QUERY --mode text` | Search retained evidence locally |
-| `session search SESSION_ID PATH --mode path` | Find retained path references locally |
-| `session items SESSION_ID --turn TURN_ID` | Retained item details within one turn |
+| `session search SESSION_ID QUERY --mode text` | Search complete normalized evidence locally |
+| `session search SESSION_ID PATH --mode path` | Find canonical path references locally |
+| `session items SESSION_ID --turn TURN_ID` | Canonical item details within one turn |
 | `session events SESSION_ID --type usage` | Normalized event envelopes |
 | `session stats SESSION_ID` | Time, status, counts (including compactions), and visible context |
 | `session usage SESSION_ID --turn TURN_ID` | Recorded token usage and reported or estimated cost |
@@ -182,8 +169,8 @@ Use `--details` to include estimated usage shares, provider input breakdowns,
 message counts, and the compaction timeline:
 
 ```sh
-uv run ct --source local session stats SESSION_ID --details
-uv run ct --source local session graph stats SESSION_ID --details
+uv run ct session stats SESSION_ID --details
+uv run ct session graph stats SESSION_ID --details
 ```
 
 `--details` changes the Markdown report only; JSON keeps the full existing data.
@@ -197,7 +184,7 @@ eviction accounting for newer rollouts that omit the legacy event.
 Existing session commands share `Turn → execution unit → item references`.
 Overview places scripts in surrounding turn context, with source-record links,
 observed external-call details, explicit ownership evidence, and inventory
-coverage. Activity truncation is reported. Items/events/search/tool usage include
+coverage. All matching activities and references are included. Items/events/search/tool usage include
 `script_id` and resolve returned children's parents without adding ledger rows.
 Direct tools remain direct items, with source references where available.
 
@@ -209,8 +196,9 @@ provider totals and original item attribution. Text and JSON retain the same
 execution/source references; terminal formatting preserves full link targets.
 See [the execution contract](tool-classification.md).
 
-Events contain normalized types, status, timestamps, and references, not raw
-payloads. Item detail returns retained evidence, not an unrestricted raw log.
+Events contain normalized types, status, timestamps, references, and normalized
+content. Item detail includes full available text, input, output and command
+fields. Neither command dumps arbitrary vendor log records.
 The removed `--include-content`, `--filter`, and `--drop-turns` flags are not supported.
 
 `living` means the current turn is running. `not_living` does not mean the task
@@ -229,23 +217,22 @@ Inspect the schema before constructing a request:
 
 ```sh
 uv run ct api schema session.items
-uv run ct --source local api call session.items \
+uv run ct api call session.items \
   --params '{"session_id":"SESSION_ID","limit":20}'
-uv run ct --source local api call session.model_usage \
+uv run ct api call session.model_usage \
   --params '{"session_id":"SESSION_ID"}'
-uv run ct --source local api call session.tool_usage \
+uv run ct api call session.tool_usage \
   --params '{"session_id":"SESSION_ID","limit":20}'
 ```
 
 Schemas require no discovery or credentials. Requests reject unknown fields.
 Graph API methods require `root_session_id`. Session methods use `session_id`.
 Model usage and tool usage have no dedicated CLI commands.
-The API protocol remains `ct.api.v1`. Response metadata describes local live
-retained evidence (`source: local`, `freshness: live`, `content_scope: retained`)
-and contains no prepared-view identity. Both living methods are stateless.
-`living.sessions` reads topology and file metadata. `living.events` requires a
-root or session scope and returns retained resource snapshots with digests.
-Consumers compare complete passes and keep their own last-seen state.
+The API protocol is `ct.api.v2`; constant transport metadata is removed.
+Both living methods are stateless. `living.sessions` reads topology and file
+metadata. `living.events` requires a root or session scope and returns complete
+inline normalized resources with digests. Consumers compare complete passes
+and keep their own last-seen state.
 Core no longer reads or updates `local.sqlite`, `living-events/`, or
 `living-sessions/`. Loop's `investigations.sqlite3` and `monitor.sqlite3` remain
 product/user data. See [operations](operations.md#read-local-evidence) for scope,

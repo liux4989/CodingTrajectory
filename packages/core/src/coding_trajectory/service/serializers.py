@@ -31,9 +31,6 @@ def attach_execution_layer(
     from coding_trajectory.ingestion.indexes import build_session_graph_index
 
     index = build_session_graph_index(graph)
-    if (payload.get("page") or {}).get("direction") == "older":
-        # Overview already places canonical units inside each returned turn.
-        return payload
     selected_ids: set[str] | None = None
     for key in ("items", "events", "tool_items", "matches"):
         if isinstance(payload.get(key), list):

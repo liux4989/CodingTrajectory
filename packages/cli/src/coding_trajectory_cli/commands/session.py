@@ -32,9 +32,9 @@ EVENT TYPES
   usage                    Provider request-usage observation
   vendor.raw               A vendor-specific raw event
 
-Events are minimal normalized envelopes: type, status, timestamps, and
-item/turn references. Raw payloads are never retained or returned; output
-evidence is referenced through the owning item.
+Events include normalized content, type, status, timestamps, usage, and
+item/turn references. Tool output evidence is also available through the
+owning item.
 """
 
 CONTEXT_CATEGORY_WIDTH = 48
@@ -55,8 +55,6 @@ def _session_turn_window_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {"session_id": args.session_id}
     if getattr(args, "limit", None) is not None:
         params["limit"] = args.limit
-    if getattr(args, "cursor", None):
-        params["cursor"] = args.cursor
     return params
 
 
@@ -79,7 +77,6 @@ def _session_search_params(args: argparse.Namespace) -> dict[str, Any]:
         "limit": args.limit,
         **({"turn_id": args.turn_id} if args.turn_id else {}),
         **({"kinds": args.kinds} if args.kinds else {}),
-        **({"cursor": args.cursor} if getattr(args, "cursor", None) else {}),
     }
 
 
@@ -94,7 +91,6 @@ def _session_request_usage_params(args: argparse.Namespace) -> dict[str, Any]:
     return {
         **_session_usage_params(args),
         "limit": args.limit,
-        **({"cursor": args.cursor} if args.cursor else {}),
     }
 
 
@@ -108,7 +104,6 @@ def _session_events_params(args: argparse.Namespace) -> dict[str, Any]:
         **({"status": args.status} if args.status else {}),
         **({"tool_name": args.tool_name} if args.tool_name else {}),
         "limit": args.limit,
-        **({"cursor": args.cursor} if args.cursor else {}),
     }
 
 
@@ -119,7 +114,6 @@ def _session_items_params(args: argparse.Namespace) -> dict[str, Any]:
         **({"turn_id": args.turn_id} if args.turn_id else {}),
         **({"types": args.item_types} if args.item_types else {}),
         "limit": args.limit,
-        **({"cursor": args.cursor} if args.cursor else {}),
     }
 
 
@@ -205,13 +199,6 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                     or "Request unavailable",
                 ]
             )
-            activity_coverage = (turn.get("content_coverage") or {}).get(
-                "activities", {}
-            )
-            if activity_coverage.get("truncated"):
-                lines.append(
-                    f"Activities: showing {activity_coverage['returned']} of {activity_coverage['total']}; earlier executions omitted from this overview."
-                )
             responses = {r["item_id"]: r for r in turn["assistant_responses"]}
             activities = {
                 a.get("script_id") or a["item_ids"][0]: a for a in turn["activities"]
@@ -241,15 +228,18 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                         lines.append(f"  {unit['open_source_link']}")
                     if unit["kind"] == "tool_script":
                         lines.extend(_render_script_composition(unit, indent="  "))
-    page = payload["page"]
-    lines.extend(
-        [
-            "",
-            f"Page: {page['returned']} of {page['total']} narrative turns · source order",
-        ]
-    )
-    if page["next_cursor"]:
-        lines.append(f"Older page: --cursor '{page['next_cursor']}'")
+    coverage = payload.get("coverage") or {}
+    if coverage.get("selection_trimmed"):
+        lines.extend(
+            [
+                "",
+                f"Selected {turn_count} of {payload['totals']['narrative_turns']} narrative turns · source order",
+            ]
+        )
+    if coverage.get("text_trimmed"):
+        lines.extend(
+            ["", "Text previews shortened; use item details for full content."]
+        )
     return "\n".join(lines).rstrip()
 
 
@@ -1532,13 +1522,9 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_search.add_argument(
         "--limit",
         type=positive_int,
-        default=20,
+        default=None,
         metavar="N",
-        help="Maximum matches to return (default: 20; API maximum: 100).",
-    )
-    session_search.add_argument(
-        "--cursor",
-        help="Continue a query-bound live search page; keep selectors and filters unchanged. Page size may change.",
+        help="Select at most N matches; all matches by default.",
     )
     add_output_flags(session_search)
     session_search.set_defaults(
@@ -1612,12 +1598,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Limit request usage to one turn.",
     )
     session_request_usage.add_argument(
-        "--limit", type=int, default=200, help="Maximum request rows per page (1–1000)."
-    )
-    session_request_usage.add_argument(
-        "--cursor",
+        "--limit",
+        type=positive_int,
         default=None,
-        help="Continue a query-bound live page; keep selectors unchanged. Page size may change.",
+        help="Select at most N request rows; all rows by default.",
     )
     add_json_output_flag(session_request_usage)
     session_request_usage.set_defaults(
@@ -1629,7 +1613,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_events = session_sub.add_parser(
         "events",
         prog="ct session events",
-        help="Lazily load retained local events within a session or turn.",
+        help="Read normalized local events within a session or turn.",
         epilog=EVENT_SCAN_EPILOG,
         formatter_class=GhFormatter,
     )
@@ -1682,12 +1666,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_events.add_argument(
         "--limit",
         type=positive_int,
-        default=100,
-        help="Maximum canonical events to return (API maximum: 100).",
-    )
-    session_events.add_argument(
-        "--cursor",
-        help="Continue a query-bound live page in source order; keep selectors and filters unchanged. Page size may change.",
+        default=None,
+        help="Select at most N canonical events; all events by default.",
     )
     session_events.set_defaults(
         _method="session.events",
@@ -1721,12 +1701,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_items.add_argument(
         "--limit",
         type=positive_int,
-        default=100,
-        help="Maximum canonical items to return (API maximum: 100).",
-    )
-    session_items.add_argument(
-        "--cursor",
-        help="Continue a query-bound live page in source order; keep selectors and filters unchanged. Page size may change.",
+        default=None,
+        help="Select at most N canonical items; all items by default.",
     )
     add_json_output_flag(session_items)
     session_items.set_defaults(

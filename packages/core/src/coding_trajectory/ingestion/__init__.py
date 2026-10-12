@@ -42,90 +42,44 @@ from coding_trajectory.ingestion.models import (
 )
 from coding_trajectory.ingestion.retention import CanonicalRetention
 
-# ``incremental`` depends on discovery, and discovery in turn imports the
-# canonical query store.  Loading it eagerly here makes a direct import of
-# ``query`` (and therefore the CLI) circular.  Preserve the package-level
-# compatibility surface while paying for incremental orchestration only when a
-# caller actually asks for one of those names.
-_INCREMENTAL_EXPORTS = {
-    "GraphBuildIssue",
-    "IncrementalGraphBuild",
-    "MessagesForPath",
-    "SourceGraphRelationship",
-    "SourceGraphComponent",
-    "SourceGraphComponentPlan",
-    "SourceMessage",
-    "SourceSnapshot",
-    "SourceStatus",
-    "rebuild_affected_session_graphs",
-    "rebuild_affected_session_graphs_from_files",
-    "plan_session_graph_components_from_files",
-}
-
-
-def __getattr__(name: str) -> object:
-    if name not in _INCREMENTAL_EXPORTS:
-        raise AttributeError(name)
-    from coding_trajectory.ingestion import incremental
-
-    value = getattr(incremental, name)
-    globals()[name] = value
-    return value
-
-
 __all__ = [
-    # models
     "AgentMessageItem",
+    "AmpAdapter",
     "AmpExtensions",
-    "ClaudeCodeExtensions",
+    "BaseAdapter",
     "CanonicalRetention",
+    "ClaudeCodeAdapter",
+    "ClaudeCodeExtensions",
+    "CodexAdapter",
     "CodexExtensions",
     "CommandExecutionItem",
     "ContextCategoryObservation",
     "ContextSourceObservation",
     "ContextUsageObservation",
+    "Event",
+    "EventType",
     "FileChangeItem",
-    "GraphBuildIssue",
-    "IncrementalGraphBuild",
     "Item",
     "ItemBase",
+    "PiAdapter",
     "PiExtensions",
     "PlanItem",
     "ReasoningItem",
-    "MessagesForPath",
-    "Event",
-    "EventType",
-    "Session",
-    "SessionStatus",
-    "SourceGraphRelationship",
-    "SourceGraphComponent",
-    "SourceGraphComponentPlan",
-    "SourceMessage",
-    "SourceSnapshot",
-    "SourceStatus",
     "RuntimeObservation",
-    "SessionGraph",
+    "Session",
     "SessionEdge",
+    "SessionGraph",
     "SessionGraphSummary",
+    "SessionStatus",
     "ToolCallItem",
+    "ToolStatus",
     "Turn",
     "TurnStatus",
-    "ToolStatus",
     "Vendor",
     "VendorExtensions",
-    # graph
     "assemble_project_session_graphs",
     "build_edges",
     "build_session_graph",
     "build_session_graph_summary",
     "decorate_sessions",
-    "rebuild_affected_session_graphs",
-    "rebuild_affected_session_graphs_from_files",
-    "plan_session_graph_components_from_files",
-    # adapters
-    "BaseAdapter",
-    "AmpAdapter",
-    "ClaudeCodeAdapter",
-    "CodexAdapter",
-    "PiAdapter",
 ]

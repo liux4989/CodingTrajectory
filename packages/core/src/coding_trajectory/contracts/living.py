@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal, Self
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 
@@ -31,18 +31,15 @@ class LivingScope(RequestModel):
 
 class LivingEventsRequest(RequestModel):
     scope: LivingScope
-    mode: Literal["view", "details"] = "view"
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
-    limit: int = Field(default=50, ge=1, le=200, strict=True)
+    limit: int | None = Field(default=None, ge=1, strict=True)
 
 
 class LivingSessionsRequest(RequestModel):
     root_session_id: str | None = None
     session_id: str | None = None
     project_name: str | None = Field(default=None, min_length=1)
-    horizon_days: int = Field(default=3, ge=1, le=30, strict=True)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
-    limit: int = Field(default=50, ge=1, le=200, strict=True)
+    horizon_days: int = Field(default=3, ge=1, strict=True)
+    limit: int | None = Field(default=None, ge=1, strict=True)
 
     @field_validator("root_session_id", "session_id")
     @classmethod
@@ -75,32 +72,10 @@ class LivingResourcePath(ContractModel):
     target_session_id: str | None = None
 
 
-class LivingContentReferenceTarget(ContractModel):
-    session_id: str
-    turn_id: str
-    item_id: str
-    event_ids: list[str] = Field(default_factory=list)
-    field_path: str | None = None
-
-
-class LivingContentReference(ContractModel):
-    model_config = ConfigDict(extra="allow", serialize_by_alias=True)
-    type: Literal["content_ref"] = Field(alias="$type")
-    size_chars: int = Field(ge=0)
-    ref: LivingContentReferenceTarget
-
-
-class LivingInlineContent(ContractModel):
-    state: Literal["inline"]
-    value: Any
-    size_chars: int = Field(ge=0)
-    ref: None = None
-
-
 class LivingUserRequest(ContractModel):
     type: Literal["message", "command"]
     source: str
-    content: LivingInlineContent
+    content: str
 
 
 class LivingSessionResource(ContractModel):
@@ -129,7 +104,7 @@ class LivingTurnResource(ContractModel):
     ended_at: datetime | None = None
     preceding_context_checkpoint_id: str | None = None
     user_request: LivingUserRequest | None = None
-    assistant_responses: list[LivingInlineContent] = Field(default_factory=list)
+    assistant_responses: list[str] = Field(default_factory=list)
     activity: list[dict[str, Any]] = Field(default_factory=list)
     item_count: int = Field(ge=0)
 
@@ -142,7 +117,7 @@ class LivingItemResource(ContractModel):
     type: str
     status: str | None = None
     operations: list[str] | None = None
-    shape: dict[str, LivingContentReference | Any] | None = None
+    shape: dict[str, Any] | None = None
     event_ids: list[str] = Field(default_factory=list)
 
 
@@ -201,12 +176,10 @@ class LivingProtocolIssue(ContractModel):
 
 
 class LivingEventsResponse(ContractModel):
-    schema_version: Literal["ct.living_events.v2"]
-    mode: Literal["view", "details"]
+    schema_version: Literal["ct.living_events.v3"]
     resources: list[LivingEventResource] = Field(default_factory=list)
     total: int = Field(ge=0)
     returned: int = Field(ge=0)
-    next_cursor: str | None = None
     issues: list[LivingProtocolIssue] = Field(default_factory=list)
 
 
@@ -227,9 +200,8 @@ class LivingSessionInventoryResource(LivingSessionMetadata):
 
 
 class LivingSessionsResponse(ContractModel):
-    schema_version: Literal["ct.living_sessions.v3"]
+    schema_version: Literal["ct.living_sessions.v4"]
     items: list[LivingSessionInventoryResource] = Field(default_factory=list)
     total: int = Field(ge=0)
     returned: int = Field(ge=0)
-    next_cursor: str | None = None
     issues: list[LivingProtocolIssue] = Field(default_factory=list)

@@ -9,10 +9,10 @@ from typing import Any
 
 from coding_trajectory.contracts.living import LivingSessionMetadata
 from coding_trajectory.ingestion.common import LIVING_ACTIVITY_SECONDS, canonical_json
-from coding_trajectory.service.pagination import paginate
+from coding_trajectory.service.selection import select_rows
 from coding_trajectory.service.store import IndexCache, _filter_runs, _refresh_topology
 
-SCHEMA_VERSION = "ct.living_sessions.v3"
+SCHEMA_VERSION = "ct.living_sessions.v4"
 
 
 def serve_living_sessions(
@@ -89,19 +89,16 @@ def serve_living_sessions(
                     ).hexdigest(),
                 }
             )
-    page, cursor = paginate(
+    selected = select_rows(
         rows,
-        method="living.sessions",
-        params=params,
-        scope={"global_scope": global_scope, "current_dir": str(current_dir.resolve())},
+        limit=params.get("limit"),
         key=lambda row: (row["root_session_id"], row["session_id"]),
     )
     return {
         "schema_version": SCHEMA_VERSION,
-        "items": page,
+        "items": selected,
         "total": len(rows),
-        "returned": len(page),
-        "next_cursor": cursor,
+        "returned": len(selected),
         "issues": issues,
     }
 

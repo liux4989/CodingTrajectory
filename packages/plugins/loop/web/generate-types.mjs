@@ -112,7 +112,7 @@ strategies = importlib.import_module("loop_plugin.monitor.strategies")
 model = getattr(models, "${model}", None) or getattr(monitor, "${model}", None) or getattr(strategies, "${model}")
 print(json.dumps(model.model_json_schema()))`,
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", cwd: new URL("../../../../", import.meta.url) },
     ),
   );
 }

@@ -94,3 +94,20 @@ These additive assertions derive from committed timestamps, not command output. 
 ## Recorded cost and net cache savings
 
 The committed usage counts at `source/session.jsonl:5,7,9,11,13` and the pinned pricing artifact produce `total_cost = 0.01081964` USD (reported). Repricing the same input without cache reads yields `0.0273086` USD, with output and separately counted reasoning unchanged. There are no cache writes in this case. Net savings is `0.0273086 - 0.01081964 = 0.01648896` USD. The summary includes 5 recorded usage entries; repeated Claude stream records remain repeated recorded evidence. Existing expected metrics are unchanged.
+
+
+## Complete local overview contract
+
+The complete-local refactor removes `content_coverage.activities` counters and
+collection caps. Committed source lines 5–12 still prove the same four successful
+`bash` call/result pairs, each already asserted positionally in `activities[0]`
+through `activities[3]`. No tool, usage, cost, runtime or throughput expectation
+changes.
+
+The two obsolete counter assertions are replaced by display-completeness checks:
+`coverage.selection_trimmed` is false because this fixture has one source turn
+(lines 4–13) and the overview request has no explicit selection limit.
+`turns[0].text_trimmed` is false because the committed sanitized request, response,
+reasoning and tool content (lines 4–13) are individually shorter than the retained
+280-character display preview limit. These expectations follow the committed
+fixture and approved contract, rather than current metric command output.

@@ -10,13 +10,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from pydantic import ValidationError
-
 from coding_trajectory import debug
 from coding_trajectory.contracts import service_contract
 from coding_trajectory.ingestion.models import SessionGraph
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
-from coding_trajectory.service.pagination import LocalQueryError, paginate
+from coding_trajectory.service.selection import select_rows
 from coding_trajectory.service.serializers import (
     _parse_user_id,
     _public_output_for_session_graph,
@@ -52,12 +50,7 @@ def dispatch(
     cache: IndexCache,
 ) -> Any:
     contract = service_contract(method)
-    try:
-        params = contract.validate_request(params)
-    except ValidationError as exc:
-        if any(error["loc"] == ("cursor",) for error in exc.errors()):
-            raise LocalQueryError("invalid_cursor") from exc
-        raise
+    params = contract.validate_request(params)
     if not isinstance(store, DocumentStore):
         raise TypeError("dispatch requires a canonical document store")
     # Direct callers (including metric validation) can supply transient graphs.
@@ -86,7 +79,11 @@ def dispatch(
     except KeyError as exc:
         raise KeyError(f"no service handler registered for {method}") from exc
     result = handler(params, context)
-    if method.startswith(("session.", "graph.")) and not method.endswith(".tree"):
+    if method.startswith(("session.", "graph.")) and method not in {
+        "session.tree",
+        "session.overview",
+        "graph.overview",
+    }:
         from coding_trajectory.service.serializers import attach_execution_layer
 
         identity = params.get("session_id") or params.get("root_session_id")
@@ -163,7 +160,7 @@ def _handle_project_sessions(
         current_dir=context.current_dir,
         cache=context.cache,
     )
-    return _inventory_page(result["items"], "project.sessions", params, context)
+    return _inventory_selection(result["items"], params)
 
 
 def _handle_project_list(
@@ -176,32 +173,22 @@ def _handle_project_list(
         current_dir=context.current_dir,
         cache=context.cache,
     )
-    return _inventory_page(
-        list(result["items"].values()), "project.list", params, context
-    )
+    return _inventory_selection(list(result["items"].values()), params)
 
 
-def _inventory_page(
+def _inventory_selection(
     rows: list[dict[str, Any]],
-    method: str,
     params: dict[str, Any],
-    context: ServiceContext,
 ) -> dict[str, Any]:
-    page, cursor = paginate(
+    selected = select_rows(
         rows,
-        method=method,
-        params=params,
-        scope={
-            "global_scope": context.global_scope,
-            "current_dir": str(context.current_dir.resolve()),
-        },
+        limit=params.get("limit"),
         key=lambda row: (row["project_id"], row.get("root_session_id", "")),
     )
     return {
-        "items": page,
+        "items": selected,
         "total": len(rows),
-        "returned": len(page),
-        "next_cursor": cursor,
+        "returned": len(selected),
     }
 
 
@@ -255,30 +242,14 @@ def _handle_session_summary(params: dict[str, Any], session_graph: SessionGraph)
 def _handle_session_search(params: dict[str, Any], session_graph: SessionGraph) -> Any:
     from coding_trajectory.analysis.session_retrieval import search_session
 
-    result = search_session(
+    return search_session(
         session_graph,
         query=params["query"],
         mode=params["mode"],
         kinds=params["kinds"],
-        limit=2**31 - 1,
+        limit=params.get("limit"),
         turn_id=params.get("turn_id"),
     )
-
-    def key(row: dict[str, Any]) -> tuple:
-        refs = row["references"]
-        identity = refs.get("item_id") or (refs.get("event_ids") or [""])[0]
-        return (-float(row["score"]), row["timestamp"], str(identity), row["kind"])
-
-    page, cursor = paginate(
-        result["matches"], method="session.search", params=params, key=key
-    )
-    result.update(
-        matches=page,
-        next_cursor=cursor,
-        truncated=cursor is not None,
-    )
-    result["coverage"]["trimmed"] = len(page) < result["total"]
-    return result
 
 
 def _handle_session_tree(params: dict[str, Any], context: ServiceContext) -> Any:
@@ -334,10 +305,9 @@ def _handle_session_request_usage(
     )
     index = _usage_index(session_graph)
     rows = result["requests"]
-    page, cursor = paginate(
+    selected = select_rows(
         rows,
-        method="session.request_usage",
-        params=params,
+        limit=params.get("limit"),
         key=lambda row: (
             index.turns_by_id[_parse_user_id(row["turn_id"])].sequence,
             row["turn_id"],
@@ -346,9 +316,7 @@ def _handle_session_request_usage(
             row.get("usage_event_id") or "",
         ),
     )
-    result.update(
-        requests=page, total=len(rows), returned=len(page), next_cursor=cursor
-    )
+    result.update(requests=selected, total=len(rows), returned=len(selected))
     return result
 
 
@@ -385,13 +353,13 @@ def _handle_session_tool_usage(
         )
         return (turn.sequence, str(turn.turn_id), sequence, value["item_id"])
 
-    page, cursor = paginate(rows, method="session.tool_usage", params=params, key=key)
-    result["tool_items"] = [row["tool"] for row in page if row["tool"] is not None]
+    selected = select_rows(rows, limit=params.get("limit"), key=key)
+    result["tool_items"] = [row["tool"] for row in selected if row["tool"] is not None]
     if "item_real_token_costs" in result and costs is not None:
         result["item_real_token_costs"] = [
-            row["cost"] for row in page if row["cost"] is not None
+            row["cost"] for row in selected if row["cost"] is not None
         ]
-    result.update(total=len(rows), returned=len(page), next_cursor=cursor)
+    result.update(total=len(rows), returned=len(selected))
     return result
 
 
@@ -445,13 +413,7 @@ def _native_metric_costs(value: Any) -> Any:
 def _handle_session_events(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
-    """Return minimal normalized event envelopes with typed filters only.
-
-    Events never carry raw payloads. Output content is referenced through
-    ``item_id``/``output_evidence_id`` and lives once on the owning item's
-    processed output evidence. Usage observations resolve to native numeric
-    measurements retained on the session's request facts.
-    """
+    """Return normalized event content with typed filters and native usage."""
     from coding_trajectory.ingestion.indexes import build_session_graph_index
 
     session_graph = _resolve_session_graph(context.store, params["session_id"])
@@ -511,10 +473,9 @@ def _handle_session_events(
                     continue
             rows.append(record)
 
-    page, next_cursor = paginate(
+    selected = select_rows(
         rows,
-        method="session.events",
-        params=params,
+        limit=params.get("limit"),
         key=lambda row: (row["source_order_key"], row["event_id"]),
     )
     missing = (
@@ -532,16 +493,14 @@ def _handle_session_events(
         session_graph,
         {
             "root_session_id": str(session_graph.root_session_id),
-            "events": page,
+            "events": selected,
             "total": len(rows),
-            "returned": len(page),
+            "returned": len(selected),
             "unresolved_ids": missing,
-            "next_cursor": next_cursor,
             "coverage": {
-                "retention": "not_retained",
-                "measurement": "complete",
-                "searchable": None,
-                "trimmed": len(page) < len(rows),
+                "retention": _items_retention(rows),
+                "searchable": _items_searchable(rows),
+                "trimmed": len(selected) < len(rows),
             },
         },
     )
@@ -580,6 +539,26 @@ def _event_record(
         status = _event_lifecycle_status(event.type)
     evidence = _item_output_evidence(related_item) if related_item is not None else None
     observation = usage_by_event.get(event.event_id)
+    body_available = any(
+        field in payload
+        for field in (
+            "text",
+            "message",
+            "content",
+            "team_request_summary",
+            "input",
+            "output",
+            "command",
+        )
+    )
+    if payload.get("preview_truncated"):
+        retention, searchable = "preview", "preview"
+    elif body_available:
+        retention, searchable = "complete", "complete"
+    elif event.type.value == "vendor.raw":
+        retention, searchable = "not_applicable", "facts_only"
+    else:
+        retention, searchable = "not_retained", "facts_only"
     return {
         "event_id": str(event.event_id),
         "session_id": str(event.session_id),
@@ -598,16 +577,17 @@ def _event_record(
         ),
         "provenance": {
             "source": "retained_canonical",
-            "method": "retained_event_envelope.v1",
+            "method": "normalized_event_record.v2",
             "confidence": "high",
         },
         "coverage": {
-            "retention": "not_retained",
+            "retention": retention,
             "measurement": "complete" if observation is not None else "none",
-            "searchable": "none",
+            "searchable": searchable,
             "hierarchy": "complete" if related_turn else "partial",
             "lifecycle": "complete" if status else "partial",
         },
+        "content": payload,
         "output_evidence_id": (
             str(related_item.item_id) if evidence is not None else None
         ),
@@ -638,7 +618,7 @@ def _event_usage(observation: Any) -> dict[str, Any]:
 def _handle_session_items(
     params: dict[str, Any], context: ServiceContext
 ) -> dict[str, Any]:
-    """Return bounded metadata, measurements, and processed output evidence."""
+    """Return normalized content, metadata, measurements, and output evidence."""
 
     session_graph = _resolve_session_graph(context.store, params["session_id"])
     session_graph = _select_session_graph(session_graph, params["session_id"])
@@ -652,6 +632,13 @@ def _handle_session_items(
     from coding_trajectory.ingestion.indexes import build_session_graph_index
 
     index = build_session_graph_index(session_graph)
+    if (
+        selected_turn_id is not None
+        and _parse_user_id(selected_turn_id) not in index.turns_by_id
+    ):
+        raise ResourceNotFoundError(
+            f"turn not found in selected session: {selected_turn_id}"
+        )
     rows: list[dict[str, Any]] = []
     for session in session_graph.sessions:
         for turn in session.turns:
@@ -681,25 +668,22 @@ def _handle_session_items(
                 code="session.items.item_id_unresolved",
                 item_id=item_id,
             )
-    page, next_cursor = paginate(
+    selected = select_rows(
         rows,
-        method="session.items",
-        params=params,
+        limit=params.get("limit"),
         key=lambda row: (row["source_order_key"], row["item_id"]),
     )
-    trimmed = len(page) < len(rows)
+    trimmed = len(selected) < len(rows)
     return _public_output_for_session_graph(
         session_graph,
         {
             "root_session_id": str(session_graph.root_session_id),
-            "items": page,
+            "items": selected,
             "total": len(rows),
-            "returned": len(page),
+            "returned": len(selected),
             "unresolved_ids": missing,
-            "next_cursor": next_cursor,
             "coverage": {
                 "retention": _items_retention(rows),
-                "measurement": "complete",
                 "searchable": _items_searchable(rows),
                 "trimmed": trimmed,
             },
@@ -710,12 +694,14 @@ def _handle_session_items(
 def _items_retention(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "not_applicable"
-    values = {row["coverage"]["retention"] for row in rows}
-    if values == {"not_applicable"}:
-        return "not_applicable"
-    if "preview" in values or "complete" in values:
-        return "preview"
-    return "not_retained"
+    order = {"complete": 3, "preview": 2, "not_retained": 1, "not_applicable": 0}
+    values = [row["coverage"]["retention"] for row in rows]
+    applicable = [value for value in values if value != "not_applicable"]
+    return (
+        min(applicable, key=lambda value: order[value])
+        if applicable
+        else "not_applicable"
+    )
 
 
 def _items_searchable(rows: list[dict[str, Any]]) -> str:
@@ -783,7 +769,7 @@ def _canonical_item_record(
         ),
         "provenance": {
             "source": "retained_canonical",
-            "method": "retained_item_record.v1",
+            "method": "normalized_item_record.v2",
             "confidence": "high",
         },
         "coverage": _item_coverage(item, evidence),
@@ -927,6 +913,33 @@ def _item_coverage(item: Any, evidence: dict[str, Any] | None) -> dict[str, Any]
         and getattr(item, "status", None)
         else "partial"
     )
+    if not (getattr(item, "vendor_data", None) or {}).get("published_fact_projection"):
+        unavailable = bool(
+            measurements
+            and any(
+                chars and getattr(item, field, None) is None
+                for field, chars in (
+                    ("text", measurements.text_chars),
+                    (
+                        "command" if item.kind == "command_execution" else "input",
+                        measurements.input_chars,
+                    ),
+                    ("output", measurements.output_chars),
+                )
+            )
+        )
+        source_trimmed = bool(measurements and measurements.output_truncated)
+        return {
+            "retention": "preview" if unavailable else "complete",
+            "measurement": "complete" if measurements is not None else "none",
+            "searchable": "facts_only"
+            if unavailable
+            else "preview"
+            if source_trimmed
+            else "complete",
+            "hierarchy": "complete",
+            "lifecycle": lifecycle,
+        }
     if evidence is not None:
         return {
             "retention": evidence["retention"],
@@ -979,6 +992,10 @@ def _item_detail(item: Any, *, concept: Any, index: Any) -> dict[str, Any] | Non
     measurements = getattr(item, "measurements", None)
     summary = getattr(measurements, "tool_summary", None) if measurements else None
     detail: dict[str, Any] = {
+        **{
+            field: getattr(item, field, None)
+            for field in ("text", "input", "output", "command")
+        },
         "tool_name": tool_name,
         "concept": summary.get("name")
         if isinstance(summary, dict)

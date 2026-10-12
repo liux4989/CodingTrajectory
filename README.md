@@ -15,8 +15,8 @@ required. Loop also requires Bun.
 
 ```sh
 uv sync --all-packages --locked
-uv run ct --source local project list
-uv run ct --source local project sessions --project-id PROJECT_ID
+uv run ct project list
+uv run ct project sessions --project-id PROJECT_ID
 ```
 
 Replace `PROJECT_ID` with an ID from `project list`. For browser access:
@@ -28,7 +28,8 @@ uv run ct plugin loop web
 ```
 
 Loop reads local evidence. It does not publish data or use remote fallback.
-Core is local-only. `auto` selects local sources; remote selection is unavailable.
+Core reads local sources directly. Collections return all matches by default;
+optional limits select results without continuation cursors.
 There is no collector, connection management, or API server command.
 
 **Warning:** the legacy Amp capture plugin can still auto-publish externally.

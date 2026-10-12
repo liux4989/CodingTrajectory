@@ -1,21 +1,4 @@
-"""Contracts for the project.*, session.*, and graph.* service methods.
-
-Live retained canonical contract revision:
-
-- Graph methods require ``root_session_id``; session methods require
-  ``session_id``; ``turn_id`` is a subordinate filter within a session scope.
-- ``num_turns``/``drop_turns`` are replaced by deterministic pagination:
-  ``session.overview``/``graph.overview`` take opaque ``cursor`` + ``limit``;
-  ``session.items``/``session.events``/``session.search`` take ``cursor`` +
-  ``limit``.
-- Inventory filters keep one absolute ``modified_since`` timestamp; relative
-  day windows are translated by the CLI, never carried by the protocol.
-- ``session.events`` filters are typed (types/status/tool_name/IDs); there are
-  no payload filters because events never carry payloads.
-- Every method has one stable response shape: response-composing include flags
-  are gone; trimmed evidence is expressed with nullable fields and explicit
-  coverage.
-"""
+"""Typed local query contracts with complete collections by default."""
 
 from __future__ import annotations
 
@@ -39,6 +22,11 @@ class SessionScopedRequest(RequestModel):
     session_id: str
     turn_id: str | None = None
 
+    @field_validator("turn_id")
+    @classmethod
+    def canonical_turn_id(cls, value: str | None) -> str | None:
+        return str(UUID(value)) if value is not None else None
+
 
 class GraphScopedRequest(RequestModel):
     """Graph entry point: ``root_session_id`` is required."""
@@ -51,8 +39,7 @@ class ProjectListRequest(RequestModel):
     project_name: str | None = None
     modified_since: datetime | None = None
     agent_vendor: str | None = None
-    limit: int = Field(default=100, ge=1, le=200)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int | None = Field(default=None, ge=1)
 
     @field_validator("project_id")
     @classmethod
@@ -72,8 +59,7 @@ class ProjectSessionsRequest(ProjectListRequest):
 
 class SessionOverviewRequest(RequestModel):
     session_id: str
-    limit: int = Field(default=20, ge=1, le=200)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int | None = Field(default=None, ge=1)
 
 
 class SessionSummaryRequest(SessionScopedRequest):
@@ -96,11 +82,12 @@ DEFAULT_SEARCH_KINDS: list[SearchKind] = [
     "file_change",
 ]
 
-#: The complete set of retained fields session.search can match against. Raw
-#: tool input/output, command stdout/stderr, file/patch bodies, full prompts,
-#: transcripts, and reasoning are never searchable because they are never
-#: retained in the canonical store.
+#: Normalized local content and semantic fields matched by session.search.
 SEARCHABLE_FIELDS: list[str] = [
+    "text",
+    "input",
+    "command",
+    "output",
     "text_preview",
     "path",
     "tool_name",
@@ -115,11 +102,10 @@ SEARCHABLE_FIELDS: list[str] = [
 
 
 class SessionSearchRequest(SessionScopedRequest):
-    query: str = Field(min_length=1, max_length=1000)
+    query: str = Field(min_length=1)
     mode: Literal["text", "path"] = "text"
     kinds: list[SearchKind] = Field(default_factory=lambda: list(DEFAULT_SEARCH_KINDS))
-    limit: int = Field(default=20, ge=1, le=100)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int | None = Field(default=None, ge=1)
 
     @field_validator("query")
     @classmethod
@@ -135,8 +121,7 @@ class SessionTreeRequest(RequestModel):
 
 
 class GraphOverviewRequest(GraphScopedRequest):
-    limit: int = Field(default=20, ge=1, le=200)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int | None = Field(default=None, ge=1)
 
 
 class SessionStatsRequest(RequestModel):
@@ -160,30 +145,26 @@ class SessionModelUsageRequest(SessionScopedRequest):
 
 
 class SessionRequestUsageRequest(SessionScopedRequest):
-    limit: int = Field(default=200, ge=1, le=1000)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int | None = Field(default=None, ge=1)
 
 
 class SessionToolUsageRequest(SessionScopedRequest):
-    limit: int = Field(default=200, ge=1, le=1000)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    limit: int | None = Field(default=None, ge=1)
 
 
 class SessionEventsRequest(SessionScopedRequest):
-    event_ids: list[str] | None = Field(default=None, max_length=100)
+    event_ids: list[str] | None = None
     item_id: str | None = None
-    types: list[str] | None = Field(default=None, max_length=20)
-    status: str | None = Field(default=None, max_length=64)
-    tool_name: str | None = Field(default=None, max_length=512)
-    limit: int = Field(default=200, ge=1, le=1000)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    types: list[str] | None = None
+    status: str | None = None
+    tool_name: str | None = None
+    limit: int | None = Field(default=None, ge=1)
 
 
 class SessionItemsRequest(SessionScopedRequest):
-    item_ids: list[str] | None = Field(default=None, max_length=100)
-    types: list[str] | None = Field(default=None, max_length=20)
-    limit: int = Field(default=200, ge=1, le=1000)
-    cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    item_ids: list[str] | None = None
+    types: list[str] | None = None
+    limit: int | None = Field(default=None, ge=1)
 
 
 class ProjectSummary(ContractModel):
@@ -194,13 +175,12 @@ class ProjectSummary(ContractModel):
     sessions: list[dict[str, Any]] | None = None
 
 
-class PagedResponse(ContractModel):
+class CollectionResponse(ContractModel):
     total: int = Field(ge=0)
     returned: int = Field(ge=0)
-    next_cursor: str | None = None
 
 
-class ProjectListResponse(PagedResponse):
+class ProjectListResponse(CollectionResponse):
     items: list[ProjectSummary]
 
 
@@ -217,7 +197,7 @@ class SessionGraphSummary(ContractModel):
     modified: datetime | None = None
 
 
-class ProjectSessionsResponse(PagedResponse):
+class ProjectSessionsResponse(CollectionResponse):
     items: list[SessionGraphSummary]
 
 
@@ -240,16 +220,9 @@ class ProjectionIdentity(ContractModel):
 
 
 class ProjectionCoverage(ContractModel):
-    """Honest bounded-evidence coverage for summary/search/overview results.
-
-    ``retention`` distinguishes how much raw content the authority retained:
-    ``not_applicable`` (no content concept), ``not_retained`` (measured but
-    discarded), ``preview`` (bounded redacted preview), ``complete`` (never for
-    sanitized content). ``searchable`` declares searchable completeness.
-    """
+    """Content availability and selection completeness for local projections."""
 
     retention: Literal["not_applicable", "not_retained", "preview", "complete"]
-    measurement: Literal["complete", "partial", "none"]
     searchable: Literal["complete", "preview", "facts_only", "none"] | None = None
     searched_resources: int | None = Field(default=None, ge=0)
     trimmed: bool = False
@@ -329,7 +302,6 @@ class SessionSearchResponse(ContractModel):
     matches: list[SearchMatch] = Field(default_factory=list)
     total: int = Field(ge=0)
     truncated: bool
-    next_cursor: str | None = None
     searchable_fields: list[str] = Field(default_factory=list)
     projection: ProjectionIdentity
     coverage: ProjectionCoverage
@@ -399,7 +371,7 @@ class SessionModelUsageResponse(ContractModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class SessionRequestUsageResponse(PagedResponse):
+class SessionRequestUsageResponse(CollectionResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
     execution_composition: ExecutionComposition | None = None
     root_session_id: str
@@ -410,7 +382,7 @@ class SessionRequestUsageResponse(PagedResponse):
     warnings: list[str] = Field(default_factory=list)
 
 
-class SessionToolUsageResponse(PagedResponse):
+class SessionToolUsageResponse(CollectionResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
     execution_composition: ExecutionComposition | None = None
     root_session_id: str
@@ -431,7 +403,7 @@ class CanonicalProvenance(ContractModel):
 
 
 class CanonicalResourceCoverage(ContractModel):
-    """Per-resource bounded-evidence coverage for items and events."""
+    """Available content and evidence quality for normalized local resources."""
 
     retention: Literal["not_applicable", "not_retained", "preview", "complete"]
     measurement: Literal["complete", "partial", "none"]
@@ -464,8 +436,12 @@ class ToolOutputEvidence(ContractModel):
 
 
 class CanonicalItemDetail(ContractModel):
-    """Bounded typed item detail; never a raw body."""
+    """Normalized item content and semantic facts from local source evidence."""
 
+    text: str | None = None
+    input: Any | None = None
+    output: Any | None = None
+    command: Any | None = None
     tool_name: str | None = None
     concept: str | None = None
     target_kind: (
@@ -553,11 +529,7 @@ class CanonicalEventUsage(ContractModel):
 
 class CanonicalEventRecord(ContractModel):
     script_id: str | None = None
-    """Minimal normalized event envelope; never a raw payload.
-
-    Output content is referenced, not embedded: ``item_id`` resolves the owning
-    item, whose ``output_evidence`` carries the retained processed evidence.
-    """
+    """Normalized local event content and references with native usage."""
 
     event_id: str
     session_id: str
@@ -570,16 +542,16 @@ class CanonicalEventRecord(ContractModel):
     source_order_key: str
     provenance: CanonicalProvenance
     coverage: CanonicalResourceCoverage
+    content: dict[str, Any] = Field(default_factory=dict)
     output_evidence_id: str | None = None
     usage: CanonicalEventUsage | None = None
 
 
-class SessionEventsResponse(PagedResponse):
+class SessionEventsResponse(CollectionResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
     execution_composition: ExecutionComposition | None = None
     root_session_id: str | None = None
     events: list[CanonicalEventRecord] = Field(default_factory=list)
-    next_cursor: str | None = None
     unresolved_ids: list[str] = Field(default_factory=list)
     coverage: ProjectionCoverage | None = None
 
@@ -589,15 +561,13 @@ class CliSessionEventsResponse(ContractModel):
     execution_composition: ExecutionComposition | None = None
     id: str | None = None
     matches: list[dict[str, Any]] = Field(default_factory=list)
-    next_cursor: str | None = None
 
 
-class SessionItemsResponse(PagedResponse):
+class SessionItemsResponse(CollectionResponse):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
     execution_composition: ExecutionComposition | None = None
     root_session_id: str | None = None
     items: list[CanonicalItemRecord] = Field(default_factory=list)
-    next_cursor: str | None = None
     unresolved_ids: list[str] = Field(default_factory=list)
     coverage: ProjectionCoverage | None = None
 
@@ -644,7 +614,6 @@ class CliSessionItemsResponse(ContractModel):
     execution_composition: ExecutionComposition | None = None
     id: str | None = None
     items: list[CliCanonicalItemRecord] = Field(default_factory=list)
-    next_cursor: str | None = None
 
 
 class CliSessionGraphSummary(ContractModel):

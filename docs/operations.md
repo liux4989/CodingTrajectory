@@ -42,18 +42,18 @@ Install the locked workspace from the repository root:
 
 ```sh
 uv sync --all-packages --frozen
-uv run ct --source local project list
-uv run ct --source local project sessions --project-id PROJECT_ID
+uv run ct project list
+uv run ct project sessions --project-id PROJECT_ID
 ```
 
-Replace `PROJECT_ID` with an ID from the inventory. `auto` also selects local
-sources; it never falls back to remote. If no supported source exists on the
+Replace `PROJECT_ID` with an ID from the inventory. All queries use local
+sources directly; source selection and remote fallback are removed. If no supported source exists on the
 host, queries report local source unavailability rather than reading a remote copy.
 See [CLI](cli.md) for scoped detail queries and [Loop](loop-design.md) for browser access.
 
 Inventory streams adapter-owned relationship metadata and discovers fresh topology
 for each request. Detail queries ingest only selected runs and their canonical
-dependencies, applying retention and redaction in memory. Reuse is limited to one
+dependencies, preserving complete normalized content in memory. Reuse is limited to one
 request or explicit batch; no topology or canonical graph is persisted across
 requests, and Core no longer uses `~/.coding-trajectory/local.sqlite`. No upfront
 preparation or manual publication is needed. Repeated reads of large runs repeat
@@ -62,10 +62,10 @@ remain the evidence authority; this change does not delete logs or old databases
 
 Metrics are computed on request. Pricing keeps the existing live catalog path;
 catalog estimates remain separate from provider-reported cost. Native metric
-formulas and public vNext cursors are unchanged.
+formulas are unchanged; collection contracts now return all matches by default.
 
 Living reads also write no derived state. `living.sessions` uses topology and
-file metadata only; `living.events` loads the explicitly scoped retained run.
+file metadata only; `living.events` loads the explicitly scoped canonical run.
 Old `local.sqlite`, `living-events/` and `living-sessions/` databases are no longer
 read or updated. Moving these old derived stores to the Trash is a separate
 post-acceptance cleanup, never a side effect of a query or migration. Loop's
@@ -76,7 +76,7 @@ delete them as Core cache cleanup.
 time and size, `living`/`inactive` state and a digest. Claude cwd comes from the
 first available source record field, not an inferred filesystem path; it remains
 null if no record supplies one. Global/project reads include
-runs with a source modified in the last `horizon_days` (1–30, default 3 / 72
+runs with a source modified in the last `horizon_days` (positive days, default 3 / 72
 hours); explicit run scopes ignore the horizon. State uses each session's own
 source mtime and a 300-second activity window. Changing time alone can therefore
 change a digest.
@@ -84,17 +84,18 @@ change a digest.
 `living.events` requires exactly one `root_session_id` or `session_id`; optional
 `turn_id` and/or `item_id` narrow within that directly loaded run. A bare turn or
 item ID is invalid; a cross-run narrowing ID returns `resource_not_found` without
-loading any other run. Both modes return digests of retained details, so completing
-a tool changes its digest even when the compact view hides those details. Compare
+loading any other run. Complete resources are inline and have digests, so
+completing a tool changes its digest. Compare
 complete passes to discover removals; neither method emits historical deltas,
 tombstones or reset operations.
 Digest serialization is UTF-8 JSON with sorted keys, compact separators and
 unescaped Unicode. Session digests exclude only their own `digest` field; event
-digests cover the normalized details-mode `resource` payload.
+digests cover the normalized public `resource` payload.
 
-Pages are count-bounded. Treat their unsigned query- and version-bound cursors
-as opaque. Ordering is deterministic per call; a multi-page read is not a saved
-snapshot of changing logs. Old published-view references are not supported.
+Collections return all matches by default. Optional positive limits select
+results without hard maximums; there are no continuation cursors or compact
+content-reference reads. Ordering is deterministic per call. API v1 and old
+method versions are rejected by the new `ct.api.v2` boundary.
 
 ## Validate local operation
 
@@ -119,20 +120,14 @@ bun run --cwd packages/plugins/loop/web build
 uv run python scripts/check-loop.py
 ```
 
-The full synthetic qualification covers command activity, retained summary
-semantics, search privacy/coverage, and ranking. Its v2 fixture places ranking
-signals in portable paths and sanitized command targets that retention preserves,
-not discarded patch/output bodies. Raw output sentinels are negative privacy
-controls, excluded from recall judgments. Exact changed paths are primary
-evidence; failed commands are operational evidence; successful retries and
-narrative/request matches provide context. Quality thresholds are unchanged.
-Summary retains up to 64 distinct pending plan actions, each sanitized and bounded
-to 280 characters; completed snapshots clear prior next actions. Verification
-labels use retained command descriptions, and nullable wire status means no
-observed outcome. The benchmark does not claim real-world retrieval quality;
-its projection-only timings remain diagnostic. Neither workflow needs private
-logs or remote credentials. Metric baselines use committed source evidence;
-do not replace expected values with fresh output.
+The full synthetic qualification covers command activity, bounded summary
+projections, complete normalized-content search, coverage, and ranking. Display
+snippets remain short while matching uses all available text and tool content.
+Local details preserve recorded bodies and full paths; arbitrary vendor records
+are not dumped. The benchmark does not claim real-world retrieval quality;
+its projection timings remain diagnostic. Neither workflow needs private logs
+or remote credentials. Metric baselines use committed source evidence; do not
+replace expected values with fresh output.
 See [metrics validation](metrics-validation-quality-gate.md) for audit requirements.
 
 ## Release marker validation

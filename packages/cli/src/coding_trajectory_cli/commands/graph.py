@@ -22,8 +22,6 @@ def _graph_entry_params(args: argparse.Namespace) -> dict[str, Any]:
     params: dict[str, Any] = {"root_session_id": args.session_id}
     if getattr(args, "limit", None) is not None:
         params["limit"] = args.limit
-    if getattr(args, "cursor", None):
-        params["cursor"] = args.cursor
     return params
 
 

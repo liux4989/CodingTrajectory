@@ -34,8 +34,7 @@ from coding_trajectory_cli.telemetry import write_invocation_record
 EPILOG = """\
 NOTE
   Use `ct project sessions` to choose the SESSION_ID required by session and
-  session graph analysis commands. Reads are local only, including auto.
-  Shared and remote sources fail explicitly; there is no remote fallback.
+  session graph analysis commands. Reads use local evidence.
 """
 
 
@@ -60,12 +59,6 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=GhFormatter,
     )
 
-    parser.add_argument(
-        "--source",
-        choices=("local", "shared", "remote", "auto"),
-        default="auto",
-        help="Query source: auto is local only; shared and remote are unavailable.",
-    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for register in REGISTRARS:
         register(subparsers)

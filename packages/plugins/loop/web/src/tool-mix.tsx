@@ -58,10 +58,8 @@ const GROUP_OF = new Map<string, Group>(
 const OPEN_KEY = "loop.toolMix.open";
 const SEQUENCE_KEY = "loop.toolMix.sequence";
 const TOOL_KINDS = ["tool_call", "command_execution", "file_change", "plan"];
-const PAGE = 1000;
-// Above this many calls, one block per call stops being readable.
+// Group the complete sequence by turn when individual blocks become hard to read.
 const PER_CALL_LIMIT = 300;
-const MAX_PAGES = 5;
 
 type Call = {
   item: CanonicalItemRecord;
@@ -137,7 +135,6 @@ function collapsedSummary(calls: Call[]) {
 function useToolCalls(reference: CanonicalReference, enabled: boolean) {
   const [state, setState] = useState<{
     calls?: Call[];
-    truncated?: boolean;
     error?: string;
   }>({});
   useEffect(() => {
@@ -145,29 +142,19 @@ function useToolCalls(reference: CanonicalReference, enabled: boolean) {
     const controller = new AbortController();
     setState({});
     (async () => {
-      const items: CanonicalItemRecord[] = [];
-      let cursor: string | null | undefined;
-      let pages = 0;
-      do {
-        const data = await request<CoreResult<SessionItemsResponse>>(
-          "/api/core",
-          {
-            method: "session.items",
-            params: {
-              session_id: reference.session_id,
-              types: TOOL_KINDS,
-              limit: PAGE,
-              ...(cursor ? { cursor } : {}),
-            },
+      const data = await request<CoreResult<SessionItemsResponse>>(
+        "/api/core",
+        {
+          method: "session.items",
+          params: {
+            session_id: reference.session_id,
+            types: TOOL_KINDS,
           },
-          controller.signal,
-        );
-        items.push(...(data.result.items ?? []));
-        cursor = data.result.next_cursor;
-        pages++;
-      } while (cursor && pages < MAX_PAGES);
+        },
+        controller.signal,
+      );
       if (!controller.signal.aborted)
-        setState({ calls: items.map(toCall), truncated: Boolean(cursor) });
+        setState({ calls: (data.result.items ?? []).map(toCall) });
     })().catch((error) => {
       if (!controller.signal.aborted)
         setState({ error: String(error.message) });
@@ -200,7 +187,7 @@ export function ToolMix({
       // Storage may be unavailable; the panel still toggles for this view.
     }
   }
-  const { calls, truncated, error } = useToolCalls(reference, started);
+  const { calls, error } = useToolCalls(reference, started);
   const stats = useCore<SessionStatsResponse>(
     "session.stats",
     {
@@ -352,12 +339,6 @@ export function ToolMix({
                 </tbody>
               </table>
             </div>
-            {truncated && (
-              <p className="coverage-note">
-                Showing the first {number(calls.length)} tool calls. Later calls
-                are not included in this panel.
-              </p>
-            )}
             <Sequence
               calls={calls}
               focus={focus}

@@ -3,7 +3,7 @@
 CodingTrajectory reconstructs vendor logs into an agent-agnostic hierarchy for
 two purposes: progressively exposing the context of a coding session and
 reporting native session metrics. Consumers progress from project and session
-inventory through bounded contextual views to exact local evidence, using stable
+inventory through contextual views to exact local evidence, using stable
 IDs at every step.
 
 The canonical hierarchy is `SessionGraph → Session → Turn → Item`, with events
@@ -17,7 +17,7 @@ Core has exactly two product responsibilities.
 ## Contextual session construction
 
 - Reconstruct agent-harness mechanisms into the canonical hierarchy and expose
-  that hierarchy progressively: inventory, topology, bounded summary, bounded
+  that hierarchy progressively: inventory, topology, bounded summary, complete
   chronological overview, scoped search, items, and events.
 - High-level harness concepts are allowed when they are deterministic
   normalizations of source evidence, remain scoped to the hierarchy, and retain
@@ -53,7 +53,7 @@ Both responsibilities must remain native and constrained:
   estimator or maintain a separate predictive domain.
 - **Constrained** means every detail query has an explicit project, graph,
   session, turn, item, or event scope. Collection responses have stable ordering,
-  bounded page sizes, and cursors or an equivalent continuation contract.
+  complete scoped results by default, and optional positive selection limits.
 - Derived values declare their source, method, confidence, and coverage. Missing
   evidence remains unavailable or partial rather than becoming a guessed zero.
 
@@ -80,21 +80,21 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - Vendor logs feed adapter-owned streamed relationship metadata for inventory,
   with fresh topology discovery per request. Detail queries reconstruct only
   selected runs and their canonical dependencies through existing canonical
-  ingestion, then apply publication-independent retention and redaction in memory.
-- Consumers may read bounded canonical resources directly instead of going
+  ingestion, preserving complete normalized content and measurements in memory.
+- Consumers may read complete scoped canonical resources directly instead of going
   through a Core-owned display projection. Stable hierarchy references retain
   their meaning across contextual and metric queries.
 - Historical and inventory queries have no cross-request derived persistence.
-  Core no longer uses `~/.coding-trajectory/local.sqlite`; topology and retained
+  Core no longer uses `~/.coding-trajectory/local.sqlite`; topology and canonical
   graphs are reused only within one request or explicit batch. Immutable logs
   remain the evidence authority. Repeated detail reads of large runs repeat
   ingestion rather than benefiting from a persistent graph cache.
 - No upfront preparation, packs, manifests, saved snapshots, signatures, or
   byte-budget pages are required. Display and metric responses are computed on
   request and never become required canonical dependencies.
-- Full transcript bodies, raw vendor payloads, tool inputs, and tool outputs
-  remain under host-local evidence authority. Standard canonical queries expose
-  retained evidence with explicit provenance and coverage.
+- Full normalized text, tool inputs, commands, outputs and paths remain
+  accessible to local detail and search queries with provenance and coverage.
+  Arbitrary vendor record dumps remain outside the canonical query boundary.
 
 ## Display query layer
 
@@ -106,50 +106,45 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
   required canonical dependency.
 - The same declared projection and metric rules apply to local queries. Coverage
   and provenance must not silently change the meaning of a supported response.
-- Capability is declared per method and source. One declaration marks all 18
-  methods local-only; individual projections do not scatter ad hoc remote checks.
-  `auto` selects local sources without remote fallback.
-- Local envelopes expose `result`, rather than the parked remote envelope's
-  `data`. Metadata is `local` / `live` / `retained`, without snapshot identity.
-  This local-only revision increments all 18 method contract versions by one.
-- Collection pages use opaque unsigned count-keyset cursors bound to query and
-  method version. Inventory uses identity ordering; content uses canonical source
-  order with ID tie-breakers. Determinism is per call, not a cross-call snapshot.
-  Published-view references and stale-view errors are removed.
-- Stateless scoped ingestion preserves native metrics and public vNext cursor
-  contracts; it does not introduce a new cursor or snapshot model.
+- All 18 methods execute locally. Source negotiation, remote capability tables,
+  and constant transport metadata are removed. Local `ct.api.v2` envelopes keep
+  `result`, structured availability, and errors; method versions advance together.
+- Collections return all matches in deterministic order by default. Optional
+  positive limits select results without a hard maximum. There are no cursors,
+  cross-call snapshots, published-view references, or stale-view errors.
+- Native metric formulas, canonical IDs, topology, ordering and provenance remain
+  authoritative. Preview and summary bounds do not remove canonical content.
 
 ### Chronicle query ownership
 
-- `project.list` owns bounded project discovery.
-- `project.sessions` owns bounded session and graph discovery; it does not embed
+- `project.list` owns complete project discovery.
+- `project.sessions` owns complete session and graph discovery; it does not embed
   runtime or usage responses.
 - `session.tree` owns conversation lineage and ordinary-fork structure.
 - `session.items` and `session.events` own progressively expanded canonical
   evidence. Their public contracts expose stable hierarchy references, source
   ordering, timestamps, normalized type and observed status when supported.
-- `living.sessions` owns bounded header-level session inventory with live state
+- `living.sessions` owns complete header-level session inventory with live state
   and digests, without transcript ingestion. Global and project scopes use a
   rolling horizon (72 hours by default); explicit run scopes have no horizon.
 - `living.events` owns a scoped current-resource snapshot with digests;
-  consumers derive changes by comparing complete passes. Digests cover retained
-  details, including in-place tool completion, even when requesting compact views.
+  consumers derive changes by comparing complete passes. Digests cover full normalized public resources, including in-place tool completion.
 - Neither living method stores payloads, change history or source checkpoints.
-  Pages are live keysets, not frozen snapshots; absence from a complete pass
+  Reads are current scoped passes; absence from a complete pass
   means the resource is no longer in that scope. Consumers own last-seen state.
 - Loop's `investigations.sqlite3` and `monitor.sqlite3` are product/user data,
   not Core derived caches, and remain intact.
 
 ### Core reference display ownership
 
-- `graph.overview` owns a bounded orchestration overview assembled from
+- `graph.overview` owns a complete orchestration overview assembled from
   Chronicle topology and member metadata.
 - `session.summary` owns the compact objective, outcome, change, verification,
   unresolved-work, and next-action brief.
 - `session.overview` owns chronological turns and activity. Summary does not
   duplicate its recent-activity view, and graph overview does not duplicate its
   narrative.
-- `session.search` owns bounded retrieval over retained session evidence.
+- `session.search` owns retrieval over complete available normalized session evidence.
 
 ### Metric query ownership
 
@@ -178,7 +173,7 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
   event and session identity, timestamp, normalized type, related hierarchy
   references, provenance, coverage, and a stable source-order key when source
   evidence supports one.
-- Keep both collections bounded with stable ordering and continuation. Do not
+- Return both collections completely by default with stable ordering. Do not
   introduce a second timeline resource: consumers interleave canonical turns,
   items, events and graph edges for their own display needs.
 - Preserve orchestration targets on canonical graph edges through source session,
@@ -208,7 +203,7 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - Provider-specific payloads remain in transcript `data` and canonical `vendor_data` only when they are useful to CT; unused raw log properties are skipped instead of modeled.
 - Core ingestion may apply a consumer-neutral retention policy after canonical identifiers are stabilized. `trajectory` retains replay evidence; `measurements` retains hierarchy, usage, runtime, reported cost, tool outcomes, and reconciliation inputs while releasing transcript bodies. Both policies preserve the same canonical facts for their shared metric contracts.
 - Retention policy must not introduce consumer concepts such as waste scores, rankings, dashboard cards, default horizons, or UI labels. Those remain projection-layer decisions, and immutable vendor logs remain the evidence authority for lazy detail reconstruction.
-- Request-scoped retained graphs are in-memory reconstructions, not a persistent
+- Request-scoped canonical graphs are in-memory reconstructions, not a persistent
   SQLite format or canonical compatibility boundary. Core vendor compatibility
   and versioned public API contracts remain separate responsibilities. Living
   queries are stateless; Loop owns persisted investigations and Monitor state.
@@ -221,18 +216,18 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 
 # Chronicle history
 
-- Historical Chronicle queries reconstruct publication-independent retained
+- Historical Chronicle queries reconstruct complete normalized
   canonical graphs in memory from local vendor evidence for each request or
   explicit batch. Fresh inventory metadata locates selected runs; it does not
   replace canonical ingestion or supply fabricated measurements.
 - Direct historical handlers consume those graphs. Metrics are calculated on
   request, while the existing live pricing path remains unchanged.
 - Retention preserves identities, topology, source order, timestamps, lifecycle
-  facts, measurements, bounded operational details, previews, and provenance.
-  Rendered summaries, overview pages, searches, and metric responses are not
+  facts, measurements, complete available bodies, paths, and provenance.
+  Rendered summaries, overview projections, searches, and metric responses are not
   canonical history or persisted snapshot artifacts.
-- Standard methods expose retained canonical evidence, not arbitrary transcript,
-  tool, or vendor payload bodies. Logs remain private under host-local authority.
+- Standard detail methods expose complete normalized canonical content; raw
+  vendor records remain outside those contracts. Logs remain host-local.
 - Remote history, storage, publication, and delivery are deferred. No remote
   fallback, collector, connection management, or API server is supported.
 - The legacy Amp capture plugin can still auto-publish externally. Set

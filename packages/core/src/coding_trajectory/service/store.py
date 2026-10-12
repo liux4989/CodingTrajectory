@@ -1,4 +1,4 @@
-"""Request-scoped source topology and retained stores for the service layer."""
+"""Request-scoped source topology and canonical stores for the service layer."""
 
 from __future__ import annotations
 
@@ -454,7 +454,7 @@ def _discover_requested_sources(paths: list[str], cache: IndexCache) -> Discover
                 f"Cached{adapter_cls.__name__}", (CachedHeader, adapter_cls), {}
             )
         candidates.append((candidate.vendor, adapter_types[adapter_cls], Path(path)))
-    ingested, provenance = _ingest_sessions(candidates)
+    ingested, provenance = _ingest_sessions(candidates, retention="trajectory")
     sessions_by_project: dict[str, list[Session]] = {}
     for source in ingested:
         project = infer_project_identifier(
@@ -544,7 +544,7 @@ def resolve_store(
     if not selected:
         return DocumentStore.from_session_graphs([]), "(no matching sources)"
     missing = [run for run in selected if str(run.root_session_id) not in cache._graphs]
-    description = "(request-scoped retained graphs)"
+    description = "(request-scoped canonical graphs)"
     if missing:
         # One union discovery for the request or batch, including ancestors needed
         # for fork cutting. No unrelated siblings or workspace preparation.

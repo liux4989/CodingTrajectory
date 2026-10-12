@@ -17,11 +17,6 @@ from coding_trajectory.analysis.measurements import attach_measurements
 from coding_trajectory.discovery import discover_store, stabilize_session
 from coding_trajectory.ingestion.adapters.amp import AmpAdapter
 from coding_trajectory.ingestion.graph import assemble_project_session_graphs
-from coding_trajectory.ingestion.incremental import (
-    SourceSnapshot,
-    plan_session_graph_components_from_files,
-    rebuild_affected_session_graphs_from_files,
-)
 from coding_trajectory.ingestion.models import Vendor
 from coding_trajectory.ingestion.retained import retain_session_graph
 from coding_trajectory.query import DocumentStore
@@ -180,10 +175,13 @@ def qualify_result_formats(source: Path) -> None:
         assert not replay.extensions.amp.spawn_links, name
         graph = assemble_project_session_graphs("amp-example", [session])[0]
         retained = retain_session_graph(graph)
-        assert "PRIVATE output" not in retained.model_dump_json(), name
+        assert any(
+            getattr(item, "output", None) is not None
+            for item in retained.sessions[0].turns[0].items
+        ), name
         assert retain_session_graph(retained) == retained, name
     print(
-        "PASS Amp result formats: 7 legacy/structured/ambiguous variants, dedup, live-only edges, no raw tool output"
+        "PASS Amp result formats: 7 legacy/structured/ambiguous variants, dedup, live-only edges, complete canonical tool output"
     )
 
 
@@ -257,7 +255,7 @@ def qualify_throughput(source: Path) -> None:
     attach_measurements(measured, graph.sessions[0])
     measured_graph = assemble_project_session_graphs("amp-example", [measured])[0]
     replay = retain_session_graph(graph)
-    assert "Let us reason." not in replay.model_dump_json()
+    assert "Let us reason." in replay.model_dump_json()
     assert retain_session_graph(replay) == replay
     for variant in (graph, measured_graph, replay):
         for method in ("session.stats", "session.usage", "session.model_usage"):
@@ -312,8 +310,8 @@ def qualify_throughput(source: Path) -> None:
             request_graph = store.get_session_graph_for_session(replay.root_session_id)
             request_graphs.append(request_graph)
             retained_json = request_graph.model_dump_json()
-            assert "Let us reason." not in retained_json
-            assert "PRIVATE output" not in retained_json
+            assert "Let us reason." in retained_json
+            assert "PRIVATE output" in retained_json
             assert "PRIVATE task" in retained_json
             assert retain_session_graph(request_graph) == request_graph
             for method in ("session.stats", "session.usage", "session.model_usage"):
@@ -369,7 +367,9 @@ def qualify_throughput(source: Path) -> None:
         for method in ("session.stats", "session.usage", "session.model_usage"):
             fresh = call(fresh_graph, method)
             earlier = call(request_graphs[0], method)
-            fresh_runtime = fresh if method == "session.model_usage" else fresh["runtime"]
+            fresh_runtime = (
+                fresh if method == "session.model_usage" else fresh["runtime"]
+            )
             earlier_runtime = (
                 earlier if method == "session.model_usage" else earlier["runtime"]
             )
@@ -442,7 +442,7 @@ def qualify_throughput(source: Path) -> None:
             assert field not in mixed, name
             assert mixed["turns"][-1][field] == 1.5, name
     print(
-        "PASS Amp throughput: source-derived rates, parallel-window union, revisions, thinking, idle exclusion, weighted aggregation, CLI, fresh requests, retained in-memory isolation/redaction, 10 unavailable cases"
+        "PASS Amp throughput: source-derived rates, parallel-window union, revisions, thinking, idle exclusion, weighted aggregation, CLI, fresh requests, canonical in-memory isolation/completeness, 10 unavailable cases"
     )
 
 
@@ -495,11 +495,12 @@ def main() -> None:
             retained_bytes = replay.model_dump_json(exclude_none=True).encode()
             assert b"PRIVATE task" in retained_bytes
             assert b"PRIVATE final" in retained_bytes
-            assert b"PRIVATE output" not in retained_bytes
+            assert b"PRIVATE output" in retained_bytes
             assert len(replay.sessions) == 2
             assert retain_session_graph(replay) == replay
             assert all(
-                not getattr(item, "text", None) and not getattr(item, "output", None)
+                getattr(item, "text", None) is not None
+                or getattr(item, "output", None) is not None
                 for session in replay.sessions
                 for turn in session.turns
                 for item in turn.items
@@ -532,36 +533,11 @@ def main() -> None:
                 )
                 == replay
             )
-            snapshots = [
-                SourceSnapshot(
-                    path=str(p),
-                    file_identity=None,
-                    size=p.stat().st_size,
-                    mtime_ns=p.stat().st_mtime_ns,
-                    committed_offset=p.stat().st_size,
-                    prefix_checksum=None,
-                    tail_checksum=None,
-                    parser_version="1",
-                    schema_version="1",
-                    status="ready",
-                    error=None,
-                    last_success_revision=1,
-                    revision=1,
-                    deleted=False,
-                    root_link=None,
-                    parent_link=None,
-                    metadata={"vendor": "amp"},
-                )
-                for p in paths
-            ]
-            plan = plan_session_graph_components_from_files(sources=snapshots)
-            assert len(plan.components) == 1
-            rebuilt = rebuild_affected_session_graphs_from_files(
-                sources=snapshots, seed_paths=[paths[1]]
-            )
-            assert (
-                rebuilt.status == "complete" and len(rebuilt.selected_source_paths) == 2
-            )
+            # Direct file ingestion assembles the same complete local topology;
+            # no persisted offsets/revisions or child-seeded repair API is needed.
+            rebuilt = assemble_project_session_graphs(graph.project_identifier, full)
+            assert len(rebuilt) == 1 and len(rebuilt[0].sessions) == 2
+            assert rebuilt[0].edges == graph.edges
             methods = [
                 "session.overview",
                 "session.summary",
@@ -629,7 +605,7 @@ def main() -> None:
                 "PASS Amp live: discovery, dedup, observed timing, failed tools, spawn provenance,"
             )
             print(
-                "  compact identity parity, retained replay parity/privacy, local narrative, child-seeded rebuild, 13 public APIs"
+                "  compact identity parity, canonical replay parity/completeness, local narrative, direct file assembly, 13 public APIs"
             )
         finally:
             if old is None:

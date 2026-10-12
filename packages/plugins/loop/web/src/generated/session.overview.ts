@@ -9,14 +9,6 @@ export type ForkOrigin = {
 } | null;
 export type GraphId = string;
 export type LineageRootSessionId = string;
-export type Direction = "older";
-export type EndOrdinalExclusive = number;
-export type HasMore = boolean;
-export type NextCursor = string | null;
-export type RequestedLimit = number;
-export type Returned = number;
-export type StartOrdinal = number;
-export type Total = number;
 export type RootSessionId = string;
 export type AgentName = string | null;
 export type AgentPath = string | null;
@@ -41,36 +33,6 @@ export type Status = string;
 export type Title = string | null;
 export type Vendor = string;
 export type Sessions = OverviewSession[];
-/**
- * @maxItems 8
- */
-export type Activities =
-  | []
-  | [OverviewActivity]
-  | [OverviewActivity, OverviewActivity]
-  | [OverviewActivity, OverviewActivity, OverviewActivity]
-  | [OverviewActivity, OverviewActivity, OverviewActivity, OverviewActivity]
-  | [OverviewActivity, OverviewActivity, OverviewActivity, OverviewActivity, OverviewActivity]
-  | [OverviewActivity, OverviewActivity, OverviewActivity, OverviewActivity, OverviewActivity, OverviewActivity]
-  | [
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity
-    ]
-  | [
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity,
-      OverviewActivity
-    ];
 export type Cmd = string | null;
 export type Commands = string[] | null;
 export type Count = number | null;
@@ -79,6 +41,7 @@ export type Count = number | null;
  */
 export type ItemIds = [string, ...string[]];
 export type Items = string | null;
+export type Kind = "tool_script" | null;
 export type Outcome = ("succeeded" | "failed") | null;
 export type Path = string | null;
 export type PathCounts = {
@@ -87,6 +50,7 @@ export type PathCounts = {
 export type Paths = string[] | null;
 export type Queries = string[] | null;
 export type Query = string | null;
+export type ScriptId = string | null;
 export type Session = string | null;
 export type Status1 = string | null;
 export type Target = string | null;
@@ -96,57 +60,100 @@ export type Tool = string;
 export type Url = string | null;
 export type Urls = string[] | null;
 export type WrapperStatus = string | null;
-/**
- * @maxItems 8
- */
-export type AssistantResponses =
-  | []
-  | [OverviewAssistant]
-  | [OverviewAssistant, OverviewAssistant]
-  | [OverviewAssistant, OverviewAssistant, OverviewAssistant]
-  | [OverviewAssistant, OverviewAssistant, OverviewAssistant, OverviewAssistant]
-  | [OverviewAssistant, OverviewAssistant, OverviewAssistant, OverviewAssistant, OverviewAssistant]
-  | [OverviewAssistant, OverviewAssistant, OverviewAssistant, OverviewAssistant, OverviewAssistant, OverviewAssistant]
-  | [
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant
-    ]
-  | [
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant,
-      OverviewAssistant
-    ];
+export type Activities = OverviewActivity[];
 export type ItemId = string;
 export type Preview = string;
-export type Returned1 = number;
-export type Total1 = number;
-export type Truncated = boolean;
-export type TextTrimmed = boolean;
+export type AssistantResponses = OverviewAssistant[];
 export type EndedAt1 = string | null;
-export type GlobalOrdinal = number;
-/**
- * @maxItems 100
- */
-export type ItemIds1 = string[];
-export type UserRequestEventId = string | null;
+export type ItemId1 = string;
+export type Kind1 = "item";
+export type OpenSourceLink = string | null;
+export type ItemId2 = string;
+export type Language = string;
+export type Link = string;
+export type LocalOnly = boolean;
+export type ProviderCallId = string | null;
+export type RecordDigests = string[];
+export type RecordIndices = number[];
 export type SessionId1 = string;
+export type SourceField = string;
+export type SourceLog = string;
+export type SourceLogSha256 = string;
+export type SourceSha256 = string;
+export type ToolName = string | null;
+export type UnitId = string;
+export type FollowingAssistantItemIds = string[];
+export type NextItemId = string | null;
+export type PrecedingAssistantItemIds = string[];
+export type PreviousItemId = string | null;
+export type SessionId2 = string;
+export type TurnId = string;
+export type UserRequestEventId = string | null;
+export type ControlItemIds = string[];
+export type InventoryCoverage = "complete" | "partial" | "unknown";
+export type ItemId3 = string;
+export type ItemIds1 = string[];
+export type Kind2 = "tool_script";
+export type LocalOnly1 = boolean;
+export type ArgumentsCoverage = "recorded" | "not_recorded" | "truncated" | "source_reconstructed";
+export type ArgumentsPreview = string | null;
+export type ArgumentsRef = {
+  [k: string]: unknown;
+} | null;
+export type CompletedAt = string | null;
+export type DurationMs = number | null;
+export type Failure = string | null;
+export type ItemId4 = string | null;
+export type Observation = "observed" | "source_only";
+export type Outcome1 = ("succeeded" | "failed" | "unfinished") | null;
+export type OwnershipBasis = string;
+export type ProviderCallId1 = string | null;
+export type ResultCoverage = "recorded" | "not_recorded";
+export type ResultRef = {
+  [k: string]: unknown;
+} | null;
+export type SourceToolName = string | null;
+export type StartedAt1 = string | null;
+export type ToolName1 = string;
+export type ObservedExternalCalls = ExternalCall[];
+export type OpenSourceLink1 = string;
+export type EmittedOutputRef = {
+  [k: string]: unknown;
+} | null;
+export type FailureOutputRef = {
+  [k: string]: unknown;
+} | null;
+export type InvocationCompletedAt = string | null;
+export type InvocationStatus = string | null;
+export type Lifecycle = "completed" | "failed" | "yielded" | "interrupted" | "unknown";
+export type LifecycleCoverage = "invocation_only" | "runtime_checkpoint";
+export type OutputCoverage = "recorded" | "not_recorded";
+export type OutputScope = "invocation" | "script";
+export type RuntimeCompletedAt = string | null;
+export type RuntimeExecutionId = string | null;
+export type StartedAt2 = string;
+export type SchemaVersion = "ct.tool_script.v1";
+export type SessionId3 = string;
+export type SourceAnalysisCoverage = "partial" | "syntax_errors" | "not_supported";
+export type SourceOnlyCalls = ExternalCall[];
+export type SourcePreview = string | null;
+export type SourcePreviewTruncated = boolean;
+export type ToolName2 = string | null;
+export type TurnId1 = string;
+export type UnitId1 = string;
+export type ExecutionUnits = (DirectItemReference | ToolScriptExecution)[];
+export type GlobalOrdinal = number;
+export type ItemIds2 = string[];
+export type UserRequestEventId1 = string | null;
+export type SessionId4 = string;
 export type SessionNarrativeOrdinal = number;
 export type SourceSequence = number;
 export type SourceTurnOrdinal = number;
-export type StartedAt1 = string | null;
+export type StartedAt3 = string | null;
 export type Status2 = string;
+export type TextTrimmed = boolean;
 export type TimestampState = "complete" | "partial" | "missing";
-export type TurnId = string;
+export type TurnId2 = string;
 export type Content = string;
 export type EventId = string | null;
 export type Source = string | null;
@@ -160,7 +167,6 @@ export interface SessionOverviewResponse {
   graph_id: GraphId;
   lineage_root_session_id: LineageRootSessionId;
   orchestration: Orchestration;
-  page: OverviewPage;
   project: Project;
   root_session_id: RootSessionId;
   sessions: Sessions;
@@ -173,16 +179,6 @@ export interface Coverage {
 }
 export interface Orchestration {
   [k: string]: unknown;
-}
-export interface OverviewPage {
-  direction?: Direction;
-  end_ordinal_exclusive: EndOrdinalExclusive;
-  has_more: HasMore;
-  next_cursor: NextCursor;
-  requested_limit: RequestedLimit;
-  returned: Returned;
-  start_ordinal: StartOrdinal;
-  total: Total;
 }
 export interface Project {
   [k: string]: string | null;
@@ -217,25 +213,26 @@ export interface Totals {
 export interface OverviewTurn {
   activities: Activities;
   assistant_responses: AssistantResponses;
-  content_coverage: TurnContentCoverage;
   ended_at: EndedAt1;
+  execution_units?: ExecutionUnits;
   global_ordinal: GlobalOrdinal;
   refs: OverviewReferences;
-  session_id: SessionId1;
+  session_id: SessionId4;
   session_narrative_ordinal: SessionNarrativeOrdinal;
   source_sequence: SourceSequence;
   source_turn_ordinal: SourceTurnOrdinal;
-  started_at: StartedAt1;
+  started_at: StartedAt3;
   status: Status2;
+  text_trimmed: TextTrimmed;
   timestamp_state: TimestampState;
-  turn_id: TurnId;
+  turn_id: TurnId2;
   user_request: OverviewRequestPreview | null;
 }
 /**
  * One semantic activity cell, not one canonical item.
  *
  * Fields mirror build_overview_flows; descriptions and evidence membership
- * belong to that projector. Per-turn caps are semantic display bounds.
+ * belong to that projector. All semantic activities are included.
  */
 export interface OverviewActivity {
   cmd?: Cmd;
@@ -243,12 +240,14 @@ export interface OverviewActivity {
   count?: Count;
   item_ids: ItemIds;
   items?: Items;
+  kind?: Kind;
   outcome?: Outcome;
   path?: Path;
   path_counts?: PathCounts;
   paths?: Paths;
   queries?: Queries;
   query?: Query;
+  script_id?: ScriptId;
   session?: Session;
   status?: Status1;
   target?: Target;
@@ -263,20 +262,101 @@ export interface OverviewAssistant {
   item_id: ItemId;
   preview: Preview;
 }
-export interface TurnContentCoverage {
-  activities: ContentCount;
-  assistant_responses: ContentCount;
-  item_ids: ContentCount;
-  text_trimmed: TextTrimmed;
+export interface DirectItemReference {
+  item_id: ItemId1;
+  kind?: Kind1;
+  open_source_link?: OpenSourceLink;
+  source?: SourceReference | null;
+  unit_id: UnitId;
 }
-export interface ContentCount {
-  returned: Returned1;
-  total: Total1;
-  truncated: Truncated;
+export interface SourceReference {
+  item_id: ItemId2;
+  language: Language;
+  link: Link;
+  local_only?: LocalOnly;
+  provider_call_id?: ProviderCallId;
+  record_digests: RecordDigests;
+  record_indices: RecordIndices;
+  session_id: SessionId1;
+  source_field: SourceField;
+  source_log: SourceLog;
+  source_log_sha256: SourceLogSha256;
+  source_sha256: SourceSha256;
+  tool_name?: ToolName;
+}
+export interface ToolScriptExecution {
+  context_refs: ContextReferences;
+  control_item_ids?: ControlItemIds;
+  inspection_log_ref: InspectionLogRef;
+  inventory_coverage: InventoryCoverage;
+  item_id: ItemId3;
+  item_ids: ItemIds1;
+  kind?: Kind2;
+  local_only?: LocalOnly1;
+  observed_external_calls: ObservedExternalCalls;
+  open_source_link: OpenSourceLink1;
+  result: ExecutionResult;
+  schema_version?: SchemaVersion;
+  session_id: SessionId3;
+  source: SourceReference;
+  source_analysis_coverage?: SourceAnalysisCoverage;
+  source_only_calls: SourceOnlyCalls;
+  source_preview?: SourcePreview;
+  source_preview_truncated?: SourcePreviewTruncated;
+  tool_name?: ToolName2;
+  turn_id: TurnId1;
+  unit_id: UnitId1;
+}
+export interface ContextReferences {
+  following_assistant_item_ids: FollowingAssistantItemIds;
+  next_item_id?: NextItemId;
+  preceding_assistant_item_ids: PrecedingAssistantItemIds;
+  previous_item_id?: PreviousItemId;
+  session_id: SessionId2;
+  turn_id: TurnId;
+  user_request_event_id?: UserRequestEventId;
+}
+export interface InspectionLogRef {
+  [k: string]: string;
+}
+export interface ExternalCall {
+  arguments_coverage: ArgumentsCoverage;
+  arguments_preview?: ArgumentsPreview;
+  arguments_ref?: ArgumentsRef;
+  completed_at?: CompletedAt;
+  duration_ms?: DurationMs;
+  evidence_ref: EvidenceRef;
+  failure?: Failure;
+  item_id?: ItemId4;
+  observation: Observation;
+  outcome?: Outcome1;
+  ownership_basis: OwnershipBasis;
+  provider_call_id?: ProviderCallId1;
+  result_coverage?: ResultCoverage;
+  result_ref?: ResultRef;
+  source_tool_name?: SourceToolName;
+  started_at?: StartedAt1;
+  tool_name: ToolName1;
+}
+export interface EvidenceRef {
+  [k: string]: unknown;
+}
+export interface ExecutionResult {
+  emitted_output_ref?: EmittedOutputRef;
+  failure_output_ref?: FailureOutputRef;
+  invocation_completed_at?: InvocationCompletedAt;
+  invocation_status?: InvocationStatus;
+  lifecycle: Lifecycle;
+  lifecycle_coverage: LifecycleCoverage;
+  output_coverage: OutputCoverage;
+  output_scope?: OutputScope;
+  runtime_completed_at?: RuntimeCompletedAt;
+  runtime_execution_id?: RuntimeExecutionId;
+  started_at: StartedAt2;
 }
 export interface OverviewReferences {
-  item_ids: ItemIds1;
-  user_request_event_id: UserRequestEventId;
+  item_ids: ItemIds2;
+  user_request_event_id: UserRequestEventId1;
 }
 export interface OverviewRequestPreview {
   content: Content;

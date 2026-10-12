@@ -131,13 +131,7 @@ def add_turn_window_flags(parser: argparse.ArgumentParser, *, view_name: str) ->
         type=positive_int,
         default=None,
         metavar="N",
-        help=f"Limit the {view_name} page to its last N visible turns.",
-    )
-    parser.add_argument(
-        "--cursor",
-        default=None,
-        metavar="CURSOR",
-        help="Continue a query-bound live page with next_cursor; keep selectors unchanged. Page size may change.",
+        help=f"Select the last N visible turns for the {view_name}; all turns by default.",
     )
 
 

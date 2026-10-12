@@ -85,8 +85,7 @@ function App() {
   const { setOpenMobile, openMobile, open, isMobile } = useSidebar();
   const [saved, setSaved] = useState<Investigation[]>([]);
   const [savedError, setSavedError] = useState<string>();
-  const [projectCursors, setProjectCursors] = useState<string[]>([]);
-  const inventory = useCore<ProjectListResponse>("project.list", { cursor: projectCursors.at(-1) });
+  const inventory = useCore<ProjectListResponse>("project.list", {});
   const savedView = saved.find(
     (view) =>
       view.id ===
@@ -215,10 +214,6 @@ function App() {
                   ),
                 )}
               </SidebarMenu>
-              <div className="flex gap-2">
-                {!!projectCursors.length && <Button variant="outline" onClick={() => setProjectCursors(value => value.slice(0, -1))}>Previous projects</Button>}
-                {inventory.data?.result.next_cursor && <Button variant="outline" onClick={() => setProjectCursors(value => [...value, inventory.data!.result.next_cursor!])}>More projects</Button>}
-              </div>
             </SidebarGroupContent>
           </SidebarGroup>
           <SidebarGroup>
@@ -319,10 +314,9 @@ function Explore({
   onSelectProject: (projectId: string) => void;
 }) {
   const [filter, setFilter] = useState("");
-  const [cursors, setCursors] = useState<string[]>([]);
   const sessions = useCore<ProjectSessionsResponse>(
     "project.sessions",
-    { ...(project ? { project_id: project } : {}), cursor: cursors.at(-1) },
+    { ...(project ? { project_id: project } : {}) },
     !!project,
     "/api/session-browser",
   );
@@ -366,7 +360,7 @@ function Explore({
         <>
           <div className="section-heading">
             <h2>Local projects</h2>
-            <span className="muted small">{matchingProjects.length} of {projects.length} on this page</span>
+            <span className="muted small">{matchingProjects.length} of {projects.length} discovered</span>
           </div>
           <ErrorNotice message={inventory.error} />
           {inventory.loading && <Loading />}
@@ -399,7 +393,7 @@ function Explore({
         </span>
       </div>
       <p className="muted small">
-        This page contains {all.length} of {sessions.data?.result.total ?? "…"} sessions. The metadata filter applies to this page.
+        {all.length} local sessions discovered. Filter the complete inventory by metadata.
       </p>
       <ErrorNotice message={sessions.error} />
       {sessions.loading && <Loading />}
@@ -452,10 +446,6 @@ function Explore({
           </article>
         ))}
       </div>
-      <div className="flex gap-2">
-        {!!cursors.length && <Button variant="outline" onClick={() => setCursors(value => value.slice(0, -1))}>Previous sessions</Button>}
-        {sessions.data?.result.next_cursor && <Button variant="outline" onClick={() => setCursors(value => [...value, sessions.data!.result.next_cursor!])}>More sessions</Button>}
-      </div>
       {!sessions.loading && !sessions.error && !matches.length && (
         <Blank
           title={
@@ -488,13 +478,8 @@ function InvestigationView({
   const [title, setTitle] = useState(
     savedView?.title ?? `Session ${short(reference.session_id)}`,
   );
-  const [turnCursors, setTurnCursors] = useState<string[]>([]);
   const overview = useCore<SessionOverviewResponse>("session.overview", {
     session_id: reference.session_id,
-    limit: 5,
-    ...(turnCursors.length
-      ? { cursor: turnCursors.at(-1) }
-      : {}),
   });
   const summary = useCore<SessionSummaryResponse>("session.summary", {
     session_id: reference.session_id,
@@ -502,7 +487,6 @@ function InvestigationView({
   });
   const brief = summary.data?.result;
   const overviewTurns = overview.data?.result.turns ?? [];
-  const nextTurnCursor = overview.data?.result.page.next_cursor;
   async function save() {
     setSaveState("Saving…");
     try {
@@ -528,7 +512,7 @@ function InvestigationView({
         </a>
         <div className="section-heading">
           <h1>Investigation</h1>
-          <Badge variant="outline">Live retained evidence</Badge>
+          <Badge variant="outline">Live local evidence</Badge>
         </div>
         <code className="session-id">{reference.session_id}</code>
         <div className="save-toolbar">
@@ -586,9 +570,6 @@ function InvestigationView({
                     {brief.latest_turn_status ?? "Status unavailable"}
                   </Badge>
                   <Badge variant="outline">{brief.coverage.retention}</Badge>
-                  <Badge variant="outline">
-                    {brief.coverage.measurement} measurements
-                  </Badge>
                 </div>
                 <p className="objective">
                   {brief.objective?.text ??
@@ -668,14 +649,10 @@ function InvestigationView({
             <div className="section-heading">
               <h2>Chronology</h2>
               <span className="small muted">
-                Up to 5 turns ·{" "}
-                {turnCursors.length
-                  ? `history page ${turnCursors.length + 1}`
-                  : "most recent"}
+                {overviewTurns.length} turns · source order
               </span>
             </div>
             <ErrorNotice message={overview.error} />
-            {overview.error && <a href={referenceLink({ session_id: reference.session_id })} onClick={() => setTurnCursors([])}>Open latest available view</a>}
             {overview.loading && <Loading />}
             {overview.data?.result.sessions.map((session, i) => (
               <div key={string(session.session_id) || i}>
@@ -728,28 +705,8 @@ function InvestigationView({
                 ))}
               </div>
             ))}
-            {overview.data && (
-              <div className="flex gap-2">
-                {turnCursors.length > 0 && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setTurnCursors((cursors) => cursors.slice(0, -1))}
-                  >
-                    Newer turns
-                  </Button>
-                )}
-                {nextTurnCursor && (
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      setTurnCursors((cursors) => [...cursors, nextTurnCursor])
-                    }
-                  >
-                    Older turns
-                  </Button>
-                )}
-                {!overviewTurns.length && <p className="muted small">No turns in this window.</p>}
-              </div>
+            {overview.data && !overviewTurns.length && (
+              <p className="muted small">No turns in this session.</p>
             )}
           </section>
           <Items
@@ -765,7 +722,7 @@ function InvestigationView({
 
 function Items({ reference }: { reference: CanonicalReference }) {
   const [items, setItems] = useState<CanonicalItemRecord[]>([]);
-  const [cursor, setCursor] = useState<string | null | undefined>();
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const pending = useRef<AbortController | null>(null);
@@ -783,15 +740,13 @@ function Items({ reference }: { reference: CanonicalReference }) {
           params: {
             session_id: reference.session_id,
             ...(reference.turn_id ? { turn_id: reference.turn_id } : {}),
-            limit: 20,
-            ...(cursor ? { cursor } : {}),
           },
         },
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      setItems((previous) => [...previous, ...(data.result.items ?? [])]);
-      setCursor(data.result.next_cursor ?? null);
+      setItems(data.result.items ?? []);
+      setLoaded(true);
     } catch (error) {
       if (!controller.signal.aborted) setError(String(error));
     } finally {
@@ -808,7 +763,7 @@ function Items({ reference }: { reference: CanonicalReference }) {
         </span>
       </div>
       <p className="small muted">
-        Read canonical metadata first. Open an item to inspect its retained evidence.
+        Read canonical metadata first. Open an item to inspect its full evidence.
       </p>
       <ErrorNotice message={error} />
       {items.map((item) => (
@@ -831,16 +786,12 @@ function Items({ reference }: { reference: CanonicalReference }) {
           </p>
         </article>
       ))}
-      {cursor !== null && (
+      {!loaded && (
         <Button variant="outline" disabled={loading} onClick={load}>
-          {loading
-            ? "Loading items…"
-            : cursor
-              ? "Load next 20 items"
-              : "Load canonical items"}
+          {loading ? "Loading items…" : "Load canonical items"}
         </Button>
       )}
-      {cursor === null && <p className="muted small">End of scoped items.</p>}
+      {loaded && <p className="muted small">All scoped items loaded.</p>}
     </section>
   );
 }

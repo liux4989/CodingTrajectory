@@ -6,7 +6,6 @@ socket connection attempts. No credential profiles, remote stubs or unit tests.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
@@ -20,7 +19,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-META = {"source": "local", "freshness": "live", "content_scope": "retained"}
 
 
 def qualify() -> None:
@@ -71,7 +69,7 @@ def qualify() -> None:
         reply = runtime.execute(request(method, **params))
         assert filesystem_state() == before, "Core read changed the filesystem"
         assert reply["ok"] is True, reply
-        assert reply["meta"] == META, reply
+        assert "meta" not in reply, reply
         assert reply["error"] is None
         assert reply["availability"] == {"state": "complete", "missing": []}
         return reply["result"]
@@ -94,92 +92,64 @@ def qualify() -> None:
         )
         return reply
 
-    for source in ("local", "auto"):
-        with ServiceRuntime(
-            global_scope=True, current_dir=logs, source=source
-        ) as runtime:
-            assert success(runtime, "project.list")["items"]
-            empty = success(runtime, "project.sessions", project_name="absent-project")
-            assert empty["items"] == [] and empty["total"] == 0
-            overview = success(runtime, "session.overview", session_id=parent[2:])
-            assert overview["root_session_id"] == parent[2:]
-            first = success(runtime, "session.items", session_id=parent[2:], limit=1)
-            assert first["next_cursor"]
-            continuation = success(
-                runtime,
-                "session.items",
-                session_id=parent[2:],
-                limit=2,
-                cursor=first["next_cursor"],
-            )
-            assert first["items"][0]["item_id"] not in {
-                item["item_id"] for item in continuation["items"]
-            }
-            error(
-                runtime,
-                request(
-                    "session.overview",
-                    session_id="00000000-0000-4000-8000-000000000099",
-                ),
-                "resource_not_found",
-            )
-            error(runtime, request("session.overview"), "invalid_request")
-            error(
-                runtime,
-                request("session.items", session_id=parent[2:], cursor="malformed"),
-                "invalid_cursor",
-            )
-            error(
-                runtime,
-                request(
-                    "session.items", session_id=child[2:], cursor=first["next_cursor"]
-                ),
-                "invalid_cursor",
-            )
-            version = service_contract("session.items").version
-            error(
-                runtime,
-                {
-                    **request("session.items", session_id=parent[2:]),
-                    "method_version": version + 1,
-                },
-                "unsupported_version",
-            )
-            error(
-                runtime,
-                {
-                    **request("session.items", session_id=parent[2:]),
-                    "protocol": "ct.api.retired",
-                },
-                "unsupported_protocol",
-            )
-            payload = json.loads(
-                base64.urlsafe_b64decode(
-                    first["next_cursor"] + "=" * (-len(first["next_cursor"]) % 4)
-                )
-            )
-            payload["version"] = version + 1
-            stale_cursor = (
-                base64.urlsafe_b64encode(
-                    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-                )
-                .decode()
-                .rstrip("=")
-            )
-            error(
-                runtime,
-                request("session.items", session_id=parent[2:], cursor=stale_cursor),
-                "invalid_cursor",
-            )
-            error(runtime, request("retired.method"), "unknown_method")
-
-    for source in ("shared", "remote"):
-        with ServiceRuntime(
-            global_scope=True, current_dir=logs, source=source
-        ) as runtime:
-            reply = error(runtime, request("project.list"), "method_unavailable")
-            if reply is not None:
-                check(reply["availability"]["state"] == "unsupported", str(reply))
+    with ServiceRuntime(global_scope=True, current_dir=logs) as runtime:
+        assert success(runtime, "project.list")["items"]
+        empty = success(runtime, "project.sessions", project_name="absent-project")
+        assert empty["items"] == [] and empty["total"] == 0
+        overview = success(runtime, "session.overview", session_id=parent[2:])
+        assert overview["root_session_id"] == parent[2:]
+        assert "page" not in overview
+        complete = success(runtime, "session.items", session_id=parent[2:])
+        assert complete["returned"] == complete["total"] == len(complete["items"])
+        assert "PRIVATE output" in json.dumps(complete), (
+            "local details lost canonical tool output"
+        )
+        first = success(runtime, "session.items", session_id=parent[2:], limit=1)
+        assert first["items"] == complete["items"][:1]
+        assert first["total"] == complete["total"] and first["returned"] == 1
+        assert "next_cursor" not in first
+        assert (
+            success(runtime, "session.items", session_id=parent[2:], limit=10001)[
+                "items"
+            ]
+            == complete["items"]
+        )
+        error(
+            runtime,
+            request(
+                "session.overview", session_id="00000000-0000-4000-8000-000000000099"
+            ),
+            "resource_not_found",
+        )
+        error(runtime, request("session.overview"), "invalid_request")
+        error(
+            runtime,
+            request("session.items", session_id=parent[2:], cursor="retired"),
+            "invalid_request",
+        )
+        error(
+            runtime,
+            request("session.items", session_id=parent[2:], limit=0),
+            "invalid_request",
+        )
+        version = service_contract("session.items").version
+        error(
+            runtime,
+            {
+                **request("session.items", session_id=parent[2:]),
+                "method_version": version - 1,
+            },
+            "unsupported_version",
+        )
+        error(
+            runtime,
+            {
+                **request("session.items", session_id=parent[2:]),
+                "protocol": "ct.api.v1",
+            },
+            "unsupported_protocol",
+        )
+        error(runtime, request("retired.method"), "unknown_method")
 
     # Instrument canonical source loading in this qualification run, rather
     # than maintaining production counters or a persisted graph store.
@@ -210,7 +180,7 @@ def qualify() -> None:
     ):
         batch = runtime.batch(requests)
         assert filesystem_state() == before, "Core batch changed the filesystem"
-        assert batch["meta"] == META
+        assert "meta" not in batch
         assert [item["ok"] for item in batch["items"]] == [
             True,
             True,
@@ -231,7 +201,6 @@ def qualify() -> None:
             len(ingested_paths) == 1 and set(ingested_paths[0]) == expected_paths,
             f"batch must ingest only the valid run union once: {ingested_paths}",
         )
-        assert "PRIVATE output" not in json.dumps(batch)
 
     # A long-lived runtime must discard request state, including after a batch.
     # Inventory must never invoke canonical ingestion.
@@ -281,34 +250,17 @@ sys.addaudithook(offline)
 sys.argv = ['ct', *sys.argv[1:]]
 runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
 """
-    for source in ("local", "auto", "shared", "remote"):
-        before = filesystem_state()
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                code,
-                "--source",
-                source,
-                "project",
-                "list",
-                "--output",
-                "json",
-            ],
-            cwd=project_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert filesystem_state() == before, "CLI query changed the filesystem"
-        if source in {"local", "auto"}:
-            assert result.returncode == 0, result.stderr
-            assert json.loads(result.stdout)["items"]
-        else:
-            assert result.returncode != 0, result.stdout
-            assert json.loads(result.stderr)["error"]["code"] == "method_unavailable", (
-                result.stderr
-            )
+    before = filesystem_state()
+    result = subprocess.run(
+        [sys.executable, "-c", code, "project", "list", "--output", "json"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert filesystem_state() == before, "CLI query changed the filesystem"
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["items"]
 
     # Inventory must reject metadata-only sources without rejecting runtime-only
     # sessions that canonical ingestion accepts. Compare both directions, not
@@ -740,7 +692,7 @@ runpy.run_module('coding_trajectory_cli.cli', run_name='__main__')
     assert not (Path.home() / ".coding-trajectory").exists()
     assert not failures, "local-only qualification failures:\n" + "\n".join(failures)
     print(
-        "PASS local-only: offline filesystem/CLI/runtime, local/auto, unavailable shared/remote, empty filters, typed errors, cursor/version binding, isolated batch union, no filesystem writes"
+        "PASS local-only: offline filesystem/CLI/runtime, complete reads, optional limits, empty filters, typed errors, retired protocol/parameter rejection, isolated batch union, no filesystem writes"
     )
 
 
@@ -798,19 +750,10 @@ def qualify_living() -> None:
             assert not reply["ok"] and reply["error"]["code"] == code, reply
 
         def complete(method, field, **params):
-            result = read(method, limit=1, **params)
-            rows = list(result[field])
-            cursor = result["next_cursor"]
-            cursors = set()
-            while cursor:
-                assert cursor not in cursors, "living pagination did not advance"
-                cursors.add(cursor)
-                page = read(method, limit=2, cursor=cursor, **params)
-                assert page["returned"] == len(page[field])
-                rows.extend(page[field])
-                cursor = page["next_cursor"]
-            assert len(rows) == result["total"]
-            return rows
+            result = read(method, **params)
+            assert result["returned"] == len(result[field]) == result["total"]
+            assert "next_cursor" not in result
+            return result[field]
 
         # Header-level inventory must not invoke transcript ingestion at all.
         with patch.object(
@@ -846,19 +789,16 @@ def qualify_living() -> None:
             assert not read("living.sessions", project_name="absent-project")["items"]
 
         first = read("living.sessions", limit=1)
-        rejected(
-            "living.sessions",
-            "invalid_cursor",
-            root_session_id=parent[2:],
-            cursor=first["next_cursor"],
-        )
+        assert first["items"] == initial[:1]
+        rejected("living.sessions", "invalid_request", cursor="retired")
         rejected(
             "living.sessions",
             "invalid_request",
             session_id=child[2:],
             project_name="amp-example",
         )
-        rejected("living.sessions", "invalid_request", horizon_days=31)
+        assert read("living.sessions", horizon_days=31)["total"] == 3
+        rejected("living.sessions", "invalid_request", horizon_days=0)
         rejected("living.sessions", "invalid_request", after="retired")
         rejected("living.events", "invalid_request")
         rejected("living.events", "invalid_request", scope={})
@@ -869,23 +809,13 @@ def qualify_living() -> None:
         )
 
         scope = {"root_session_id": parent[2:]}
-        initial_events = complete(
-            "living.events", "resources", scope=scope, mode="details"
-        )
-        assert initial_events == complete(
-            "living.events", "resources", scope=scope, mode="details"
-        )
+        initial_events = complete("living.events", "resources", scope=scope)
+        assert initial_events == complete("living.events", "resources", scope=scope)
         assert all(row["digest"] == digest(row["resource"]) for row in initial_events)
         event_page = read("living.events", scope=scope, limit=1)
-        rejected(
-            "living.events",
-            "invalid_cursor",
-            scope={"session_id": child[2:]},
-            cursor=event_page["next_cursor"],
-        )
-        rejected(
-            "living.events", "invalid_cursor", scope=scope, cursor=first["next_cursor"]
-        )
+        assert event_page["resources"] == initial_events[:1]
+        rejected("living.events", "invalid_request", scope=scope, cursor="retired")
+        rejected("living.events", "invalid_request", scope=scope, mode="view")
 
         def append(event, second, **fields):
             with paths[parent[2:]].open("a") as stream:
@@ -914,7 +844,7 @@ def qualify_living() -> None:
         changed_sessions = complete("living.sessions", "items")
         assert changed_sessions[0]["digest"] != initial[0]["digest"]
         assert changed_sessions[1] == initial[1], "append changed an unrelated session"
-        pending = complete("living.events", "resources", scope=scope, mode="details")
+        pending = complete("living.events", "resources", scope=scope)
         tool = next(
             row for row in pending if row["resource"].get("operations") == ["read_file"]
         )
@@ -927,7 +857,7 @@ def qualify_living() -> None:
             status="done",
             output="",
         )
-        completed = complete("living.events", "resources", scope=scope, mode="details")
+        completed = complete("living.events", "resources", scope=scope)
         done = next(row for row in completed if row["path"] == tool["path"])
         assert done["resource"]["status"] == "completed"
         assert done["digest"] != tool["digest"]
@@ -935,11 +865,10 @@ def qualify_living() -> None:
         view = complete("living.events", "resources", scope=scope)
         compact = next(row for row in view if row["path"] == done["path"])
         assert compact["digest"] == done["digest"]
-        # Raw inputs are not retained. Exercise view truncation using a public
-        # tool name below retention's 512-character cap, above view's 500 cap.
-        name = "qualified_tool_" + "α" * 490
+        # Full local values remain inline beyond former retention/view caps.
+        name = "qualified_tool_" + "α" * 900
         append("tool.call", 14, tool_use_id="view-boundary", tool_name=name, input={})
-        details = complete("living.events", "resources", scope=scope, mode="details")
+        details = complete("living.events", "resources", scope=scope)
         large = next(
             row for row in details if row["resource"].get("operations") == [name]
         )
@@ -949,9 +878,11 @@ def qualify_living() -> None:
             if row["path"] == large["path"]
         )
         assert large["resource"]["shape"]["tool_name"] == name
-        assert compact["resource"]["shape"]["tool_name"]["$type"] == "content_ref"
+        assert compact["resource"]["shape"]["tool_name"] == name
         assert compact["digest"] == large["digest"] == digest(large["resource"])
-        assert "PRIVATE output" not in json.dumps(completed)
+        assert "PRIVATE output" in json.dumps(completed), (
+            "living details lost canonical output"
+        )
         for field in ("item_id", "turn_id"):
             rejected(
                 "living.events", "invalid_request", scope={field: done["path"][field]}
@@ -960,7 +891,6 @@ def qualify_living() -> None:
                 "living.events",
                 "resources",
                 scope={**scope, field: done["path"][field]},
-                mode="details",
             )
             assert selected and all(
                 row["path"][field] == done["path"][field] for row in selected
@@ -979,7 +909,6 @@ def qualify_living() -> None:
             "living.events",
             "resources",
             scope={"root_session_id": old[2:]},
-            mode="details",
         )
         other_item = next(row for row in other_run if row["resource_kind"] == "item")
         with patch.object(store_module, "_ingest_sessions", observe_ingestion):
@@ -1010,6 +939,112 @@ def qualify_living() -> None:
             {str(paths[sid].resolve()) for sid in (parent[2:], child[2:])}
         ], ingested
 
+        # Exercise the local read pipeline beyond every former per-turn cap.
+        full_path = str(Path.home() / "outside-session" / ("α" * 600))
+        for ordinal in range(105):
+            name = f"large_tool_{ordinal}"
+            append(
+                "tool.call",
+                20,
+                tool_use_id=name,
+                tool_name=name,
+                input={"path": full_path},
+            )
+            append(
+                "tool.result",
+                21,
+                tool_use_id=name,
+                tool_name=name,
+                status="done",
+                output=f"large-result-{ordinal}",
+            )
+        overview = read("session.overview", session_id=parent[2:])
+        large_turn = next(
+            turn for turn in overview["turns"] if len(turn["activities"]) >= 105
+        )
+        assert len(large_turn["refs"]["item_ids"]) > 100
+        assert len(large_turn["execution_units"]) > 100
+        assert "execution_units" not in overview, "overview duplicated execution layers"
+        items = read("session.items", session_id=parent[2:])
+        assert items["returned"] == items["total"] == len(items["items"])
+        selected = [
+            item
+            for item in items["items"]
+            if isinstance(item.get("detail", {}).get("input"), dict)
+            and item["detail"]["input"].get("path") == full_path
+        ]
+        assert len(selected) == 105, (
+            "canonical local input/path was capped",
+            len(selected),
+            items["items"][-1].get("detail"),
+        )
+        assert selected[-1]["detail"]["output"] == "large-result-104"
+        search = read(
+            "session.search",
+            session_id=parent[2:],
+            query="large-result",
+            kinds=["tool_result"],
+        )
+        assert search["total"] == len(search["matches"]) == 105
+        selected_refs = read(
+            "session.items",
+            session_id=parent[2:],
+            item_ids=[item["item_id"] for item in selected],
+        )
+        assert selected_refs["returned"] == 105, (
+            "identifier filter kept the former 100-item cap"
+        )
+        long_named_events = read(
+            "session.events",
+            session_id=parent[2:],
+            tool_name="qualified_tool_" + "α" * 900,
+        )
+        assert long_named_events["returned"] > 0, (
+            "full preserved tool name cannot be queried"
+        )
+
+        # Default overview returns more than the former 200-turn maximum.
+        append("agent.end", 22, message_id="u2", status="done")
+        template = fixtures["journal"](parent, parent=False)[1:]
+        from datetime import UTC, datetime, timedelta
+
+        with paths[parent[2:]].open("a") as stream:
+            for ordinal in range(205):
+                for position, original in enumerate(template):
+                    record = json.loads(json.dumps(original))
+                    record["captured_at"] = (
+                        datetime(2026, 9, 5, tzinfo=UTC)
+                        + timedelta(seconds=60 + ordinal * 20 + position)
+                    ).isoformat()
+                    if record.get("message_id"):
+                        record["message_id"] = f"many_{ordinal}_{record['message_id']}"
+                    if isinstance(record.get("message"), dict):
+                        record["message"]["id"] = (
+                            f"many_{ordinal}_{record['message']['id']}"
+                        )
+                    stream.write(json.dumps(record) + "\n")
+        many = read("session.overview", session_id=parent[2:])
+        assert len(many["turns"]) > 200
+        assert not many["coverage"]["selection_trimmed"]
+        one = read("session.overview", session_id=parent[2:], limit=1)
+        assert one["turns"] == many["turns"][-1:]
+        assert one["coverage"]["selection_trimmed"]
+        beyond = read("session.overview", session_id=parent[2:], limit=201)
+        assert len(beyond["turns"]) == 201
+        assert beyond["turns"] == many["turns"][-201:]
+        upper_scope = read(
+            "session.items",
+            session_id=parent[2:],
+            turn_id=large_turn["turn_id"].upper(),
+        )
+        canonical_scope = read(
+            "session.items", session_id=parent[2:], turn_id=large_turn["turn_id"]
+        )
+        assert upper_scope == canonical_scope and upper_scope["returned"] > 100
+        print(
+            "PASS large local reads: >200 turns, >100 activities/references/units/filter IDs, full paths and tool names, complete search, deterministic selection"
+        )
+
         # Let only the parent's source cross the real 300-second boundary.
         # No log append, timestamp rewrite, or fake per-run liveness is involved.
         expires = time.time() + 5
@@ -1038,7 +1073,7 @@ def qualify_living() -> None:
         assert not any(row["resource_kind"] == "session_edge" for row in remaining)
     assert not (Path.home() / ".coding-trajectory").exists()
     print(
-        "PASS stateless living: stable wire digests, header-only inventory, horizon, live paging/scopes, empty-output tool completion, retained views, directly routed narrowing, mixed batch, own-source expiry, removals, no writes"
+        "PASS stateless living: stable wire digests, header-only inventory, horizon, complete scoped reads, empty-output tool completion, full inline content, directly routed narrowing, mixed batch, own-source expiry, removals, no writes"
     )
 
 

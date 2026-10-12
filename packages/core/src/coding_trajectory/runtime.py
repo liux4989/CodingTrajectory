@@ -1,4 +1,4 @@
-"""Local execution of versioned queries over lazily retained canonical runs."""
+"""Local execution of versioned queries over selected canonical runs."""
 
 from __future__ import annotations
 
@@ -8,20 +8,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol, Self
 
-from pydantic import ValidationError
-
 from coding_trajectory.contracts import SERVICE_CONTRACTS, service_contract
-from coding_trajectory.contracts.envelope import (
-    API_PROTOCOL,
-    ApiTransportMetadata,
+from coding_trajectory.contracts.envelope import API_PROTOCOL
+from coding_trajectory.query import (
+    DocumentError,
+    DocumentStore,
+    LocalQueryError,
+    ResourceNotFoundError,
 )
-from coding_trajectory.query import DocumentError, DocumentStore, ResourceNotFoundError
 from coding_trajectory.service import IndexCache, dispatch, resolve_store
-from coding_trajectory.service.pagination import LocalQueryError
-
-# One capability declaration, shared by explicit source selection and callers.
-# Remote adapters are intentionally unavailable for this contract revision.
-METHOD_SOURCES = {method: frozenset({"local"}) for method in SERVICE_CONTRACTS}
 
 
 class LocalSourceUnavailableError(DocumentError):
@@ -96,12 +91,9 @@ def default_plugin_client() -> PluginApiClient:
 class ServiceRuntime:
     """Refresh requested dependencies, then compute only requested methods."""
 
-    def __init__(
-        self, *, global_scope: bool, current_dir: Path, source: str = "local"
-    ) -> None:
+    def __init__(self, *, global_scope: bool, current_dir: Path) -> None:
         self.global_scope = global_scope
         self.current_dir = current_dir
-        self.source = "local" if source == "auto" else source
         self.cache = IndexCache()
 
     def __enter__(self) -> Self:
@@ -125,14 +117,7 @@ class ServiceRuntime:
 
     def _validate(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         contract = service_contract(method)
-        if self.source not in METHOD_SOURCES[method]:
-            raise LocalQueryError("method_unavailable", 404)
-        try:
-            return contract.validate_request(params)
-        except ValidationError as exc:
-            if any(error["loc"] == ("cursor",) for error in exc.errors()):
-                raise LocalQueryError("invalid_cursor") from exc
-            raise
+        return contract.validate_request(params)
 
     def call(self, method: str, params: dict[str, Any]) -> Any:
         if self.cache._batch_mode:
@@ -166,9 +151,6 @@ class ServiceRuntime:
             cache=self.cache,
         )
 
-    def transport_metadata(self) -> dict[str, Any]:
-        return ApiTransportMetadata().model_dump()
-
     def execute(self, request: dict[str, Any]) -> dict[str, Any]:
         method = request.get("method")
         response: dict[str, Any] = {
@@ -195,7 +177,7 @@ class ServiceRuntime:
                 request.get("method_version", response["method_version"])
                 != response["method_version"]
             ):
-                raise LocalQueryError("unsupported_version", 409)
+                raise LocalQueryError("unsupported_version")
             result = self.call(method, params)
         except (KeyError, ValueError, DocumentError, ResourceNotFoundError) as exc:
             code = getattr(exc, "code", None) or (
@@ -215,7 +197,6 @@ class ServiceRuntime:
             ok=True,
             result=result,
             availability={"state": "complete", "missing": []},
-            meta=self.transport_metadata(),
         )
         return response
 
@@ -274,7 +255,6 @@ class ServiceRuntime:
             self.prepare_batch(requests)
             return {
                 "items": [self.execute(request) for request in requests],
-                "meta": self.transport_metadata(),
             }
         finally:
             self.cache._batch_mode = False

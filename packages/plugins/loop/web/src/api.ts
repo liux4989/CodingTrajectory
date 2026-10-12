@@ -3,7 +3,6 @@ import type { CanonicalReference } from "./generated/investigation";
 
 export type CoreResult<T> = {
   result: T;
-  meta?: { source: "local"; freshness: "live"; content_scope: "retained" };
 };
 
 export async function request<T>(

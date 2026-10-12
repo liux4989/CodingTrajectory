@@ -17,7 +17,7 @@ from coding_trajectory_cli._shared import (
 def _project_list_params(args: argparse.Namespace) -> dict[str, Any]:
     params = {
         key: getattr(args, key)
-        for key in ("cursor", "limit", "modified_since")
+        for key in ("limit", "modified_since")
         if getattr(args, key, None) is not None
     }
     agent_vendor = getattr(args, "agent_vendor", None)
@@ -53,13 +53,6 @@ def _render_project_list_markdown(payload: dict[str, Any]) -> str:
         lines.append(
             f"| `{item['display_name']}` | `{item['project_id']}` | {vendors} | `{path}` |"
         )
-    if payload.get("next_cursor"):
-        lines.extend(
-            [
-                "",
-                f"Next page: repeat the same scope and filters with `--cursor {payload['next_cursor']}`.",
-            ]
-        )
     return "\n".join(lines)
 
 
@@ -75,13 +68,6 @@ def _render_project_sessions_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- `{session_id}` {title} [{vendors}]")
     if len(lines) == 2:
         lines.append("No sessions found.")
-    if payload.get("next_cursor"):
-        lines.extend(
-            [
-                "",
-                f"Next page: repeat the same scope and filters with `--cursor {payload['next_cursor']}`.",
-            ]
-        )
     return "\n".join(lines)
 
 
@@ -129,15 +115,13 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     for parser in (project_list, project_sessions):
         parser.add_argument(
-            "--cursor",
-            help="Query-bound next_cursor for live pages; keep scope and filters unchanged. Page size may change.",
-        )
-        parser.add_argument(
-            "--limit", type=positive_int, help="Requested page count, up to 200."
+            "--limit",
+            type=positive_int,
+            help="Select at most N entries; all entries by default.",
         )
         parser.add_argument(
             "--modified-since",
-            help="Absolute ISO timestamp; reuse it unchanged across pages.",
+            help="Include entries modified after this absolute ISO timestamp.",
         )
     add_agent_vendor_flag(project_sessions)
     add_output_flags(project_sessions)

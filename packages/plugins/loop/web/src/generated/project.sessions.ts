@@ -11,13 +11,11 @@ export type SessionIds = string[];
 export type Title = string | null;
 export type Vendors = string[];
 export type Items = SessionGraphSummary[];
-export type NextCursor = string | null;
 export type Returned = number;
 export type Total = number;
 
 export interface ProjectSessionsResponse {
   items: Items;
-  next_cursor?: NextCursor;
   returned: Returned;
   total: Total;
   [k: string]: unknown;

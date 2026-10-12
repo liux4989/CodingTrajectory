@@ -1,10 +1,9 @@
-"""Body-free canonical retention, independent of publication and transport.
+"""Normalize complete local canonical content and independent evidence facts.
 
-Measure transient content before dropping it. Only bounded narrative previews,
-credential-redacted tool descriptions and allowlisted operational evidence
-survive. This is private workspace retention, not a public-sharing sanitizer.
-The legacy ``published_fact_projection`` marker means bodies are unavailable;
-keep it until all semantic consumers can distinguish retained from raw items.
+Vendor envelopes stay transient. Canonical text, tool arguments/results, paths
+and native references remain available for local detail and search. Short,
+sanitized summaries are separate display projections; measurements are derived
+before projection and keep their original accounting semantics.
 """
 
 from __future__ import annotations
@@ -12,8 +11,8 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from copy import deepcopy
 from datetime import datetime
-from pathlib import PurePath
 from typing import Annotated, Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -44,10 +43,6 @@ from coding_trajectory.ingestion.indexes import (
 )
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
-    AmpExtensions,
-    CanonicalSpawnOrigin,
-    ClaudeCodeExtensions,
-    CodexExtensions,
     CommandExecutionItem,
     ContextSourceMeasurement,
     ContextUsageObservation,
@@ -56,30 +51,47 @@ from coding_trajectory.ingestion.models import (
     FileChangeItem,
     Item,
     ItemMeasurements,
-    PiExtensions,
     PlanItem,
     ReasoningItem,
-    RuntimeObservation,
     Session,
     SessionEdge,
     SessionGraph,
     SessionGraphSummary,
     SessionMeasurements,
-    TeamMemberState,
-    TeamTaskState,
     TeamTurnState,
     ToolCallItem,
     Turn,
-    Vendor,
     VendorExtensions,
 )
 from coding_trajectory.token_counter import counter_for_session_graph, scoped_counter
 
 _REQUEST_NAMESPACE = uuid5(NAMESPACE_URL, "codingtrajectory:chronicle-request")
 _STATUS_TOKEN = re.compile(r"^[a-z][a-z0-9_\-]{0,63}$")
-_HOST_PATH = re.compile(
-    r"^(?:~/|/Users/|/home/|/root/|/private/|/tmp/|/var/|/Volumes/|"
-    r"/workspace/|/workspaces/|/mnt/|/srv/|/opt/|[A-Za-z]:[\\/])"
+# Adapter-normalized content and operational fields, never vendor envelopes.
+_CANONICAL_EVENT_FIELDS = frozenset(
+    {
+        "text",
+        "thinking",
+        "message",
+        "content",
+        "team_request_summary",
+        "preview_truncated",
+        "tool_call_id",
+        "tool_name",
+        "name",
+        "input",
+        "output",
+        "command",
+        "status",
+        "state",
+        "exit_code",
+        "child_session_id",
+        "thread_id",
+        "model",
+        "provider",
+        "reasoning_effort",
+        CONTENT_SIZE_MEASUREMENT_KEY,
+    }
 )
 _CONTEXT_LABELS = {
     "base_system": {"Base instructions", "System prompt & tools"},
@@ -106,7 +118,6 @@ _LIFECYCLES = {
     "canceled": "interrupted",
     "aborted": "interrupted",
 }
-_BoundedString = Annotated[str, Field(max_length=512)]
 
 
 class RetainedOutputEvidence(BaseModel):
@@ -117,24 +128,22 @@ class RetainedOutputEvidence(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-    processor: _BoundedString
+    processor: str
     processor_version: int = Field(default=1, ge=1)
     lifecycle: Literal["completed", "failed", "interrupted", "unknown"]
-    outcome: _BoundedString | None = None
+    outcome: str | None = None
     exit_code: int | None = None
     duration_ms: int | None = Field(default=None, ge=0)
     output_chars: int = Field(default=0, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     token_method: Literal["provider_reported", "tokenizer_estimate", "not_measured"]
-    tokenizer: _BoundedString | None = None
-    provider: _BoundedString | None = None
+    tokenizer: str | None = None
+    provider: str | None = None
     truncated: bool = False
     original_tokens: int | None = Field(default=None, ge=0)
-    facts: dict[_BoundedString, bool | int | _BoundedString] | None = Field(
-        default=None, max_length=8
-    )
+    facts: dict[str, bool | int | str] | None = Field(default=None)
     preview: Annotated[str, Field(min_length=1, max_length=280)] | None = None
-    source_event_ids: list[UUID] = Field(default_factory=list, max_length=64)
+    source_event_ids: list[UUID] = Field(default_factory=list)
     retention: Literal["not_applicable", "not_retained", "preview", "complete"]
     searchable: Literal["complete", "preview", "facts_only", "none"]
 
@@ -152,7 +161,7 @@ def output_evidence_from_item(item: Item) -> RetainedOutputEvidence | None:
 
 
 def retain_session_graph(graph: SessionGraph) -> SessionGraph:
-    """Directly normalize a transient graph into body-free canonical objects.
+    """Normalize a transient graph into complete local canonical objects.
 
     Source event, session, edge and observation order is retained. Turn/item
     sequence ordering matches the former retained graph's canonical ordering.
@@ -177,15 +186,6 @@ def retain_session_graph(graph: SessionGraph) -> SessionGraph:
             for session in graph.sessions
         ]
     project = graph.project_identifier
-    if project:
-        path = PurePath(project.strip().replace("\\", "/"))
-        project = _bounded(
-            path.name
-            if path.is_absolute() or _HOST_PATH.match(project.strip())
-            else project
-        )
-    else:
-        project = None
     return SessionGraph(
         root_session_id=graph.root_session_id,
         project_identifier=project,
@@ -253,7 +253,7 @@ def _retain_session(
     for turn in sorted(session.turns, key=lambda value: value.sequence):
         request = extract_user_request(index, turn, session=session)
         request_id = None
-        if request and (preview := _preview(request.get("content"))) is not None:
+        if request and (content := request.get("content")):
             request_id = turn.user_request_event_id or uuid5(
                 _REQUEST_NAMESPACE, str(turn.turn_id)
             )
@@ -265,14 +265,15 @@ def _retain_session(
                 else "text"
             )
             text = (
-                f"<command-name>{preview}</command-name>"
+                f"<command-name>{content}</command-name>"
                 if request.get("type") == "command"
-                else preview
+                else content
             )
             payload = {
                 key: text,
-                "preview_truncated": len(request["content"].strip()) > 280
-                or bool(source_event and source_event.payload.get("preview_truncated")),
+                "preview_truncated": bool(
+                    source_event and source_event.payload.get("preview_truncated")
+                ),
             }
             if size is not None:
                 payload[CONTENT_SIZE_MEASUREMENT_KEY] = {
@@ -335,9 +336,34 @@ def _retain_session(
                 ],
             )
         )
+    thinking_by_event = {}
+    for turn in session.turns:
+        for item in turn.items:
+            thinking = item.vendor_data.get("thinking")
+            if isinstance(thinking, list) and all(
+                isinstance(value, str) for value in thinking
+            ):
+                for event_id in item.event_ids:
+                    thinking_by_event[event_id] = list(thinking)
     events = []
     for event in session.events:
-        payload = {}
+        payload = {
+            key: deepcopy(value)
+            for key, value in event.payload.items()
+            if key in _CANONICAL_EVENT_FIELDS
+        }
+        # Amp normalizes explicit thinking blocks into a vendor_data list;
+        # retain that known content field without retaining the vendor envelope.
+        vendor_data = event.payload.get("vendor_data")
+        thinking = (
+            vendor_data.get("thinking") if isinstance(vendor_data, dict) else None
+        )
+        if event.event_id in thinking_by_event:
+            payload["thinking"] = thinking_by_event[event.event_id]
+        elif isinstance(thinking, list) and all(
+            isinstance(value, str) for value in thinking
+        ):
+            payload["thinking"] = list(thinking)
         for key in ("status", "state"):
             value = event.payload.get(key)
             if isinstance(value, str) and _STATUS_TOKEN.fullmatch(value):
@@ -350,7 +376,8 @@ def _retain_session(
                 timestamp=event.timestamp,
                 type=event.type,
                 vendor_source=session.vendor,
-                payload=requests.get(event.event_id, payload).copy(),
+                actor=event.actor,
+                payload={**payload, **requests.get(event.event_id, {})},
             )
         )
     if not session.events:
@@ -368,20 +395,6 @@ def _retain_session(
                         payload=payload,
                     )
                 )
-    runtime_fields = {
-        "timestamp",
-        "kind",
-        "duration_ms",
-        "time_to_first_token_ms",
-        "num_turns",
-        "pre_tokens",
-        "post_tokens",
-        "cumulative_dropped_tokens",
-        "effort_from",
-        "effort_to",
-        "comp_hash",
-        "runtime_config_hashes",
-    }
     return Session(
         session_id=session.session_id,
         vendor=session.vendor,
@@ -396,9 +409,14 @@ def _retain_session(
         events=events,
         turns=turns,
         context_usage=usage,
+        context_sources=[
+            entry.model_copy(deep=True) for entry in session.context_sources
+        ],
+        compaction_history=[
+            entry.model_copy(deep=True) for entry in session.compaction_history
+        ],
         runtime_observations=[
-            RuntimeObservation(**entry.model_dump(include=runtime_fields))
-            for entry in session.runtime_observations
+            entry.model_copy(deep=True) for entry in session.runtime_observations
         ],
         measurements=SessionMeasurements(
             context_sources=sources,
@@ -427,8 +445,8 @@ def _retain_item(
     reconstructed = item.vendor_data.get("published_fact_projection") is True
     retained = item.vendor_data.get("chronicle_semantics")
     retained = retained if isinstance(retained, dict) else {}
-    verification = _bounded(retained.get("verification_kind"))
-    resolution = _bounded(retained.get("resolution_key"))
+    verification = _canonical_string(retained.get("verification_kind"))
+    resolution = _canonical_string(retained.get("resolution_key"))
     if not reconstructed:
         if isinstance(item, CommandExecutionItem):
             verification = verification or classify_verification_command(item.command)
@@ -445,7 +463,7 @@ def _retain_item(
             ("verification_kind", verification),
             ("resolution_key", resolution),
         )
-        if (value := _bounded(raw)) is not None
+        if (value := _canonical_string(raw)) is not None
     }
     if isinstance(item, PlanItem):
         actions = (
@@ -457,10 +475,9 @@ def _retain_item(
             dict.fromkeys(
                 action
                 for raw in actions
-                if isinstance(raw, str)
-                and (action := _safe_detail_target(raw, cwd=session.cwd))
+                if isinstance(raw, str) and (action := raw.strip())
             )
-        )[:64]
+        )
     path = (
         _portable_path(item.path, session.cwd)
         if isinstance(item, FileChangeItem)
@@ -471,8 +488,12 @@ def _retain_item(
     )
     vendor_data: dict[str, Any] = {
         "chronicle_semantics": semantic,
-        "published_fact_projection": True,
     }
+    thinking = item.vendor_data.get("thinking")
+    if isinstance(thinking, list) and all(isinstance(value, str) for value in thinking):
+        vendor_data["thinking"] = list(thinking)
+    if reconstructed:
+        vendor_data["published_fact_projection"] = True
     if evidence is not None:
         vendor_data["chronicle_output_evidence"] = evidence.model_dump(
             mode="json", exclude_none=True
@@ -518,22 +539,36 @@ def _retain_item(
             tool_summary=summary,
         ),
     }
-    name = _bounded(getattr(item, "tool_name", None)) or (
+    name = _canonical_string(getattr(item, "tool_name", None)) or (
         summary["name"] if summary else None
     )
     if isinstance(item, AgentMessageItem):
-        return AgentMessageItem(**common)
+        return AgentMessageItem(**common, text=item.text)
     if isinstance(item, ReasoningItem):
-        return ReasoningItem(**common)
+        return ReasoningItem(**common, text=item.text)
+    tool_content = {
+        "tool_name": name,
+        "tool_call_id": getattr(item, "tool_call_id", None),
+        "output": deepcopy(getattr(item, "output", None)),
+    }
     if isinstance(item, CommandExecutionItem):
-        return CommandExecutionItem(**common, tool_name=name, exit_code=item.exit_code)
+        return CommandExecutionItem(
+            **common,
+            **tool_content,
+            command=deepcopy(item.command),
+            exit_code=item.exit_code,
+        )
     if isinstance(item, FileChangeItem):
         return FileChangeItem(
-            **common, tool_name=name, path=path, operation=_bounded(item.operation)
+            **common,
+            **tool_content,
+            path=path,
+            operation=item.operation,
+            input=deepcopy(item.input),
         )
     if isinstance(item, PlanItem):
-        return PlanItem(**common, tool_name=name)
-    return ToolCallItem(**common, tool_name=name)
+        return PlanItem(**common, **tool_content, input=deepcopy(item.input))
+    return ToolCallItem(**common, **tool_content, input=deepcopy(item.input))
 
 
 def _tool_summary(
@@ -545,7 +580,7 @@ def _tool_summary(
     ):
         return None
     raw = summarize_tool_call(item)
-    if not isinstance(raw, dict) or not (name := _bounded(raw.get("name"))):
+    if not isinstance(raw, dict) or not (name := _canonical_string(raw.get("name"))):
         return None
     summary: dict[str, Any] = {"name": name}
     for key in (
@@ -558,7 +593,7 @@ def _tool_summary(
         "classification",
         "detail_basis",
     ):
-        if (value := _bounded(raw.get(key))) is not None:
+        if (value := _canonical_string(raw.get(key))) is not None:
             summary[key] = value
     description = raw.get("description")
     if isinstance(description, str) and (
@@ -615,7 +650,7 @@ def _output_evidence(
     elif isinstance(item, FileChangeItem):
         processor = "ct.output_evidence.file_change.v1"
         if item.operation:
-            facts["operation"] = _bounded(item.operation) or "unknown"
+            facts["operation"] = _canonical_string(item.operation) or "unknown"
         if path:
             facts["path"] = path
     else:
@@ -634,7 +669,7 @@ def _output_evidence(
     return RetainedOutputEvidence(
         processor=processor,
         lifecycle=_LIFECYCLES.get(status or "", "unknown"),
-        outcome=_bounded((summary or {}).get("activity_outcome") or status),
+        outcome=_canonical_string((summary or {}).get("activity_outcome") or status),
         exit_code=getattr(item, "exit_code", None),
         duration_ms=duration,
         output_chars=measurements.output_chars,
@@ -645,119 +680,31 @@ def _output_evidence(
         truncated=measurements.output_truncated,
         original_tokens=measurements.output_original_tokens,
         facts=facts or None,
-        source_event_ids=list(item.event_ids)[:64],
+        source_event_ids=list(item.event_ids),
         retention="not_retained" if measured else "not_applicable",
         searchable="facts_only" if facts else "none",
     )
 
 
-def _retain_extensions(session: Session) -> VendorExtensions:
-    extensions = session.extensions
-    codex = extensions.codex if extensions else None
-    claude = extensions.claude_code if extensions else None
-    amp = extensions.amp if extensions else None
-    title = next(
-        (
-            getattr(value, "title", None)
-            for value in (codex, claude, extensions.pi if extensions else None, amp)
-            if value and getattr(value, "title", None)
-        ),
-        "",
+def _retain_extensions(session: Session) -> VendorExtensions | None:
+    extensions = (
+        session.extensions.model_copy(deep=True) if session.extensions else None
     )
-    title = _safe_detail_target(title, cwd=session.cwd)
-    existing = (
-        amp.canonical_spawn_origins
-        if amp
-        else codex.canonical_spawn_origins
-        if codex
-        else {}
-    )
-    origins = {
-        str(UUID(child)): CanonicalSpawnOrigin(
-            event_id=uuid5(
-                _REQUEST_NAMESPACE, f"spawn:{session.session_id}:{UUID(child)}"
-            ),
-            turn_id=origin.turn_id,
-            item_id=origin.item_id,
-            tool_name=_bounded(origin.tool_name),
-        )
-        for child, origin in sorted(
-            {**existing, **canonical_spawn_origins(session)}.items()
-        )
-    }
-    depth = (
-        codex.spawn_depth
-        if codex and codex.spawn_depth is not None
-        else claude.spawn_depth
-        if claude
-        else None
-    )
-    if session.vendor == Vendor.AMP:
-        return VendorExtensions(
-            amp=AmpExtensions(
-                thread_id=f"T-{session.session_id}",
-                title=title,
-                canonical_spawn_origins=origins,
-                spawn_links={
-                    child: str(origin.item_id)
-                    for child, origin in origins.items()
-                    if origin.item_id is not None
+    if extensions is not None:
+        target = extensions.amp or extensions.codex
+        if target is not None:
+            target.canonical_spawn_origins = {
+                **target.canonical_spawn_origins,
+                **{
+                    child: origin.model_copy(deep=True)
+                    for child, origin in canonical_spawn_origins(session).items()
                 },
-            )
-        )
-    if session.vendor == Vendor.CODEX_CLI:
-        return VendorExtensions(
-            codex=CodexExtensions(
-                title=title,
-                preview=_safe_detail_target(codex.preview or "", cwd=session.cwd)
-                if codex
-                else None,
-                agent_path=codex.agent_path if codex else None,
-                forked_from_id="chronicle" if codex and codex.forked_from_id else None,
-                spawn_parent_thread_id="chronicle"
-                if codex and codex.spawn_parent_thread_id
-                else None,
-                spawn_depth=depth,
-                multi_agent_version=_bounded(codex.multi_agent_version)
-                if codex
-                else None,
-                multi_agent_mode=_bounded(codex.multi_agent_mode) if codex else None,
-                canonical_spawn_origins=origins,
-            )
-        )
-    if session.vendor == Vendor.CLAUDE_CODE:
-        return VendorExtensions(
-            claude_code=ClaudeCodeExtensions(
-                title=title,
-                is_sidechain=bool(claude and claude.is_sidechain),
-                spawn_depth=depth,
-            )
-        )
-    return VendorExtensions(pi=PiExtensions(title=title))
+            }
+    return extensions
 
 
 def _retain_team_state(state: TeamTurnState | None) -> TeamTurnState | None:
-    if state is None or not (state.members or state.tasks):
-        return None
-    return TeamTurnState(
-        members=[
-            TeamMemberState(
-                member_id=_bounded(member.member_id) or "member",
-                session_id=member.session_id,
-                agent_type=_bounded(member.agent_type),
-            )
-            for member in state.members
-        ],
-        tasks=[
-            TeamTaskState(
-                task_id=_bounded(task.task_id) or "task",
-                status=_bounded(task.status),
-                member_id=_bounded(task.member_id),
-                blocked_by=[_bounded(value) or "task" for value in task.blocked_by],
-            )
-            for task in state.tasks
-        ],
-    )
+    return state.model_copy(deep=True) if state is not None else None
 
 
 def _retain_usage(observation: ContextUsageObservation) -> ContextUsageObservation:
@@ -811,7 +758,7 @@ def _usage(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _retain_edge(edge: SessionEdge) -> SessionEdge:
     name = (
-        _bounded(edge.metadata.get("tool_name"))
+        _canonical_string(edge.metadata.get("tool_name"))
         if isinstance(edge.metadata, dict)
         else None
     )
@@ -821,12 +768,8 @@ def _retain_edge(edge: SessionEdge) -> SessionEdge:
     )
 
 
-def _bounded(value: Any) -> str | None:
-    return (
-        (" ".join(value.split()).strip()[:512] or None)
-        if isinstance(value, str)
-        else None
-    )
+def _canonical_string(value: Any) -> str | None:
+    return (value.strip() or None) if isinstance(value, str) else None
 
 
 def _preview(value: Any) -> str | None:
@@ -834,20 +777,9 @@ def _preview(value: Any) -> str | None:
 
 
 def _portable_path(value: str | None, cwd: str | None = None) -> str | None:
-    if not value:
-        return None
-    normalized = value.strip().replace("\\", "/")
-    if cwd:
-        base = cwd.rstrip("/").replace("\\", "/")
-        if normalized == base:
-            return "."
-        if normalized.startswith(base + "/"):
-            normalized = normalized[len(base) + 1 :]
-    path = PurePath(normalized)
-    parts = [part for part in path.parts if part not in {"/", "..", "."}]
-    if path.is_absolute() or _HOST_PATH.match(value.strip()):
-        parts = parts[-1:]
-    return _bounded("/".join(parts))
+    # Canonical local paths retain their exact source location. Portable display
+    # formatting belongs to a consumer projection, not to evidence retention.
+    return value if value else None
 
 
 def _safe_detail_target(value: str, *, cwd: str | None) -> str | None:

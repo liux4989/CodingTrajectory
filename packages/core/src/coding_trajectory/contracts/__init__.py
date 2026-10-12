@@ -1,29 +1,23 @@
 """Versioned Pydantic contracts for the public ct service methods.
 
-Split by domain: ``session`` (project/session/graph), ``living`` (snapshot /
-delta protocol), plus ``base``, ``envelope``, and the method ``registry``.
+Split by domain: ``session`` (project/session/graph), ``living`` (live resource protocol), plus ``base``, ``envelope``, and the method ``registry``.
 """
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 from coding_trajectory.contracts.envelope import (
     API_PROTOCOL,
-    CORE_PROTOCOL,
     ApiAvailability,
     ApiEnvelopeModel,
     ApiErrorDetail,
     ApiErrorResponse,
     ApiRequest,
     ApiSuccessResponse,
-    ApiTransportMetadata,
 )
 from coding_trajectory.contracts.living import (
-    LivingContentReference,
-    LivingContentReferenceTarget,
     LivingContextCheckpointResource,
     LivingEventResource,
     LivingEventsRequest,
     LivingEventsResponse,
-    LivingInlineContent,
     LivingItemResource,
     LivingProtocolIssue,
     LivingResource,
@@ -109,7 +103,6 @@ from coding_trajectory.contracts.session import (
 
 __all__ = [
     "API_PROTOCOL",
-    "CORE_PROTOCOL",
     "DEFAULT_SEARCH_KINDS",
     "SEARCHABLE_FIELDS",
     "SERVICE_CONTRACTS",
@@ -119,7 +112,6 @@ __all__ = [
     "ApiErrorResponse",
     "ApiRequest",
     "ApiSuccessResponse",
-    "ApiTransportMetadata",
     "CanonicalEventRecord",
     "CanonicalItemDetail",
     "CanonicalItemRecord",
@@ -141,13 +133,10 @@ __all__ = [
     "GraphStatsRequest",
     "GraphUsageRequest",
     "ItemContentMeasurements",
-    "LivingContentReference",
-    "LivingContentReferenceTarget",
     "LivingContextCheckpointResource",
     "LivingEventResource",
     "LivingEventsRequest",
     "LivingEventsResponse",
-    "LivingInlineContent",
     "LivingItemResource",
     "LivingProtocolIssue",
     "LivingResource",

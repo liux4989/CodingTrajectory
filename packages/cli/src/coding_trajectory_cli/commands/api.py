@@ -47,7 +47,6 @@ def _runtime(args: argparse.Namespace) -> ServiceRuntime:
     return ServiceRuntime(
         global_scope=getattr(args, "global_scope", False),
         current_dir=Path.cwd(),
-        source=getattr(args, "source", None) or "auto",
     )
 
 
@@ -64,15 +63,6 @@ def _handle_api_batch(args: argparse.Namespace) -> dict[str, Any]:
 
 def _handle_api_schema(args: argparse.Namespace) -> dict[str, Any]:
     return command_schema(args.method, command=f"ct api call {args.method}")
-
-
-def _add_source_flag(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--source",
-        choices=("local", "shared", "remote", "auto"),
-        default=argparse.SUPPRESS,
-        help="Query source: auto is local only; shared and remote are unavailable.",
-    )
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -104,7 +94,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Use global discovery for requests without a session entry point.",
     )
     add_params_flag(call)
-    _add_source_flag(call)
     call.set_defaults(
         _plugin_handler=_handle_api_call,
         _default_output="json",
@@ -122,7 +111,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         default="-",
         help="Read request array from a file, or '-' for stdin.",
     )
-    _add_source_flag(batch)
     batch.add_argument(
         "--requests",
         dest="requests_json",

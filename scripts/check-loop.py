@@ -115,11 +115,7 @@ def main():
         def core(method, params):
             reply = call("/api/core", {"method": method, "params": params})
             assert reply["ok"], reply
-            assert reply["meta"] == {
-                "source": "local",
-                "freshness": "live",
-                "content_scope": "retained",
-            }
+            assert "meta" not in reply
             assert reply["availability"] == {"state": "complete", "missing": []}
             return reply["result"]
 
@@ -160,16 +156,19 @@ def main():
                 brief["objective"]["text"]
                 == "Synthetic example: verify command failure handling."
             )
-            assert brief["coverage"]["retention"] == "preview"
+            assert brief["coverage"]["retention"] == "complete"
             assert core("session.overview", {**scope, "limit": 1})["sessions"]
             first = core("session.items", {**scope, "limit": 1})
-            second = core(
-                "session.items", {**scope, "limit": 1, "cursor": first["next_cursor"]}
+            assert first["returned"] == 1 and "next_cursor" not in first
+            complete_items = core("session.items", scope)
+            all_items = complete_items["items"]
+            assert (
+                complete_items["returned"] == complete_items["total"] == len(all_items)
             )
-            assert first["items"][0]["item_id"] != second["items"][0]["item_id"]
-            all_items = core("session.items", scope)["items"]
+            assert first["items"] == all_items[:1]
             failed = next(item for item in all_items if item["status"] == "failed")
-            assert failed["coverage"]["retention"] == "not_retained"
+            assert failed["coverage"]["retention"] == "complete"
+            assert failed["detail"]["command"] and failed["detail"]["output"]
             assert (
                 failed["output_evidence"]["processor"]
                 == "ct.output_evidence.command.v1"
@@ -185,34 +184,30 @@ def main():
             )["events"]
             assert events and all(event["session_id"] == session_id for event in events)
             first_event = core("session.events", {**scope, "limit": 1})
-            next_event = core(
-                "session.events",
-                {**scope, "limit": 1, "cursor": first_event["next_cursor"]},
-            )
+            all_events = core("session.events", scope)
+            assert first_event["events"] == all_events["events"][:1]
             assert (
-                first_event["events"][0]["event_id"]
-                != next_event["events"][0]["event_id"]
+                all_events["returned"]
+                == all_events["total"]
+                == len(all_events["events"])
             )
-            # Current header inventory uses query-bound cursors, not change feeds.
+            # Complete current inventories keep digests for refresh comparison.
             live_first = core("living.sessions", {"limit": 1})
-            assert live_first["returned"] == 1 and live_first["next_cursor"]
-            assert live_first["issues"] == []
-            live_next = core(
-                "living.sessions",
-                {
-                    "limit": 1,
-                    "cursor": live_first["next_cursor"],
-                },
-            )
-            assert live_next["total"] == live_first["total"]
-            assert live_next["returned"] == 1 and live_next["issues"] == []
-            assert (
-                live_first["items"][0]["session_id"]
-                != live_next["items"][0]["session_id"]
-            )
-            for page in (live_first, live_next):
-                assert not {"changes", "through", "after", "has_more", "page_kind"}.intersection(page)
-                assert all(item["digest"] for item in page["items"])
+            live_all = core("living.sessions", {})
+            assert live_first["returned"] == 1
+            assert live_first["items"] == live_all["items"][:1]
+            assert live_all["returned"] == live_all["total"] == len(live_all["items"])
+            for inventory in (live_first, live_all):
+                assert inventory["issues"] == []
+                assert not {
+                    "next_cursor",
+                    "changes",
+                    "through",
+                    "after",
+                    "has_more",
+                    "page_kind",
+                }.intersection(inventory)
+                assert all(item["digest"] for item in inventory["items"])
             reference = {
                 "session_id": session_id,
                 "turn_id": failed["turn_id"],
@@ -260,23 +255,16 @@ def main():
             )
             assert missing["ok"] is False
             assert missing["error"]["code"] == "invalid_request", missing
-            for params in (
-                {**scope, "cursor": "malformed"},
-                {
-                    "session_id": "019faa00-0000-7000-8000-0000000000b0",
-                    "cursor": first["next_cursor"],
-                },
-            ):
-                invalid = call(
-                    "/api/core", {"method": "session.items", "params": params}
-                )
-                assert (
-                    invalid["ok"] is False
-                    and invalid["error"]["code"] == "invalid_cursor"
-                ), invalid
+            invalid = call(
+                "/api/core",
+                {"method": "session.items", "params": {**scope, "cursor": "retired"}},
+            )
+            assert (
+                invalid["ok"] is False and invalid["error"]["code"] == "invalid_request"
+            ), invalid
             monitor(call, core, monitor_state, home)
             print(
-                "Loop integration: PASS — local discovery, summary/overview, cursor continuation, exact item/event references, reference-only persistence, invalid scope, origin/host rejection, no remote fallback"
+                "Loop integration: PASS — local discovery, summary/overview, complete collections and explicit selection, exact item/event references, reference-only persistence, invalid scope, origin/host rejection, no remote fallback"
             )
             print(
                 "Loop Monitor: PASS — strategy catalog, scope/config validation, asymmetric pass/breach/unavailable dry-run, idempotent reruns, revisioned config, supersession on changed evidence, finding lifecycle, exact references, reference-only persistence, no remote fallback"
@@ -527,11 +515,17 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
     # A persisted legacy cursor is rebaselined exactly once without evaluation.
     legacy_id = codex_watch["watch_id"]
     with sqlite3.connect(monitor_state) as db:
-        record = json.loads(db.execute(
-            "SELECT record FROM watches WHERE watch_id = ?", (legacy_id,)
-        ).fetchone()[0])
+        record = json.loads(
+            db.execute(
+                "SELECT record FROM watches WHERE watch_id = ?", (legacy_id,)
+            ).fetchone()[0]
+        )
         record["enabled"] = True
-        record["refresh"] = {"cursor": "legacy", "watermark": "legacy", "caught_up": True}
+        record["refresh"] = {
+            "cursor": "legacy",
+            "watermark": "legacy",
+            "caught_up": True,
+        }
         db.execute(
             "UPDATE watches SET record = ? WHERE watch_id = ?",
             (json.dumps(record), legacy_id),
@@ -660,7 +654,10 @@ def monitor(call, core, monitor_state: Path, home: Path) -> None:
     project_scope = {"project_name": "codex-budget-demo"}
     try:
         for age_days in (2, 4):
-            os.utime(source, ns=(original.st_atime_ns, time.time_ns() - age_days * 86400 * 10**9))
+            os.utime(
+                source,
+                ns=(original.st_atime_ns, time.time_ns() - age_days * 86400 * 10**9),
+            )
             default = core("living.sessions", project_scope)
             explicit = core("living.sessions", {**project_scope, "horizon_days": 3})
             assert default == explicit

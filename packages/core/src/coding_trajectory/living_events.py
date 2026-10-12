@@ -31,10 +31,10 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 from coding_trajectory.query import DocumentStore, ResourceNotFoundError
-from coding_trajectory.service.pagination import paginate
+from coding_trajectory.service.selection import select_rows
 from coding_trajectory.service.serializers import _parse_user_id
 
-SCHEMA_VERSION = "ct.living_events.v2"
+SCHEMA_VERSION = "ct.living_events.v3"
 _RESOURCE_MODELS = {
     "session": LivingSessionResource,
     "turn": LivingTurnResource,
@@ -101,38 +101,21 @@ def query_living_events(
         for row in _project_graph(graph)
         if all(_in_scope(row, key, value) for key, value in scope.items())
     ]
-    page, cursor = paginate(
+    selected = select_rows(
         rows,
-        method="living.events",
-        params=params,
-        scope={"global_scope": global_scope, "current_dir": str(current_dir.resolve())},
+        limit=params.get("limit"),
         key=lambda row: row.sort_key,
     )
     resources = []
-    for row in page:
+    for row in selected:
         # Include the same defaults/nulls/datetime formatting clients see on the
-        # wire. View truncation never changes the details-based content digest.
+        # wire, so the digest represents the complete normalized resource.
         details = (
             _RESOURCE_MODELS[row.kind]
             .model_validate(row.details)
             .model_dump(mode="json")
         )
         resource = dict(details)
-        if (
-            params["mode"] == "view"
-            and row.kind == "item"
-            and resource["type"] != "assistant_response"
-            and resource["shape"]
-        ):
-            resource["shape"] = {
-                key: _view_value(
-                    value,
-                    path=row.path,
-                    event_ids=resource["event_ids"],
-                    field_path=f"shape.{key}",
-                )
-                for key, value in resource["shape"].items()
-            }
         resources.append(
             {
                 "resource_kind": row.kind,
@@ -145,11 +128,9 @@ def query_living_events(
         )
     return {
         "schema_version": SCHEMA_VERSION,
-        "mode": params["mode"],
         "resources": resources,
         "total": len(rows),
         "returned": len(resources),
-        "next_cursor": cursor,
         "issues": [],
     }
 
@@ -231,7 +212,7 @@ def _project_graph(graph: SessionGraph) -> list[ProjectedResource]:
                             effective_user_request(index, turn, session=session)
                         ),
                         "assistant_responses": [
-                            _inline_content(item.text)
+                            item.text
                             for item in turn.items
                             if isinstance(item, AgentMessageItem) and item.text
                         ],
@@ -372,53 +353,7 @@ def _checkpoint_turn_bounds(
 
 
 def _request_content(request: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not request:
-        return None
-    result = {key: value for key, value in request.items() if key != "content"}
-    if isinstance(request.get("content"), str):
-        result["content"] = _inline_content(request["content"])
-    return result
-
-
-def _inline_content(value: Any) -> dict[str, Any]:
-    text = value if isinstance(value, str) else canonical_json(value)
-    return {"state": "inline", "value": value, "size_chars": len(text), "ref": None}
-
-
-def _view_value(
-    value: Any, *, path: dict[str, str], event_ids: list[str], field_path: str
-) -> Any:
-    serialized = value if isinstance(value, str) else canonical_json(value)
-    if len(serialized) > (500 if isinstance(value, str) else 2000):
-        return {
-            "$type": "content_ref",
-            "size_chars": len(serialized),
-            "ref": {
-                "session_id": path["session_id"],
-                "turn_id": path["turn_id"],
-                "item_id": path["item_id"],
-                "event_ids": event_ids,
-                "field_path": field_path,
-            },
-        }
-    if isinstance(value, dict):
-        return {
-            key: _view_value(
-                child, path=path, event_ids=event_ids, field_path=f"{field_path}.{key}"
-            )
-            for key, child in value.items()
-        }
-    if isinstance(value, list):
-        return [
-            _view_value(
-                child,
-                path=path,
-                event_ids=event_ids,
-                field_path=f"{field_path}[{index}]",
-            )
-            for index, child in enumerate(value)
-        ]
-    return value
+    return dict(request) if request else None
 
 
 def _edge_resource(graph: SessionGraph, edge: SessionEdge) -> dict[str, Any]:

@@ -23,7 +23,7 @@ CLI connection. It does not publish data, delete source logs, or deploy a hosted
 1. Select a project in Explore.
 2. Select a session from the paged inventory.
 3. Read the summary and chronology.
-4. Select a turn or item to inspect its retained evidence.
+4. Select a turn or item to inspect its complete normalized evidence.
 5. Copy a canonical reference when another reader needs the same evidence.
 6. Save the investigation when you need to return to that scope.
 
@@ -35,7 +35,7 @@ The receiving host needs the corresponding evidence.
 Core owns session meaning, ordering, coverage, and metric formulas. Loop composes
 Core responses. It does not create a second canonical model.
 Incomplete summary coverage remains incomplete even when one selected item has
-more retained detail. Unavailable measurements do not become zero.
+more canonical detail. Unavailable measurements do not become zero.
 
 ### Tool mix and context
 
@@ -84,7 +84,7 @@ Monitor runs persist progress. After a failed or interrupted run, inspect partia
 results before resuming. Resume uses the original parameters and requires the
 same watch revision. Only one run can be active for a watch.
 
-Refresh reads a complete header-only `living.sessions` pass, with project or
+Refresh reads one complete header-only `living.sessions` call, with project or
 session filtering performed by Core. It compares the watch's persisted
 `{session_id: digest}` map and evaluates new or changed sessions in modified-time
 and identity order. At most `max_sessions` are evaluated per refresh; only those

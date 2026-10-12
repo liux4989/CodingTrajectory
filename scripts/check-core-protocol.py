@@ -141,7 +141,7 @@ def main() -> int:
     if expected == current:
         print(
             "Core protocol freeze: PASS "
-            f"({len(SERVICE_CONTRACTS)} methods, local retained queries)"
+            f"({len(SERVICE_CONTRACTS)} methods, complete local queries)"
         )
         return 0
     print("Core protocol freeze: FAIL\n")

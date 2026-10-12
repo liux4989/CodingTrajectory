@@ -40,6 +40,10 @@ from coding_trajectory.analysis.activity_flow import (
 from coding_trajectory.analysis.session_graph_views import (
     build_session_graph_overview,
 )
+from coding_trajectory.analysis.session_retrieval import (
+    build_session_summary,
+    search_session,
+)
 from coding_trajectory.ingestion.models import (
     AgentMessageItem,
     CommandExecutionItem,
@@ -253,7 +257,13 @@ def build_synthetic_fixture() -> SyntheticFixture:
         ),
     ]
 
-    long_output = "head evidence " + ("x" * 17_000) + " tail-sentinel"
+    long_output = (
+        "head evidence "
+        + ("x" * 8_500)
+        + " middle-sentinel "
+        + ("x" * 8_500)
+        + " tail-sentinel"
+    )
     second_items = [
         CommandExecutionItem(
             item_id=ids["failed_test"],
@@ -616,6 +626,88 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             "turn_id": str(fixture.first_turn_id),
         },
     )
+    # Isolated, source-defined long text must mark clipping even when every
+    # section fits. This distinguishes text shortening from collection limits.
+    source_session = next(
+        session
+        for session in fixture.graph.sessions
+        if session.session_id == fixture.root_session_id
+    )
+    source_turn = source_session.turns[0]
+    source_event = next(
+        event
+        for event in source_session.events
+        if event.event_id == source_turn.user_request_event_id
+    )
+    common = {
+        "session_id": source_session.session_id,
+        "turn_id": source_turn.turn_id,
+        "sequence": 0,
+        "started_at": source_turn.started_at,
+    }
+    long_text = "source content " * 30
+    clip_cases = [
+        (long_text, []),
+        ("continue", [AgentMessageItem(**common, text="Decision: " + long_text)]),
+        ("continue", [AgentMessageItem(**common, text=long_text)]),
+        (
+            "continue",
+            [
+                PlanItem(
+                    **common,
+                    tool_name="update_plan",
+                    input={"todos": [{"content": long_text, "status": "pending"}]},
+                )
+            ],
+        ),
+        (
+            "continue",
+            [
+                CommandExecutionItem(
+                    **common,
+                    tool_name="exec_command",
+                    command="uv run pytest " + long_text,
+                    status="failed",
+                    output="failed",
+                )
+            ],
+        ),
+    ]
+    clipping_truthful = True
+    for request_text, items in clip_cases:
+        clip_graph = SessionGraph(
+            root_session_id=source_session.session_id,
+            sessions=[
+                source_session.model_copy(
+                    update={
+                        "turns": [
+                            source_turn.model_copy(
+                                update={"items": items, "execution_units": []}
+                            )
+                        ],
+                        "events": [
+                            source_event.model_copy(
+                                update={"payload": {"text": request_text}}
+                            )
+                        ],
+                        "measurements": None,
+                    }
+                )
+            ],
+        )
+        clipped = build_session_summary(clip_graph)
+        clipping_truthful = (
+            clipping_truthful
+            and clipped["coverage"]["trimmed"]
+            and not any(
+                section["truncated"] for section in clipped["truncation"].values()
+            )
+        )
+    canonical_turn_scope = build_session_summary(
+        clip_graph, turn_id=source_turn.turn_id.hex
+    )["selected_turn_id"] == str(source_turn.turn_id) and search_session(
+        clip_graph, query="source", turn_id=source_turn.turn_id.hex
+    )["selected_turn_id"] == str(source_turn.turn_id)
     serialized = _canonical_json(summary)
     source_bytes = len(fixture.graph.model_dump_json().encode())
     derived_static_item = CommandExecutionItem(
@@ -801,6 +893,8 @@ def evaluate_summary(fixture: SyntheticFixture, store: DocumentStore) -> dict[st
             _refs_resolve(store, references)
             for references in _summary_references(summary)
         ),
+        "text_clipping_without_section_omission_is_reported": clipping_truthful,
+        "direct_turn_scope_accepts_equivalent_uuid_spelling": canonical_turn_scope,
         "deterministic_response": summary == repeated,
     }
     passed = sum(checks.values())
@@ -1018,6 +1112,11 @@ def evaluate_search(fixture: SyntheticFixture, store: DocumentStore) -> dict[str
         "session.search",
         {"session_id": str(fixture.root_session_id), "query": "tail-sentinel"},
     )
+    middle = _dispatch(
+        store,
+        "session.search",
+        {"session_id": str(fixture.root_session_id), "query": "middle-sentinel"},
+    )
     raw_failure = _dispatch(
         store,
         "session.search",
@@ -1039,7 +1138,9 @@ def evaluate_search(fixture: SyntheticFixture, store: DocumentStore) -> dict[str
         "turn_scope_isolated": wrong_turn["total"] == 0 and right_turn["total"] == 1,
         "limit_and_truncation_truthful": (
             len(bounded["matches"]) == 2
-            and bounded["total"] == 6
+            # Six judged narrative/call documents plus the recorded failed
+            # result containing ranking-signal now form the complete corpus.
+            and bounded["total"] == 7
             and bounded["truncated"] is True
         ),
         "kind_filter_honored": (
@@ -1048,13 +1149,20 @@ def evaluate_search(fixture: SyntheticFixture, store: DocumentStore) -> dict[str
                 match["kind"] == "file_change" for match in kind_filtered["matches"]
             )
         ),
-        "discarded_output_is_not_searchable": tail["total"] == 0
-        and raw_failure["total"] == 0,
+        # Source fixture contains these complete result bodies above, including
+        # tail-sentinel after 17,000 characters. Matching must recover both.
+        "complete_output_is_searchable": (
+            {match["references"]["item_id"] for match in tail["matches"]}
+            == {str(fixture.ids["tail_output"])}
+            and {match["references"]["item_id"] for match in middle["matches"]}
+            == {str(fixture.ids["tail_output"])}
+            and {match["references"]["item_id"] for match in raw_failure["matches"]}
+            == {str(fixture.ids["unresolved_check"])}
+        ),
         "long_field_coverage_truthful": (
-            tail["coverage"]["searchable"] in {"preview", "facts_only"}
-            and tail["coverage"]["measurement"] == "complete"
+            tail["coverage"]["searchable"] == "complete"
             and "content_complete" not in tail["coverage"]
-            and bool(tail["warnings"])
+            and not tail["warnings"]
         ),
         "exact_path_matches_lead_retained_command_matches": set(
             ranking_case["current_order"][:2]

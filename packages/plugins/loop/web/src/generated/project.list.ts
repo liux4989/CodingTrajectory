@@ -10,13 +10,11 @@ export type Sessions =
   | null;
 export type Vendors = string[];
 export type Items = ProjectSummary[];
-export type NextCursor = string | null;
 export type Returned = number;
 export type Total = number;
 
 export interface ProjectListResponse {
   items: Items;
-  next_cursor?: NextCursor;
   returned: Returned;
   total: Total;
   [k: string]: unknown;

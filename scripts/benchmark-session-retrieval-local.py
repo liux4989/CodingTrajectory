@@ -97,7 +97,7 @@ class RelevantResource(BaseModel):
 class SearchJudgment(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     session_id: str
-    query: str = Field(min_length=1, max_length=1000)
+    query: str = Field(min_length=1)
     mode: Literal["text", "path"] = "text"
     tier: Literal["exact", "paraphrase"] = "exact"
     turn_id: str | None = None
@@ -558,7 +558,6 @@ def evaluate_summary(
     checks.record(
         "summary.coverage_consistent",
         coverage["retention"] in {"complete", "preview", "not_retained"}
-        and coverage["measurement"] == "complete"
         and "content_complete" not in coverage
         and bool(summary["warnings"]) == (coverage["retention"] != "complete"),
         f"{sid}: coverage={coverage} warnings={summary['warnings']}",
@@ -636,7 +635,7 @@ def _pick_token_case(index: Any, session: Session) -> tuple[str, str, str] | Non
         if request is None:
             continue
         content = _normalize(request["content"])
-        if not content or len(content) > 16_000:
+        if not content:
             continue
         tokens = sorted(
             {token for token in _tokens(content) if 6 <= len(token) <= 200},
@@ -1252,8 +1251,10 @@ def main() -> int:
         help="Ignored private JSON with session IDs and source-derived judgments.",
     )
     parser.add_argument(
-        "--repeat", type=int, default=30,
-        help="Projection-only repetitions with fresh request memo (default: 30)."
+        "--repeat",
+        type=int,
+        default=30,
+        help="Projection-only repetitions with fresh request memo (default: 30).",
     )
     parser.add_argument(
         "--output",

@@ -1,6 +1,6 @@
 """Opaque local project identities, independent of display-name spelling.
 
-Local IDs are location-scoped; remote IDs are assigned by the workspace registry.
+Local IDs are location-scoped and identify projects discovered on this host.
 Callers must use IDs returned by their selected authority, not derive them from names.
 """
 

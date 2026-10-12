@@ -8,17 +8,19 @@ JSON Schemas, and the local API envelopes. The retired published-facts schema
 is not a public dependency of local canonical queries.
 CLI projections and plugin protocols are separate consumer contracts.
 
-The local-only revision increments every method version by one. Local success
-envelopes contain `result`, not the parked remote envelope's `data`. Transport
-metadata is `local` / `live` / `retained`, with no saved-view or snapshot identity.
-Remote delivery is unavailable for all 18 methods through one capability declaration.
+The approved complete-local revision uses `ct.api.v2` and increments every
+method version by one. Success envelopes contain `result`; constant transport
+metadata is removed. Old explicit API and method versions are rejected.
 
-Collection pagination uses opaque unsigned count-keyset cursors bound to query
-and method version. Inventory order is identity-based; content uses canonical
-source order and ID tie-breakers. Determinism applies per call, not across live
-changes. Published-view references and stale-view errors are retired. Method
-request/result schemas remain frozen and reviewed; removing a storage protocol
-does not authorize arbitrary changes to those schemas.
+Collections return all matching resources by default, in deterministic order.
+An optional positive `limit` selects results without a hard maximum. `cursor` and
+`next_cursor` are removed; overview also removes `page` and per-turn collection
+caps. Optional selection retains honest total/returned counts where applicable.
+Overview exposes text shortening separately from turn selection. Canonical detail
+and search have complete available normalized content; previews stay bounded.
+
+The public schema changes are deliberate. Request/result schemas remain frozen
+and reviewed; future changes still require the procedure below.
 
 Run the gate from the repository root:
 
@@ -53,23 +55,24 @@ Shared `$defs` and compact schema serialization reduce file size, not constraint
 
 Never update the snapshot only to make CI pass.
 
-## Stateless living revision
+## Complete local living revision
 
-The approved living redesign changes only two method contracts:
+Living result identifiers advance alongside the common method/envelope revision:
 
 | Method | Method version | Result schema |
 | --- | --- | --- |
-| `living.sessions` | 5 | `ct.living_sessions.v3` |
-| `living.events` | 3 | `ct.living_events.v2` |
+| `living.sessions` | 6 | `ct.living_sessions.v4` |
+| `living.events` | 4 | `ct.living_events.v3` |
 
-Both use `cursor` and count-bounded live keyset pages, with `total`, `returned`
-and `next_cursor`. The old `after`, `through`, `changes`, revisions and reset
-operations are removed rather than silently reinterpreted. Old method versions
-are rejected; cursors remain query- and version-bound.
+Both return complete scoped collections with `total` and `returned`; an
+explicit `limit` can select results. There are no continuation cursors. The
+`living.events` view/details mode and content-reference indirection are removed:
+requests and assistant responses are direct strings, and item shapes retain full
+structured values inline. Removed fields and old method versions are rejected.
 
 `living.sessions` returns `items` from topology and file metadata without
 transcript ingestion. Its optional run/session/project scopes are mutually
-exclusive. A rolling `horizon_days` of 1–30 (default 3 / 72 hours) applies to
+exclusive. A rolling `horizon_days` of positive days (default 3 / 72 hours) applies to
 global/project scopes; explicit runs ignore it. Each item's digest covers all
 other public fields, including its own source's time-derived `living`/`inactive`
 state.
@@ -78,15 +81,15 @@ state.
 `turn_id` and/or `item_id` to narrow within that run. A missing or cross-run
 narrowing ID returns `resource_not_found`; Core never searches other runs.
 The response contains `resources`, each with kind, path, payload and digest.
-The digest covers the normalized retained details payload in both modes, not
-transport or cursor fields. Completing an existing tool item is therefore
+The digest covers the full normalized public resource payload. Completing an existing tool item is therefore
 observable without a stored change feed. Canonical source ordering is preserved
 per call.
 
 Consumers compare complete passes and persist their own digests when needed.
-No cross-page snapshot is promised. Loop migrates old watch continuation state
+Each pass reflects its current source read; no cross-call snapshot is promised. Loop migrates old watch continuation state
 by rebaselining once, without evaluating historical resources during that pass.
-The other 16 methods, their metrics, and the API envelope are unchanged.
+Native metric formulas are unchanged. Collection, detail, preview, and envelope
+contracts migrate together.
 
 ## Plugin boundary
 

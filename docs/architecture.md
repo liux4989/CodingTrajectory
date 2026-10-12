@@ -30,7 +30,7 @@ Local vendor logs
   → adapter-owned streamed relationship metadata
   → fresh project/session/topology inventory per request
   → selected runs through existing canonical ingestion
-  → publication-independent retention and redaction in memory
+  → complete normalized canonical content and measurements in memory
   → direct contextual handlers and on-request metrics
 ```
 
@@ -42,7 +42,7 @@ deduplication, relationships, and accounting before retention removes content.
 
 Historical and inventory queries are stateless: topology is discovered fresh for
 each request, and only selected runs and their canonical dependencies are ingested,
-retained, and redacted in memory. Reuse is limited to one request or explicit batch;
+normalized in memory with complete available content. Reuse is limited to one request or explicit batch;
 there is no cross-request topology or graph persistence. Core no longer uses
 `~/.coding-trajectory/local.sqlite`. Repeated detail reads of large runs repeat
 ingestion rather than amortizing it through a persistent cache.
@@ -54,49 +54,51 @@ catalog path and remains distinct from provider-reported cost.
 
 ## Local query boundary
 
-Chronicle is the local canonical query layer. The public Core registry has 18
-methods. One per-method capability declaration allows local execution and marks
-remote execution unavailable. `auto` selects local sources, with no remote fallback.
-The parked Cloudflare runtime is unsupported and is not built by Core CI.
+Chronicle is the local canonical query layer. Its 18 typed methods execute
+locally, without source negotiation or remote fallback. The parked Cloudflare
+runtime is unsupported and is not built by Core CI.
 
-Collection pages use opaque, unsigned count-keyset cursors bound to the query
-and method version. Inventory uses identity ordering; content uses canonical
-source order with ID tie-breakers. Results are deterministic within each call,
-not frozen across calls as logs change. There are no published-view references
-or stale-view errors. This stateless ingestion change preserves native metrics
-and public vNext cursors.
+Collection queries return every matching resource in deterministic order by
+default. An optional positive `limit` selects a prefix; overview selects the
+latest turns. There is no maximum page size, continuation cursor, or saved view.
+Canonical ordering and ID tie-breakers remain explicit. Repeated reads of large
+runs may be slower; correctness and complete local evidence take priority over
+response-size optimization.
 
 Living queries are stateless too. `living.sessions` projects source topology and
 file metadata without ingesting transcripts; `living.events` projects a required
-run or subordinate scope through the same retained-run path as detail queries.
+run or subordinate scope through the same canonical-run path as detail queries.
 Each returned resource has a stable digest. Consumers compare complete live
 passes and own their last-seen state; Core keeps no change history, removal
 markers, checkpoints or second payload store. Loop's `investigations.sqlite3`
 and `monitor.sqlite3` remain product/user data, not Core derived caches.
 
-Local envelopes use `result`, not the parked remote envelope's `data`.
-Transport metadata states `local` / `live` / `retained`, without snapshot identity.
-Method versions and exact schemas are in the [frozen protocol](core-protocol.md).
+Local `ct.api.v2` envelopes contain `result`, structured availability and errors.
+Constant transport metadata is removed. Method versions and exact schemas are
+in the [frozen protocol](core-protocol.md).
 
 ## Evidence and privacy
 
-Original logs remain the evidence authority on their host. Standard queries
-return retained canonical evidence, not arbitrary raw vendor payloads.
-Coverage fields distinguish observed, derived, partial, and unavailable data.
+Original logs remain the evidence authority on their host. Local detail and
+search queries preserve complete available normalized message, command, argument,
+and output content, along with paths, identities, measurements and provenance.
+Arbitrary vendor payloads do not become public canonical fields. Source omissions
+and provider truncation remain explicit; complete local access cannot recover
+content the original source never recorded.
 
-Retention is independent of publication. Standard queries retain bounded previews,
-argument-derived tool descriptions, operational evidence, provenance, and measurements.
-They do not expose arbitrary raw vendor payloads as canonical history. Script
-units reference source, arguments, and outputs in the original logs using record
-indices, digests, and provider/item identities. Analysis creates no evidence
-exports; full source is read losslessly and raw bodies stay outside the canonical
-response. Observed calls and source-only candidates are distinct, and
-the execution layer does not reconstruct program order. JavaScript syntax trees
-identify source call sites independently of runtime observations. Stats uses
-recorded tool identities for composition and preserves unassigned script content
-without allocating wrapper bytes to source-inferred children.
+Previews, sanitized tool descriptions, summary selection and short search
+snippets belong to display projections. Their limits do not remove canonical
+bodies or evidence references. Search matches full normalized content before
+creating snippets. Operational output facts remain distinct from body availability.
 
-**Warning:** retained content and local logs can contain private information.
+Script units retain source references and observed-call evidence. Observed calls
+and source-only candidates are distinct; source syntax does not prove execution
+order. Stats retains native accounting and does not allocate wrapper content to
+source-inferred children. Source digests preserve provenance, while living-resource
+digests let consumers detect changed normalized content. Persisted source
+checkpoints and incremental publication/repair APIs are removed.
+
+**Warning:** canonical content and local logs can contain private information.
 Bounded previews and description redaction are not a complete secret scanner.
 The legacy Amp capture plugin can still auto-publish externally; that path is
 unsupported. Set `CT_AMP_AUTO_PUBLISH=0` for local capture.
@@ -110,8 +112,8 @@ Paths below are relative to `packages/core/src/coding_trajectory/`, unless state
 | Source inventory and relationships | `discovery.py`, `discovery_metadata.py`, vendor adapters in `ingestion/` |
 | Canonical reconstruction and retention | `ingestion/` |
 | Request-scoped topology and in-memory graph ownership | `service/store.py` |
-| Local execution and source capabilities | `runtime.py` |
-| Direct contextual queries and pagination | `service/` |
+| Local execution and typed query boundary | `runtime.py` |
+| Direct contextual queries and optional selection | `service/` |
 | Native metrics and live pricing | `metrics/` |
 | Stateless living inventory and resource projections | `living_sessions.py`, `living_events.py` |
 | Public contracts | `contracts/` and `validation/core-protocol.json` at the repository root |

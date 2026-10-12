@@ -20,6 +20,14 @@ class ResourceNotFoundError(Exception):
     """Raised when a requested resource is not present."""
 
 
+class LocalQueryError(ValueError):
+    """A structured failure at the local query boundary."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 def _index_session_graph(
     session_graph: SessionGraph,
     *,

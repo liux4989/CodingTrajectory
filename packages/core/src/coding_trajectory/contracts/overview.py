@@ -13,31 +13,6 @@ from coding_trajectory.ingestion.execution_models import (
 )
 
 
-class OverviewPage(RequestModel):
-    direction: Literal["older"] = "older"
-    requested_limit: int = Field(ge=1, le=200)
-    start_ordinal: int = Field(ge=0)
-    end_ordinal_exclusive: int = Field(ge=0)
-    returned: int = Field(ge=0)
-    total: int = Field(ge=0)
-    has_more: bool
-    next_cursor: str | None
-
-
-class ContentCount(RequestModel):
-    total: int = Field(ge=0)
-    returned: int = Field(ge=0)
-    truncated: bool
-
-
-class TurnContentCoverage(RequestModel):
-    assistant_responses: ContentCount
-    activities: ContentCount
-    item_ids: ContentCount
-    text_trimmed: bool
-    execution_units: ContentCount | None = None
-
-
 class OverviewSession(RequestModel):
     session_id: str
     session_rank: int = Field(ge=0)
@@ -78,7 +53,7 @@ class OverviewActivity(RequestModel):
     """One semantic activity cell, not one canonical item.
 
     Fields mirror build_overview_flows; descriptions and evidence membership
-    belong to that projector. Per-turn caps are semantic display bounds.
+    belong to that projector. All semantic activities are included.
     """
 
     tool: str
@@ -106,7 +81,7 @@ class OverviewActivity(RequestModel):
 
 
 class OverviewReferences(RequestModel):
-    item_ids: list[str] = Field(max_length=100)
+    item_ids: list[str]
     user_request_event_id: str | None
 
 
@@ -122,11 +97,11 @@ class OverviewTurn(RequestModel):
     timestamp_state: Literal["complete", "partial", "missing"]
     status: str
     user_request: OverviewRequestPreview | None
-    assistant_responses: list[OverviewAssistant] = Field(max_length=8)
-    activities: list[OverviewActivity] = Field(max_length=8)
-    execution_units: list[ExecutionUnit] = Field(default_factory=list, max_length=100)
+    assistant_responses: list[OverviewAssistant]
+    activities: list[OverviewActivity]
+    execution_units: list[ExecutionUnit] = Field(default_factory=list)
     refs: OverviewReferences
-    content_coverage: TurnContentCoverage
+    text_trimmed: bool
 
     @field_serializer("activities")
     def serialize_activities(self, activities: list[OverviewActivity]):
@@ -146,5 +121,4 @@ class OverviewResponse(ContractModel):
     sessions: list[OverviewSession]
     edges: list[dict[str, Any]]
     turns: list[OverviewTurn]
-    page: OverviewPage
     coverage: dict[str, Any]

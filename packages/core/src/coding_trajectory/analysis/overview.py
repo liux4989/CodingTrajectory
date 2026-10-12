@@ -8,14 +8,10 @@ from uuid import UUID
 from coding_trajectory.contracts.overview import OverviewSession, OverviewTurn
 
 
-def _count(total: int, cap: int) -> dict[str, Any]:
-    return {"total": total, "returned": min(total, cap), "truncated": total > cap}
-
-
 def overview_rows(
     graph: Any, *, session_id: str | None = None, root_session_id: str | None = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Project the public narrative and topology, retaining semantic cell caps."""
+    """Project the public narrative and topology, including every semantic activity."""
     from coding_trajectory.analysis.activity_flow import build_overview_flows
     from coding_trajectory.analysis.graph_views import _graph_orchestration_summary
     from coding_trajectory.analysis.orchestration_runs import (
@@ -91,13 +87,6 @@ def overview_rows(
             text_trimmed = text_trimmed or bool(
                 request_event and request_event.payload.get("preview_truncated")
             )
-            visible_ids = {
-                *[a["item_id"] for a in assistants[-8:]],
-                *[identity for a in activities[-8:] for identity in a["item_ids"]],
-            }
-            visible_units = [
-                u for u in turn.execution_units if u.unit_id in visible_ids
-            ][:100]
             row = OverviewTurn(
                 global_ordinal=len(turns),
                 session_id=str(session.session_id),
@@ -122,24 +111,18 @@ def overview_rows(
                 }
                 if request
                 else None,
-                assistant_responses=assistants[-8:],
-                activities=activities[-8:],
-                execution_units=visible_units,
+                assistant_responses=assistants,
+                activities=activities,
+                execution_units=turn.execution_units,
                 refs={
-                    "item_ids": [str(item.item_id) for item in turn.items[:100]],
+                    "item_ids": [str(item.item_id) for item in turn.items],
                     "user_request_event_id": str(turn.user_request_event_id)
                     if turn.user_request_event_id
                     else None,
                 },
-                content_coverage={
-                    "assistant_responses": _count(len(assistants), 8),
-                    "activities": _count(len(activities), 8),
-                    "item_ids": _count(len(turn.items), 100),
-                    "text_trimmed": bool(text_trimmed),
-                    "execution_units": _count(
-                        len(turn.execution_units), len(visible_units)
-                    ),
-                },
+                text_trimmed=bool(
+                    text_trimmed or (request and len(request["content"]) > 280)
+                ),
             )
             turns.append(row.model_dump(mode="json"))
             visible += 1
@@ -208,16 +191,8 @@ def overview_rows(
         "edges": edges,
         "coverage": {
             "retention": "preview",
-            "measurement": "complete",
-            "searchable": None,
-            "trimmed": any(
-                row["content_coverage"]["text_trimmed"]
-                or any(
-                    row["content_coverage"][field]["truncated"]
-                    for field in ("activities", "assistant_responses", "item_ids")
-                )
-                for row in turns
-            ),
+            "text_trimmed": any(row["text_trimmed"] for row in turns),
+            "selection_trimmed": False,
         },
     }
     base["orchestration"].pop("agent_paths", None)
@@ -227,8 +202,8 @@ def overview_rows(
 def build_overview(
     graph: Any, *, method: str, params: dict[str, Any]
 ) -> dict[str, Any]:
-    """Page backwards through live canonical source keys, not frozen ordinals."""
-    from coding_trajectory.service.pagination import paginate
+    """Return the narrative, optionally selecting its latest turns."""
+    from coding_trajectory.service.selection import select_rows
 
     base, rows = overview_rows(
         graph,
@@ -263,19 +238,8 @@ def build_overview(
     rows.sort(key=key)
     for ordinal, row in enumerate(rows):
         row["global_ordinal"] = ordinal
-    page, cursor = paginate(rows, method=method, params=params, key=key, older=True)
-    base["turns"] = page
-    base["page"] = {
-        "direction": "older",
-        "requested_limit": params["limit"],
-        "start_ordinal": page[0]["global_ordinal"] if page else 0,
-        "end_ordinal_exclusive": page[-1]["global_ordinal"] + 1 if page else 0,
-        "returned": len(page),
-        "total": len(rows),
-        "has_more": cursor is not None,
-        "next_cursor": cursor,
-    }
-    base["coverage"]["trimmed"] = bool(
-        base["coverage"]["trimmed"] or len(page) < len(rows)
-    )
+    selected = select_rows(rows, limit=params.get("limit"), key=key, latest=True)
+    base["turns"] = selected
+    base["coverage"]["selection_trimmed"] = len(selected) < len(rows)
+    base["coverage"]["text_trimmed"] = any(row["text_trimmed"] for row in selected)
     return base

@@ -47,7 +47,6 @@ from coding_trajectory.ingestion.models import (
     Vendor,
 )
 
-_SEARCH_FIELD_LIMIT = 16_000
 _SEARCH_SNIPPET_LIMIT = 240
 _SUMMARY_TEXT_LIMIT = 280
 _SUMMARY_LIMITS = {
@@ -83,9 +82,8 @@ class _SearchDocument:
     fields: dict[str, str]
     references: dict[str, Any]
     structural_score: float
-    # Searchable completeness of this document's retained fields:
-    # complete (fully retained), preview (bounded redacted preview searched),
-    # facts_only (only structural/allowlisted facts searched).
+    # Completeness of available canonical content searched for this document;
+    # legacy body-free inputs can still contribute previews or operational facts.
     searchable: Literal["complete", "preview", "facts_only"]
 
 
@@ -97,6 +95,11 @@ class _RankedSummaryItem:
     timestamp: datetime
     structural_score: float
     value: dict[str, Any]
+    text_trimmed: bool = False
+
+
+def _summary_text_trimmed(value: Any) -> bool:
+    return len(" ".join(str(value or "").split())) > _SUMMARY_TEXT_LIMIT
 
 
 def build_session_summary(
@@ -139,6 +142,7 @@ def build_session_summary(
                     _RankedSummaryItem(
                         timestamp=turn.started_at,
                         structural_score=18 + _recency_score(item_position, item_count),
+                        text_trimmed=_summary_text_trimmed(decision),
                         value={
                             "text": truncate_text_preview(
                                 decision, max_len=_SUMMARY_TEXT_LIMIT
@@ -162,6 +166,7 @@ def build_session_summary(
                             _RankedSummaryItem(
                                 timestamp=item.started_at,
                                 structural_score=structural_score,
+                                text_trimmed=_summary_text_trimmed(decision),
                                 value={
                                     "text": truncate_text_preview(
                                         decision, max_len=_SUMMARY_TEXT_LIMIT
@@ -211,6 +216,7 @@ def build_session_summary(
                         _RankedSummaryItem(
                             timestamp=item.started_at,
                             structural_score=structural_score,
+                            text_trimmed=_summary_text_trimmed(verification_label),
                             value={
                                 "label": truncate_text_preview(
                                     verification_label,
@@ -232,6 +238,7 @@ def build_session_summary(
                     unresolved_by_key[failure_key] = _RankedSummaryItem(
                         timestamp=item.started_at,
                         structural_score=structural_score,
+                        text_trimmed=signals.label_with_coverage(item)[1],
                         value={
                             "label": signals.label(item),
                             "status": "failed",
@@ -250,6 +257,7 @@ def build_session_summary(
                         _RankedSummaryItem(
                             timestamp=item.started_at,
                             structural_score=structural_score,
+                            text_trimmed=_summary_text_trimmed(action),
                             value={
                                 "text": truncate_text_preview(
                                     action, max_len=_SUMMARY_TEXT_LIMIT
@@ -260,6 +268,7 @@ def build_session_summary(
                     )
 
     objective = None
+    text_trimmed = False
     if request_candidates:
         objective_turn, objective_request = request_candidates[-1]
         event_ids = (
@@ -267,6 +276,7 @@ def build_session_summary(
             if objective_turn.user_request_event_id is not None
             else []
         )
+        text_trimmed = _summary_text_trimmed(objective_request["content"])
         objective = {
             "text": truncate_text_preview(
                 objective_request["content"], max_len=_SUMMARY_TEXT_LIMIT
@@ -299,6 +309,7 @@ def build_session_summary(
             ]
         else:
             selected = _select_summary_items(candidates, _SUMMARY_LIMITS[name])
+        text_trimmed = text_trimmed or any(entry.text_trimmed for entry in selected)
         sections[name] = [entry.value for entry in selected]
         truncation[name] = {
             "total": len(candidates),
@@ -314,7 +325,7 @@ def build_session_summary(
         )
     return {
         "session_id": str(session.session_id),
-        "selected_turn_id": turn_id,
+        "selected_turn_id": str(turns[0].turn_id) if turn_id is not None else None,
         "latest_turn_status": turns[-1].status.value if turns else None,
         "objective": objective,
         **sections,
@@ -326,9 +337,9 @@ def build_session_summary(
         },
         "coverage": {
             "retention": "complete" if content_complete else "preview",
-            "measurement": "complete",
             "searchable": None,
-            "trimmed": any(section["truncated"] for section in truncation.values()),
+            "trimmed": text_trimmed
+            or any(section["truncated"] for section in truncation.values()),
         },
         "warnings": warnings,
     }
@@ -340,17 +351,14 @@ def search_session(
     query: str,
     mode: Literal["text", "path"] = "text",
     kinds: list[SearchKind] | None = None,
-    limit: int = 20,
+    limit: int | None = None,
     turn_id: str | None = None,
-    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Search one session over retained processed fields only.
+    """Search complete available canonical content, with optional result selection.
 
-    Matching never reads discarded raw bodies: documents are built from
-    retained text previews, portable paths, tool names/concepts/targets,
-    status/outcome tokens, and allowlisted output-evidence facts. The response
-    reports exactly which fields were searched and how complete that corpus
-    was, and pages deterministically by match rank offset.
+    Snippets are bounded display text; matching uses the complete normalized
+    body. Legacy body-free sources remain searchable via previews and facts,
+    with explicit corpus completeness rather than implied full-body coverage.
     """
 
     session = _only_session(session_graph)
@@ -359,7 +367,6 @@ def search_session(
     query_text = " ".join(query.split())
     query_folded = query_text.casefold()
     query_terms = tuple(dict.fromkeys(_tokens(query_text)))
-    offset = _search_cursor_offset(cursor)
 
     documents = _search_documents(
         session_graph,
@@ -404,27 +411,23 @@ def search_session(
 
     matches.sort(key=lambda entry: entry[0])
     total = len(matches)
-    if offset > total:
-        raise ValueError("search cursor is beyond the retained result set")
-    selected = matches[offset : offset + limit]
+    selected = matches if limit is None else matches[:limit]
     ranked = []
-    for rank, (_order, value) in enumerate(selected, start=offset + 1):
+    for rank, (_order, value) in enumerate(selected, start=1):
         value["rank"] = rank
         ranked.append(value)
-    next_cursor = (
-        f"search:{offset + len(selected)}" if offset + len(selected) < total else None
-    )
+    truncated = len(selected) < total
 
     warnings = []
     if searchable != "complete":
         warnings.append(
-            "Search covers retained fields only (previews, paths, tool and "
-            "status facts, allowlisted evidence); discarded bodies were not "
-            "searched and matches within them are absent."
+            "Some canonical content is unavailable or source-truncated. "
+            "Available bodies, previews and evidence facts were searched; "
+            "matches in unavailable content are absent."
         )
     return {
         "session_id": str(session.session_id),
-        "selected_turn_id": turn_id,
+        "selected_turn_id": str(turns[0].turn_id) if turn_id is not None else None,
         "query": {
             "text": query_text,
             "mode": mode,
@@ -432,8 +435,7 @@ def search_session(
         },
         "matches": ranked,
         "total": total,
-        "truncated": next_cursor is not None,
-        "next_cursor": next_cursor,
+        "truncated": truncated,
         "searchable_fields": list(SEARCHABLE_FIELDS),
         "projection": {
             "name": "session_search",
@@ -442,27 +444,12 @@ def search_session(
         },
         "coverage": {
             "retention": _retention_coverage(session, turns),
-            "measurement": "complete",
             "searchable": searchable if searched_resources else "none",
             "searched_resources": searched_resources,
-            "trimmed": next_cursor is not None,
+            "trimmed": truncated,
         },
         "warnings": warnings,
     }
-
-
-def _search_cursor_offset(cursor: str | None) -> int:
-    if cursor is None:
-        return 0
-    if not cursor.startswith("search:"):
-        raise ValueError("invalid search cursor")
-    try:
-        offset = int(cursor[len("search:") :])
-    except ValueError as exc:
-        raise ValueError("invalid search cursor") from exc
-    if offset < 0:
-        raise ValueError("invalid search cursor")
-    return offset
 
 
 def _retention_coverage(session: Session, turns: list[Turn]) -> str:
@@ -485,15 +472,35 @@ def _only_session(session_graph: SessionGraph) -> Session:
 def _selected_turns(session: Session, turn_id: str | None) -> list[Turn]:
     if turn_id is None:
         return list(session.turns)
+    selected_id = UUID(turn_id)
     for turn in session.turns:
-        if str(turn.turn_id) == turn_id:
+        if turn.turn_id == selected_id:
             return [turn]
     raise ValueError(f"turn not found in selected session: {turn_id}")
 
 
 def _content_complete(session: Session, turns: list[Turn]) -> bool:
-    return session.measurements is None and all(
-        item.measurements is None for turn in turns for item in turn.items
+    for turn in turns:
+        for item in turn.items:
+            if item.vendor_data.get("published_fact_projection") is True:
+                return False
+            measurements = item.measurements
+            if measurements is None:
+                continue
+            for field, chars in (
+                ("text", measurements.text_chars),
+                (
+                    "command" if isinstance(item, CommandExecutionItem) else "input",
+                    measurements.input_chars,
+                ),
+                ("output", measurements.output_chars),
+            ):
+                if chars and getattr(item, field, None) is None:
+                    return False
+    selected_events = {turn.user_request_event_id for turn in turns}
+    return not any(
+        event.event_id in selected_events and event.payload.get("preview_truncated")
+        for event in session.events
     )
 
 
@@ -594,25 +601,31 @@ class _ItemSignals:
         return score
 
     def label(self, item: Item) -> str:
+        return self.label_with_coverage(item)[0]
+
+    def label_with_coverage(self, item: Item) -> tuple[str, bool]:
         if isinstance(item, AgentMessageItem):
-            return truncate_text_preview(_item_text(item), max_len=_SUMMARY_TEXT_LIMIT)
+            text = _item_text(item)
+            return truncate_text_preview(
+                text, max_len=_SUMMARY_TEXT_LIMIT
+            ), _summary_text_trimmed(text)
         summary = self.tool_summary(item)
         if summary:
             name = str(summary.get("name") or item.kind)
-            # A visible desktop ``exec`` wrapper is not a shell command of its
-            # own. Its safe, bounded breakdown describes the orchestration
-            # from the tool input without exposing raw command output.
             description = (
                 summary.get("description")
                 or summary.get("command")
                 or summary.get("breakdown")
             )
             if description:
-                return truncate_text_preview(
-                    f"{name}: {description}", max_len=_SUMMARY_TEXT_LIMIT
+                text = f"{name}: {description}"
+                return (
+                    truncate_text_preview(text, max_len=_SUMMARY_TEXT_LIMIT),
+                    _summary_text_trimmed(text)
+                    or bool(summary.get("description_truncated")),
                 )
-            return name
-        return item.kind
+            return name, False
+        return item.kind, False
 
     def resolution_key(self, item: Item) -> str | None:
         retained = _chronicle_semantics(item).get("resolution_key")
@@ -694,9 +707,12 @@ def _recent_activity_cells(
                 references = _item_references(representative)
                 for item in summary_source_items[:-1]:
                     references = _merge_references(references, _item_references(item))
+                label, text_trimmed = _activity_cell_label(
+                    cell, signals, representative
+                )
                 value: dict[str, Any] = {
                     "kind": _activity_cell_kind(cell, representative),
-                    "label": _activity_cell_label(cell, signals, representative),
+                    "label": label,
                     "references": references,
                 }
                 if cell.get("type") == "tool_script":
@@ -710,6 +726,7 @@ def _recent_activity_cells(
                         timestamp=representative.started_at,
                         structural_score=signals.structural_score(representative),
                         value=value,
+                        text_trimmed=text_trimmed,
                     )
                 )
     return cells
@@ -769,18 +786,18 @@ def _activity_cell_kind(cell: dict[str, Any], representative: Item) -> str:
 
 def _activity_cell_label(
     cell: dict[str, Any], signals: _ItemSignals, representative: Item
-) -> str:
+) -> tuple[str, bool]:
     cell_type = cell.get("type")
     if cell_type == "tool_script":
-        return f"Tool script · {cell.get('name') or 'executor'}"
+        return f"Tool script · {cell.get('name') or 'executor'}", False
     count = cell.get("count")
     if cell_type == "background_terminal_wait":
         suffix = f" ({count} polls)" if isinstance(count, int) and count > 1 else ""
-        return f"Waited for background terminal{suffix}"
+        return f"Waited for background terminal{suffix}", False
     if cell_type == "tool_call_group":
         name = str(cell.get("name") or "Tool")
         if name == "RunCommand" and isinstance(count, int):
-            return f"Ran {count} commands"
+            return f"Ran {count} commands", False
         descriptions = cell.get("descriptions")
         detail = ", ".join(
             description
@@ -790,8 +807,13 @@ def _activity_cell_label(
             if isinstance(description, str) and description
         )
         label = f"{name}: {detail}" if detail else f"{name} ({count} calls)"
-        return truncate_text_preview(label, max_len=_SUMMARY_TEXT_LIMIT)
-    return signals.label(representative)
+        return (
+            truncate_text_preview(label, max_len=_SUMMARY_TEXT_LIMIT),
+            _summary_text_trimmed(label)
+            or (isinstance(descriptions, list) and len(descriptions) > 3)
+            or bool(cell.get("description_truncated")),
+        )
+    return signals.label_with_coverage(representative)
 
 
 def _activity_cell_status(
@@ -885,7 +907,7 @@ def _search_documents(
                     kind="user_message",
                     timestamp=turn.started_at,
                     label="User request",
-                    fields={"text_preview": text},
+                    fields={"text": text},
                     references=_references(
                         session_id=session.session_id,
                         turn_id=turn.turn_id,
@@ -897,7 +919,9 @@ def _search_documents(
                     ),
                     structural_score=18 + _recency_score(item_position, item_count),
                     searchable=(
-                        "complete" if chars is not None and chars <= 280 else "preview"
+                        "complete"
+                        if chars is not None and chars <= len(text)
+                        else "preview"
                     ),
                 )
             )
@@ -936,15 +960,45 @@ def _item_can_produce_search_kind(
 
 
 def _text_searchable(item: Item, text: str) -> Literal["complete", "preview"]:
-    """Whether a retained text preview covers the item's full text."""
+    if getattr(item, "text", None) is not None:
+        return "complete"
+    measurements = item.measurements
+    return (
+        "complete"
+        if measurements is None or measurements.text_chars <= len(text)
+        else "preview"
+    )
 
-    measurements = getattr(item, "measurements", None)
-    if measurements is None:
+
+def _input_searchable(item: Item) -> Literal["complete", "facts_only"]:
+    if item.vendor_data.get("published_fact_projection") is True:
+        return "facts_only"
+    field = "command" if isinstance(item, CommandExecutionItem) else "input"
+    if (
+        item.measurements
+        and item.measurements.input_chars
+        and getattr(item, field, None) is None
+    ):
+        return "facts_only"
+    return "complete"
+
+
+def _output_searchable(
+    item: Item, evidence: dict[str, Any]
+) -> Literal["complete", "preview", "facts_only"]:
+    if getattr(item, "output", None) is not None:
+        return (
+            "preview"
+            if item.measurements and item.measurements.output_truncated
+            else "complete"
+        )
+    if (
+        item.measurements
+        and item.measurements.output_chars == 0
+        and not item.vendor_data.get("published_fact_projection")
+    ):
         return "complete"
-    text_chars = getattr(measurements, "text_chars", 0)
-    if text_chars and text_chars <= 280:
-        return "complete"
-    return "preview"
+    return _evidence_searchable(evidence)
 
 
 def _item_evidence(item: Item) -> dict[str, Any]:
@@ -992,7 +1046,7 @@ def _documents_for_item(
                 kind="assistant_message",
                 timestamp=item.started_at,
                 label="Assistant response",
-                fields={"text_preview": text},
+                fields={"text": text},
                 references=references,
                 structural_score=structural,
                 searchable=_text_searchable(item, text),
@@ -1032,6 +1086,8 @@ def _documents_for_item(
             "status": status,
             "outcome": outcome,
             **evidence_fields,
+            "input": _stringify(item.input),
+            "output": _stringify(item.output),
         }
         documents.append(
             _SearchDocument(
@@ -1041,7 +1097,10 @@ def _documents_for_item(
                 fields=fields,
                 references=references,
                 structural_score=structural,
-                searchable=_evidence_searchable(evidence),
+                searchable=min(
+                    (_input_searchable(item), _output_searchable(item, evidence)),
+                    key=_SEARCHABLE_ORDER.__getitem__,
+                ),
             )
         )
         return documents
@@ -1053,6 +1112,8 @@ def _documents_for_item(
             "concept": concept,
             "status": status,
             "operation": str(getattr(item, "operation", None) or ""),
+            "input": _stringify(getattr(item, "input", None)),
+            "command": _stringify(getattr(item, "command", None)),
         }
         verification_kind = semantics.get("verification_kind")
         if isinstance(verification_kind, str):
@@ -1065,11 +1126,17 @@ def _documents_for_item(
                 fields=fields,
                 references=references,
                 structural_score=structural,
-                searchable="facts_only",
+                searchable=_input_searchable(item),
             )
         )
-    if "tool_result" in kinds and evidence:
-        fields = {"tool_name": tool_name, **evidence_fields}
+    if "tool_result" in kinds and (
+        evidence or getattr(item, "output", None) is not None
+    ):
+        fields = {
+            "tool_name": tool_name,
+            **evidence_fields,
+            "output": _stringify(getattr(item, "output", None)),
+        }
         documents.append(
             _SearchDocument(
                 kind="tool_result",
@@ -1078,15 +1145,15 @@ def _documents_for_item(
                 fields=fields,
                 references=references,
                 structural_score=structural + (8 if outcome == "failed" else 0),
-                searchable=_evidence_searchable(evidence),
+                searchable=_output_searchable(item, evidence),
             )
         )
     return documents
 
 
-def _bounded_text(value: Any) -> tuple[str, bool]:
+def _search_text(value: Any) -> str:
     if value is None:
-        return "", True
+        return ""
     if isinstance(value, str):
         text = value
     else:
@@ -1095,10 +1162,7 @@ def _bounded_text(value: Any) -> tuple[str, bool]:
         except (TypeError, ValueError):
             text = str(value)
     text = " ".join(text.split())
-    if len(text) <= _SEARCH_FIELD_LIMIT:
-        return text, True
-    half = (_SEARCH_FIELD_LIMIT - 5) // 2
-    return f"{text[:half]} ... {text[-half:]}", False
+    return text
 
 
 def _user_request_chars(index: Any, turn: Turn) -> int | None:
@@ -1113,10 +1177,9 @@ def _user_request_chars(index: Any, turn: Turn) -> int | None:
     measurement = event.payload.get(CONTENT_SIZE_MEASUREMENT_KEY)
     if isinstance(measurement, dict) and isinstance(measurement.get("chars"), int):
         return measurement["chars"]
-    # Unmeasured retained request text is already the bounded preview.
     content = event.payload.get("text") or event.payload.get("team_request_summary")
     if isinstance(content, str):
-        return len(content) if len(content) <= 280 else None
+        return len(content) if not event.payload.get("preview_truncated") else None
     return None
 
 
@@ -1129,7 +1192,7 @@ def _item_text(item: AgentMessageItem) -> str:
 
 
 def _stringify(value: Any) -> str:
-    return _bounded_text(value)[0]
+    return _search_text(value)
 
 
 def _command_identity(value: Any) -> str | None:
@@ -1163,7 +1226,11 @@ def _lexical_score(
         "target": 9.0,
         "tool_name": 6.0,
         "operation": 5.0,
+        "text": 4.0,
         "text_preview": 4.0,
+        "input": 4.0,
+        "command": 9.0,
+        "output": 2.0,
         "concept": 3.0,
         "verification_kind": 3.0,
         "preview": 2.0,

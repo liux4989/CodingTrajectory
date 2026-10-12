@@ -6,8 +6,8 @@ Refresh evaluates newly observed sessions discovered through the Core
 revision, input scope, and observed evidence; changed evidence supersedes the
 previous evaluation instead of rewriting it.
 
-There is no remote fallback: every Core call uses the local in-process runtime
-with an explicit ``local`` source. Canonical references resolve live evidence.
+Every Core call uses the local in-process runtime.
+Canonical references resolve live evidence.
 """
 
 from __future__ import annotations
@@ -75,7 +75,6 @@ class CoreFacade:
         self._runtime = ServiceRuntime(
             global_scope=True,
             current_dir=Path.cwd(),
-            source="local",
         )
 
     def __enter__(self) -> Self:
@@ -90,7 +89,11 @@ class CoreFacade:
         if not reply.get("ok"):
             error = reply.get("error") or {}
             message = error.get("message") if isinstance(error, dict) else str(error)
-            code = error.get("code", "invalid_request") if isinstance(error, dict) else "invalid_request"
+            code = (
+                error.get("code", "invalid_request")
+                if isinstance(error, dict)
+                else "invalid_request"
+            )
             raise MonitorCoreError(method, str(message), code=code)
         return reply["result"]
 
@@ -178,9 +181,7 @@ def _evaluate_session_turns(
             strategy_version=watch.strategy_version,
             config_revision=watch.config_revision,
             trigger=trigger,  # type: ignore[arg-type]
-            reference=CanonicalReference(
-                session_id=turn_session, turn_id=turn_id
-            ),
+            reference=CanonicalReference(session_id=turn_session, turn_id=turn_id),
             state=state,  # type: ignore[arg-type]
             result=result,  # type: ignore[arg-type]
             condition=condition,
@@ -266,20 +267,15 @@ def _finding_for(*, watch: Watch, evaluation: Evaluation) -> Finding:
 def resolve_scope_sessions(core: CoreFacade, watch: Watch) -> tuple[list[str], int]:
     """Resolve a watch scope to graph entrypoint IDs via Core inventory.
 
-    Returns (entrypoint_ids, total_observed) over query-bound live inventory pages.
+    Returns (entrypoint_ids, total_observed) from complete scoped inventory.
     """
     if watch.scope.session_id:
         return [watch.scope.session_id], 1
     params = (
         {"project_name": watch.scope.project_name} if watch.scope.project_name else {}
     )
-    items = []
-    while True:
-        result = core.call("project.sessions", params)
-        items.extend(result.get("items") or [])
-        if not result.get("next_cursor"):
-            break
-        params["cursor"] = result["next_cursor"]
+    result = core.call("project.sessions", params)
+    items = result.get("items") or []
     entrypoints = [
         item["root_session_id"]
         for item in items
@@ -344,52 +340,48 @@ def refresh(store: MonitorStore, watch: Watch, *, max_sessions: int) -> RefreshR
     watch.updated_at = _now()
     store.save_watch(watch)
     with CoreFacade() as core:
-        params = {"limit": 200, **watch.scope.model_dump(exclude_none=True)}
-        inventory: dict[str, dict[str, Any]] = {}
-        cursors: set[str] = set()
-        total = None
-        while True:
-            page = core.call("living.sessions", params)
-            items = page["items"]
-            if (
-                page["issues"]
-                or page["returned"] != len(items)
-                or (total is not None and page["total"] != total)
-            ):
-                raise MonitorCoreError(
-                    "living.sessions", "Inventory pass is incomplete", code="partial_inventory"
-                )
-            total = page["total"]
-            for item in items:
-                session_id = item["session_id"]
-                if session_id in inventory:
-                    raise MonitorCoreError(
-                        "living.sessions", "Inventory pass repeats a session", code="partial_inventory"
-                    )
-                inventory[session_id] = item
-            cursor = page["next_cursor"]
-            if not cursor:
-                break
-            if cursor in cursors:
-                raise MonitorCoreError(
-                    "living.sessions", "Inventory cursor did not advance", code="partial_inventory"
-                )
-            cursors.add(cursor)
-            params["cursor"] = cursor
-        if len(inventory) != total:
+        params = watch.scope.model_dump(exclude_none=True)
+        result = core.call("living.sessions", params)
+        items = result["items"]
+        if (
+            result["issues"]
+            or result["returned"] != len(items)
+            or result["total"] != len(items)
+        ):
             raise MonitorCoreError(
-                "living.sessions", "Inventory pass is incomplete", code="partial_inventory"
+                "living.sessions",
+                "Inventory pass is incomplete",
+                code="partial_inventory",
             )
+        inventory: dict[str, dict[str, Any]] = {}
+        for item in items:
+            session_id = item["session_id"]
+            if session_id in inventory:
+                raise MonitorCoreError(
+                    "living.sessions",
+                    "Inventory pass repeats a session",
+                    code="partial_inventory",
+                )
+            inventory[session_id] = item
 
         # Only a complete pass can establish absence and prune prior digests.
         seen = {sid: digest for sid, digest in state.seen.items() if sid in inventory}
         if state.rebaseline:
             seen = {sid: item["digest"] for sid, item in inventory.items()}
-            notes.append("Rebaselined legacy refresh state without evaluating historical sessions.")
+            notes.append(
+                "Rebaselined legacy refresh state without evaluating historical sessions."
+            )
         else:
             changed = sorted(
-                (item for sid, item in inventory.items() if seen.get(sid) != item["digest"]),
-                key=lambda item: (datetime.fromisoformat(item["modified"]), item["session_id"]),
+                (
+                    item
+                    for sid, item in inventory.items()
+                    if seen.get(sid) != item["digest"]
+                ),
+                key=lambda item: (
+                    datetime.fromisoformat(item["modified"]),
+                    item["session_id"],
+                ),
             )
             for item in changed[:max_sessions]:
                 session_id = item["session_id"]
@@ -410,7 +402,9 @@ def refresh(store: MonitorStore, watch: Watch, *, max_sessions: int) -> RefreshR
                 except MonitorCoreError as exc:
                     summary.errored += 1
                     notes.append(str(exc))
-        remaining = any(seen.get(sid) != item["digest"] for sid, item in inventory.items())
+        remaining = any(
+            seen.get(sid) != item["digest"] for sid, item in inventory.items()
+        )
         watch.refresh = state.model_copy(
             update={
                 "seen": seen,

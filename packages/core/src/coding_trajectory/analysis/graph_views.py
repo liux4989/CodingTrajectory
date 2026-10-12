@@ -62,20 +62,15 @@ def build_graph_overview(
     session_graph: SessionGraph,
     *,
     limit: int | None = None,
-    before_turn_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return the complete tree, including spawned-agent sessions.
+    """Project the complete tree with concise assistant previews.
 
-    The narrative projection carries bounded turn requests, bounded assistant
-    response previews, and item references — never raw bodies. Turn windows are
-    deterministic: ``limit`` selects the most recent visible turns per session
-    and ``before_turn_id`` pages to immediately older windows.
+    An explicit limit selects the latest visible turns of each session.
     """
     index = build_session_graph_index(session_graph)
     narrative = build_session_graph_narrative(
         session_graph,
         limit=limit,
-        before_turn_id=before_turn_id,
         index=index,
     )
     sessions = []
@@ -93,8 +88,8 @@ def build_graph_overview(
                 }
             )
         )
-        window = node.get("turn_window")
-        if isinstance(window, dict) and window.get("next_before_turn_id"):
+        selection = node.get("selection")
+        if isinstance(selection, dict) and selection.get("trimmed"):
             trimmed = True
         codex = session.extensions.codex if session.extensions else None
         node.update(
@@ -138,8 +133,6 @@ def build_graph_overview(
         "edges": [edge.model_dump(mode="json") for edge in session_graph.edges],
         "coverage": {
             "retention": "preview",
-            "measurement": "complete",
-            "searchable": None,
-            "trimmed": trimmed,
+            "selection_trimmed": trimmed,
         },
     }
