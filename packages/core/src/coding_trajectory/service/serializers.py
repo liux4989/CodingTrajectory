@@ -10,6 +10,7 @@ from coding_trajectory.analysis.session_stats import (
     session_graph_preview,
     session_graph_title,
 )
+from coding_trajectory.contracts.session import ExecutionCounts
 from coding_trajectory.ingestion.common import format_datetime, prune_nones
 from coding_trajectory.ingestion.execution_models import (
     ToolScriptExecution,
@@ -22,6 +23,74 @@ from coding_trajectory.ingestion.models import (
     SessionGraph,
     Vendor,
 )
+
+
+def attach_execution_counts(
+    graph: SessionGraph, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Stats own compact counts; item detail owns script execution evidence."""
+    from coding_trajectory.analysis.measurements import is_projection_only_item
+    from coding_trajectory.analysis.tool_summary import summarize_tool_call
+    from coding_trajectory.ingestion.indexes import build_session_graph_index
+
+    index = build_session_graph_index(graph)
+    totals: Counter[str] = Counter()
+    total_coverage: Counter[str] = Counter()
+    sections = {
+        section["session_id"]: section for section in payload.get("sessions") or []
+    }
+
+    def apply(target: dict[str, Any], counts: Counter, coverage: Counter) -> None:
+        target["execution"] = ExecutionCounts(
+            scripts=counts["scripts"],
+            observed_calls=counts["observed_calls"],
+            source_only_calls=counts["source_only_calls"],
+            coverage={
+                state: coverage[state] for state in ("complete", "partial", "unknown")
+            },
+        ).model_dump(mode="json")
+        runtime = target.get("runtime") or {}
+        for old, new in (
+            ("tool_calls", "tool_items"),
+            ("failed_tool_calls", "failed_tool_items"),
+        ):
+            if old in runtime:
+                runtime[new] = runtime.pop(old)
+
+    for session in graph.sessions:
+        counts: Counter[str] = Counter()
+        coverage: Counter[str] = Counter()
+        for turn in session.turns:
+            for unit in turn.execution_units:
+                if isinstance(unit, ToolScriptExecution):
+                    counts["scripts"] += 1
+                    counts["observed_calls"] += len(unit.observed_external_calls)
+                    counts["source_only_calls"] += len(unit.source_only_calls)
+                    coverage[unit.inventory_coverage] += 1
+                else:
+                    item = index.items_by_id.get(UUID(unit.item_id))
+                    if item is not None and item.kind in {
+                        "tool_call",
+                        "command_execution",
+                        "file_change",
+                        "plan",
+                    }:
+                        summary = summarize_tool_call(item) or {}
+                        native = summary.get("activity_fidelity") in {
+                            "observed_native",
+                            "derived_matched_native",
+                        }
+                        counts[
+                            "source_only_calls"
+                            if is_projection_only_item(item) and not native
+                            else "observed_calls"
+                        ] += 1
+        totals.update(counts)
+        total_coverage.update(coverage)
+        if section := sections.get(str(session.session_id)):
+            apply(section, counts, coverage)
+    apply(payload, totals, total_coverage)
+    return payload
 
 
 def attach_execution_layer(

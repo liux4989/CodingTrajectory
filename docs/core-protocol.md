@@ -116,6 +116,30 @@ ordering, outcomes, and coverage semantics are unchanged. The CLI, Loop consumer
 types and rendering, and source-audited assertions migrate together. Graph and
 canonical item/event schemas retain their existing names and versions.
 
+## Compact stats execution revision
+
+`session.stats` and `graph.stats` advance to method version 7. Their requests are
+unchanged. Results replace `execution_units` and `execution_composition` with:
+
+```json
+{"execution":{"scripts":0,"observed_calls":0,"source_only_calls":0,
+ "coverage":{"complete":0,"partial":0,"unknown":0}}}
+```
+
+Coverage values count script inventories, not calls. Observed calls include
+direct tool invocations and observed external calls within scripts; wrappers
+count only as scripts. Source-only calls never contribute to observed counts.
+Incomplete inventories remain explicit even when no observed calls exist.
+Graph results include the same counts for each session and their aggregate.
+Runtime `tool_calls`/`failed_tool_calls` become `tool_items`/`failed_tool_items`;
+the CLI migrates `runtime.tools`/`runtime.failed_tools` to those explicit names.
+The existing flat-item arithmetic is unchanged. The CLI removes its inferred
+tool success rate. Membership does not allocate nested token usage or cost.
+Full script evidence remains accessible through `session.items`; per-tool
+measurements remain on `session.tool_usage`. Other method contracts retain
+their existing versions. Qualification uses the protocol gate, metric baselines,
+local source selection, Loop integration, consumer types, and web build.
+
 ## Complete local living revision
 
 Living result identifiers advance alongside the common method/envelope revision:

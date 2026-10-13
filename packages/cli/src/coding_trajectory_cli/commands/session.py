@@ -302,6 +302,32 @@ def _script_lookup(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _append_execution_counts(lines: list[str], payload: dict[str, Any]) -> None:
+    counts = payload["execution"]
+    coverage = counts["coverage"]
+    lines.extend(
+        [
+            "",
+            f"Execution: {counts['scripts']} scripts, {counts['observed_calls']} observed calls",
+        ]
+    )
+    if counts["source_only_calls"]:
+        lines.append(
+            f"Source-only calls: {counts['source_only_calls']} (excluded from observed counts)"
+        )
+    if coverage["partial"] or coverage["unknown"]:
+        lines.append(
+            f"Script inventories: {coverage['complete']} complete, {coverage['partial']} partial, "
+            f"{coverage['unknown']} unknown; observed calls may be incomplete."
+        )
+
+
+def _with_execution_counts(text: str, payload: dict[str, Any]) -> str:
+    lines = [text]
+    _append_execution_counts(lines, payload)
+    return "\n".join(lines).rstrip()
+
+
 def _with_execution_sources(
     text: str, payload: dict[str, Any], args: argparse.Namespace | None = None
 ) -> str:
@@ -789,9 +815,7 @@ def _format_allocated_usage(value: Any) -> str:
 def _render_session_stats_text(
     payload: dict[str, Any], args: argparse.Namespace | None = None
 ) -> str:
-    return _with_execution_sources(
-        _render_session_stats_body(payload, args), payload, args
-    )
+    return _with_execution_counts(_render_session_stats_body(payload, args), payload)
 
 
 def _render_session_stats_body(
@@ -828,6 +852,7 @@ def _render_session_stats_body(
                 ]
             )
             _append_stats_summary(lines, section)
+            _append_execution_counts(lines, section)
 
     if payload.get("billed_token_usage") or any(
         section.get("billed_token_usage") for section in sections
@@ -947,13 +972,13 @@ def _append_stats_cost(
 
 def _append_stats_activity(lines: list[str], runtime: dict[str, Any]) -> None:
     turns = runtime.get("turns") or 0
-    tools = runtime.get("tool_calls") or 0
+    tools = runtime.get("tool_items") or 0
     activity = [
         f"{turns} turn{'s' if turns != 1 else ''}",
-        f"{tools} tool call{'s' if tools != 1 else ''}",
+        f"{tools} tool item{'s' if tools != 1 else ''}",
     ]
-    if runtime.get("failed_tool_calls"):
-        activity[-1] += f" ({runtime['failed_tool_calls']} failed)"
+    if runtime.get("failed_tool_items"):
+        activity[-1] += f" ({runtime['failed_tool_items']} failed)"
     for key, label in (
         ("subagent_sessions", "subagent"),
         ("interrupted_turns", "interrupted turn"),
@@ -1017,17 +1042,17 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
 
     used_tokens = context_window.get("used_tokens") or usage.get("prompt_tokens")
     used_percent = context_window.get("used_percent")
-    tool_calls_total = runtime.get("tool_calls") or 0
-    failed_tool_calls = runtime.get("failed_tool_calls") or 0
+    tool_items_total = runtime.get("tool_items") or 0
+    failed_tool_items = runtime.get("failed_tool_items") or 0
     runtime_line = (
         f"Time: {_format_execution_time(runtime)}, "
         f"wait {format_duration(runtime.get('wait_seconds'))}, "
         f"{runtime.get('turns') or 0} turns, "
         f"{runtime.get('items') or 0} items, "
-        f"{tool_calls_total} tool calls"
+        f"{tool_items_total} tool items"
     )
-    if failed_tool_calls:
-        runtime_line += f" ({failed_tool_calls} failed)"
+    if failed_tool_items:
+        runtime_line += f" ({failed_tool_items} failed)"
     runtime_line += f", {runtime.get('subagent_sessions') or 0} subagent sessions"
     lines.append("")
     lines.append(
@@ -1052,11 +1077,6 @@ def _render_session_stats_details(payload: dict[str, Any]) -> str:
             lines.append(compaction_line)
     _render_compaction_timeline(lines, compaction)
     _append_stats_response_metrics(lines, runtime, prefix="- ")
-    if tool_calls_total:
-        success_rate = round(
-            ((tool_calls_total - failed_tool_calls) / tool_calls_total) * 100, 1
-        )
-        lines.append(f"- Tool Success Rate: {success_rate}%")
     if messages:
         messages_line = (
             f"- Messages: "
@@ -1121,10 +1141,11 @@ def _render_session_stats_sections(
             "- Runtime: "
             f"{runtime.get('turns') or 0} turns, "
             f"{runtime.get('items') or 0} items, "
-            f"{runtime.get('tool_calls') or 0} tool calls"
+            f"{runtime.get('tool_items') or 0} tool items"
         )
         lines.append(f"- Compaction count: {runtime.get('compactions') or 0}")
         _append_stats_response_metrics(lines, runtime, prefix="- ")
+        _append_execution_counts(lines, section)
 
     graph_context = payload.get("context_window") or {}
     runtime = payload.get("runtime") or {}
@@ -1142,7 +1163,7 @@ def _render_session_stats_sections(
         "- Graph runtime: "
         f"{runtime.get('turns') or 0} turns, "
         f"{runtime.get('items') or 0} items, "
-        f"{runtime.get('tool_calls') or 0} tool calls, "
+        f"{runtime.get('tool_items') or 0} tool items, "
         f"{runtime.get('subagent_sessions') or 0} subagent sessions"
     )
     lines.append(f"- Total compaction count: {runtime.get('compactions') or 0}")

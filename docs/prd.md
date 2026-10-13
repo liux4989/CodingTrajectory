@@ -165,6 +165,12 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - `session.stats` owns compact session time, status, count, context, compaction,
   and effort-change statistics; `graph.stats` owns the corresponding explicit
   graph aggregate and per-session sections.
+- Stats expose compact `execution` counts for scripts, observed calls, and
+  source-only calls, with complete/partial/unknown script inventory coverage.
+  Flat runtime `tool_items` counts are distinct from observed execution calls.
+  Stats do not embed execution units, source bodies, or per-tool breakdowns;
+  expanded evidence belongs to `session.items` and tool measurements to
+  `session.tool_usage`. Wrapper completion never proves nested success.
 - `session.usage` owns session and turn token accounting; `graph.usage` owns the
   corresponding explicit graph aggregate and per-session sections.
 - `session.model_usage` owns provider/model grouping and throughput.

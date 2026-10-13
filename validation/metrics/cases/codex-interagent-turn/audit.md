@@ -116,3 +116,17 @@ item, and event reference names remain explicit. Text remains a bounded preview.
 All assertion values and source references remain unchanged. The evidence and
 normalization audited under Session narrative v8 still apply; no metric value,
 source ordering, outcome, or coverage semantics changes.
+
+
+## Compact stats execution
+
+Stats runtime.tools is renamed runtime.tool_items, with its original audited
+value unchanged. This flat-item count is distinct from observed execution calls.
+The selected session evidence at source/parent.jsonl:2-6 contains 0 direct
+observed tool calls and no script-executor source or source-only call sites.
+Thus execution.scripts is 0, execution.observed_calls is 0, and
+execution.source_only_calls is 0. Native calls are counted from execution-unit
+references; script wrappers count separately and their source-only inventories
+never contribute to observed calls. These assertions derive from committed
+source evidence, not current output. Usage, cost, timing, and outcome values
+are unchanged. Full execution evidence remains available through session.items.

@@ -1,7 +1,7 @@
 {"schema_version":1,"method":"session.stats","assertions":[
   {"path":"$.runtime.turns","expected":1,"source_refs":["source/session.jsonl:1","source/session.jsonl:5"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.runtime.items","expected":3,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#lifecycle"},
-  {"path":"$.runtime.tools","expected":1,"source_refs":["source/session.jsonl:3"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.runtime.tool_items","expected":1,"source_refs":["source/session.jsonl:3"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.runtime.execution_seconds","expected":75,"source_refs":["source/session.jsonl:1","source/session.jsonl:5"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.messages.assistant","expected":2,"source_refs":["source/session.jsonl:2","source/session.jsonl:3","source/session.jsonl:5"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.messages.reasoning","expected":1,"source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#lifecycle"},
@@ -15,5 +15,8 @@
     {"path": "$.cost_summary.total_cost.confidence", "expected": "estimated", "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.no_cache_cost.value_usd", "expected": 0.1658392, "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.0536256, "source_refs": ["source/session.jsonl:2-3,5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
-  {"path":"$.runtime.output_tokens_per_second","expected":5.019,"source_refs":["source/session.jsonl:1-5"],"audit_ref":"audit.md#output-token-throughput"}
+  {"path":"$.runtime.output_tokens_per_second","expected":5.019,"source_refs":["source/session.jsonl:1-5"],"audit_ref":"audit.md#output-token-throughput"},
+    {"path": "$.execution.scripts", "expected": 0, "source_refs": ["source/session.jsonl:3-4"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.observed_calls", "expected": 1, "source_refs": ["source/session.jsonl:3-4"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.source_only_calls", "expected": 0, "source_refs": ["source/session.jsonl:3-4"], "audit_ref": "audit.md#compact-stats-execution"}
 ]}

@@ -320,9 +320,21 @@ class GraphOverviewResponse(OverviewResponse):
     pass
 
 
+class ScriptInventoryCoverage(RequestModel):
+    complete: int = Field(ge=0)
+    partial: int = Field(ge=0)
+    unknown: int = Field(ge=0)
+
+
+class ExecutionCounts(RequestModel):
+    scripts: int = Field(ge=0)
+    observed_calls: int = Field(ge=0)
+    source_only_calls: int = Field(ge=0)
+    coverage: ScriptInventoryCoverage
+
+
 class SessionStatsResponse(ContractModel):
-    execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
-    execution_composition: ExecutionComposition | None = None
+    execution: ExecutionCounts
     root_session_id: str | None = None
     scope: str | None = None
     vendor: str | None = None
@@ -640,8 +652,7 @@ class CliSessionOverviewResponse(SessionOverviewResponse):
 
 
 class CliSessionStatsResponse(ContractModel):
-    execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
-    execution_composition: ExecutionComposition | None = None
+    execution: ExecutionCounts
     id: str
     session_id: str | None = None
     role: str | None = None

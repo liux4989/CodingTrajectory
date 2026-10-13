@@ -1,6 +1,6 @@
 {"schema_version":1,"method":"session.stats","assertions":[
   {"path":"$.runtime.turns","expected":1,"source_refs":["source/session.jsonl:4","source/session.jsonl:13"],"audit_ref":"audit.md#lifecycle"},
-  {"path":"$.runtime.tools","expected":4,"source_refs":["source/session.jsonl:5-12"],"audit_ref":"audit.md#lifecycle"},
+  {"path":"$.runtime.tool_items","expected":4,"source_refs":["source/session.jsonl:5-12"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.runtime.execution_seconds","expected":91,"source_refs":["source/session.jsonl:4","source/session.jsonl:13"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.messages.assistant","expected":5,"source_refs":["source/session.jsonl:5,7,9,11,13"],"audit_ref":"audit.md#lifecycle"},
   {"path":"$.model.name","expected":"glm-5.2","source_refs":["source/session.jsonl:2"],"audit_ref":"audit.md#usage-arithmetic"},
@@ -12,5 +12,8 @@
     {"path": "$.cost_summary.total_cost.value_usd", "expected": 0.01081964, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.total_cost.confidence", "expected": "reported", "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.no_cache_cost.value_usd", "expected": 0.0273086, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
-    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.01648896, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"}
+    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.01648896, "source_refs": ["source/session.jsonl:5,7,9,11,13"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.execution.scripts", "expected": 0, "source_refs": ["source/session.jsonl:5-12"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.observed_calls", "expected": 4, "source_refs": ["source/session.jsonl:5-12"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.source_only_calls", "expected": 0, "source_refs": ["source/session.jsonl:5-12"], "audit_ref": "audit.md#compact-stats-execution"}
 ]}

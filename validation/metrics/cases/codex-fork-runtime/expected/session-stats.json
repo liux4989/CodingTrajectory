@@ -15,6 +15,9 @@
     {"path": "$.cost_summary.total_cost.value_usd", "expected": 0.079969, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.total_cost.confidence", "expected": "estimated", "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.no_cache_cost.value_usd", "expected": 0.420385, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
-    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.340416, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"}
+    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.340416, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.execution.scripts", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.observed_calls", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.source_only_calls", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#compact-stats-execution"}
 ]
 }

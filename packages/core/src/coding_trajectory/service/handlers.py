@@ -84,13 +84,21 @@ def dispatch(
         "session.overview",
         "graph.overview",
     }:
-        from coding_trajectory.service.serializers import attach_execution_layer
+        from coding_trajectory.service.serializers import (
+            attach_execution_counts,
+            attach_execution_layer,
+        )
 
         identity = params.get("session_id") or params.get("root_session_id")
         graph = _resolve_session_graph(context.store, identity)
         if method.startswith("session.") and method != "session.overview":
             graph = _select_session_graph(graph, identity)
-        result = attach_execution_layer(graph, result, turn_id=params.get("turn_id"))
+        if method in {"session.stats", "graph.stats"}:
+            result = attach_execution_counts(graph, result)
+        else:
+            result = attach_execution_layer(
+                graph, result, turn_id=params.get("turn_id")
+            )
     return contract.validate_response(result)
 
 

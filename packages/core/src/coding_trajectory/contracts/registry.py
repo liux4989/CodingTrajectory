@@ -136,12 +136,12 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.stats",
-            6,
+            7,
             SessionStatsRequest,
             SessionStatsResponse,
             CliSessionStatsResponse,
         ),
-        ServiceContract("graph.stats", 6, GraphStatsRequest, SessionStatsResponse),
+        ServiceContract("graph.stats", 7, GraphStatsRequest, SessionStatsResponse),
         ServiceContract(
             "session.usage",
             6,

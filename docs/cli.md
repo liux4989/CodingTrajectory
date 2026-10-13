@@ -189,6 +189,12 @@ activity or lifecycle records end that pairing window. This also restores contex
 eviction accounting for newer rollouts that omit the legacy event.
 
 Existing session commands share `Turn → execution unit → item references`.
+Stats show only compact script and observed-call counts, source-only counts,
+and incomplete inventory coverage. Runtime activity labels count tool items,
+which can include wrapper/child representations; they are not observed-call
+counts. Stats JSON uses `execution` and `runtime.tool_items`; source bodies and
+execution units are available through `session items`. Graph stats preserve
+per-session counts as well as totals. Stats no longer infer a tool success rate.
 Overview places scripts in surrounding turn context, with source-record links,
 observed external-call details, explicit ownership evidence, and inventory
 coverage. All matching activities and references are included. Items/events/search/tool usage include
@@ -205,8 +211,9 @@ Stats separates external tool observations from the resident-content tree.
 Script IDs do not become categories: script source and unassigned emitted output
 retain content custody, while independently measured tool content aggregates by
 recorded identity. Source-only call sites are not execution counts. Usage keeps
-provider totals and original item attribution. Text and JSON retain the same
-execution/source references; terminal formatting preserves full link targets.
+provider totals and original item attribution. Detail views retain execution
+and source references; stats retain counts and coverage only. Terminal
+formatting preserves full link targets on detail views.
 See [the execution contract](tool-classification.md).
 
 Events contain normalized types, status, timestamps, references, and normalized

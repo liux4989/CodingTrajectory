@@ -115,8 +115,7 @@ measurements, without an invented usage split. Provider totals and billing
 remain separately reported.
 
 The stats context tree concerns the resident context after compaction. Its
-external-call composition and source-reference section concern the returned
-execution scope, which can include the entire session history. These scopes
+compact execution counts concern the scoped session history. These scopes
 must not be confused. Incomplete inventories are reported alongside observations.
 
 ## Existing command projections
@@ -127,7 +126,12 @@ is introduced. Selected child evidence includes the parent reference even when
 pagination excludes its root. Item/event row counts retain their own meaning.
 Text and JSON preserve the same relationships and navigation targets. Terminal
 formatting never abbreviates a UUID inside a link or clips a link target.
-Overview discloses when its activity cap omits earlier executions.
+Stats return compact script, observed-call, and source-only counts with inventory
+coverage, without embedding execution units. Graph stats preserve per-session
+counts and their aggregate. Flat runtime tool-item counts are labeled separately;
+they are not observed execution counts. Use item detail for full script evidence
+and tool usage for per-tool measurements. Stats do not infer success rates from
+the absence of failure. Overview discloses when turn selection omits earlier turns.
 
 ## Qualification
 
@@ -137,9 +141,10 @@ selection qualification, and the retrieval integration benchmark. Expected
 metrics remain audited against committed provider evidence; current output alone
 cannot justify changing expected values. Repository guidance prohibits unit tests.
 
-Actual-session verification uses overview and stats for
+Actual-session verification uses overview, stats, and item detail for
 `01a12eb5-0efa-7d80-88ec-64bdce718cc3` and
 `01a12ec1-bb50-7da2-b3e7-e05d2d173aab`, checking source-record digests, lossless
 source extraction, observed/source-only separation, nested command arguments,
-execution-layer retention in JSON, and the absence of script-ID categories.
+execution-layer retention in item-detail JSON, compact counts and coverage in
+stats JSON, and the absence of script-ID categories.
 These are live logs; snapshots and counts change as new turns append.

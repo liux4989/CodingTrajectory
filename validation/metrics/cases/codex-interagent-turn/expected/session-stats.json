@@ -5,7 +5,7 @@
     {"path": "$.runtime.turns", "expected": 1, "source_refs": ["source/parent.jsonl:2"], "audit_ref": "audit.md#session-scope"},
     {"path": "$.runtime.subagents", "expected": 0, "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#session-scope"},
     {"path": "$.runtime.execution_seconds", "expected": 109, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#session-scope"},
-    {"path": "$.runtime.tools", "expected": 0, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#session-scope"},
+    {"path": "$.runtime.tool_items", "expected": 0, "source_refs": ["source/parent.jsonl:2", "source/parent.jsonl:6"], "audit_ref": "audit.md#session-scope"},
     {"path": "$.runtime.average_ttft_ms", "expected": 3392, "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#session-scope"},
     {"path": "$.model.name", "expected": "gpt-5.5", "source_refs": ["source/parent.jsonl:3"], "audit_ref": "audit.md#usage-arithmetic"},
     {"path": "$.billed_token_usage.processed", "expected": 1110, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#session-scope"},
@@ -16,6 +16,9 @@
     {"path": "$.cost_summary.total_cost.value_usd", "expected": 0.0047, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.total_cost.confidence", "expected": "estimated", "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
     {"path": "$.cost_summary.no_cache_cost.value_usd", "expected": 0.0083, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
-    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.0036, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"}
+    {"path": "$.cost_summary.cache_savings.value_usd", "expected": 0.0036, "source_refs": ["source/parent.jsonl:5"], "audit_ref": "audit.md#recorded-cost-and-net-cache-savings"},
+    {"path": "$.execution.scripts", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.observed_calls", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#compact-stats-execution"},
+    {"path": "$.execution.source_only_calls", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#compact-stats-execution"}
 ]
 }

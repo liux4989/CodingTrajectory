@@ -574,8 +574,7 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
     compaction = payload.get("compaction") or {}
     return drop_none(
         {
-            "execution_units": payload.get("execution_units", []),
-            "execution_composition": payload.get("execution_composition"),
+            "execution": payload["execution"],
             "id": payload.get("root_session_id") or payload.get("session_id"),
             "session_id": payload.get("session_id"),
             "role": payload.get("role"),
@@ -628,8 +627,8 @@ def compact_stats_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     "wait_seconds": runtime.get("wait_seconds"),
                     "turns": runtime.get("turns"),
                     "items": runtime.get("items"),
-                    "tools": runtime.get("tool_calls"),
-                    "failed_tools": runtime.get("failed_tool_calls") or None,
+                    "tool_items": runtime.get("tool_items"),
+                    "failed_tool_items": runtime.get("failed_tool_items") or None,
                     "subagents": runtime.get("subagent_sessions"),
                     "compactions": runtime.get("compactions"),
                     "interrupted_turns": runtime.get("interrupted_turns") or None,
