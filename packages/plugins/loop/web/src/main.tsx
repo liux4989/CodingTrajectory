@@ -654,57 +654,63 @@ function InvestigationView({
             </div>
             <ErrorNotice message={overview.error} />
             {overview.loading && <Loading />}
-            {overview.data?.result.sessions.map((session, i) => (
-              <div key={string(session.session_id) || i}>
-                <p className="small">{session.cwd && <>cwd: <code className="break-all">{session.cwd}</code><br /></>}{session.agent_path && <>agent_path: <code className="break-all">{session.agent_path}</code></>}</p>
-                {overviewTurns.filter(turn => turn.session_id === session.session_id).map((turn, j) => (
-                  <article className="turn" key={string(turn.turn_id) || j}>
-                    <div className="section-heading">
-                      <h3>Turn {turn.source_turn_ordinal + 1}</h3>
-                      <Badge variant="outline">
-                        {string(turn.status) || "Unknown status"}
-                      </Badge>
-                    </div>
-                    <p className="muted small">{date(turn.started_at)}</p>
+            {overviewTurns.map((turn) => (
+              <article className="turn" key={turn.turn_id}>
+                <div className="section-heading">
+                  <h3>Turn {turn.source_sequence + 1}</h3>
+                  <Badge variant="outline">
+                    {turn.status || "Unknown status"}
+                  </Badge>
+                </div>
+                <p className="muted small">{date(turn.started_at)}</p>
+                <p>{turn.user_request?.preview || "Request content unavailable"}</p>
+                {turn.user_request?.truncated && (
+                  <p className="muted small">Request preview shortened.</p>
+                )}
+                {turn.entries.map((entry) => (
+                  <div
+                    className={entry.kind === "activity" ? "activity" : undefined}
+                    key={entry.item_ids[0]}
+                  >
                     <p>
-                      {string(object(turn.user_request).content) ||
-                        "Request content unavailable"}
+                      {entry.kind === "activity" && <>{entry.activity_type} · </>}
+                      {entry.preview}
+                      {entry.kind === "activity" && (
+                        <> · {entry.outcome || entry.status || "Outcome unknown"}</>
+                      )}
                     </p>
-                    {turn.assistant_responses.map(response => <p key={response.item_id}>{response.preview}</p>)}
-                    {turn.activities.map((activity, index) => (
-                      <div className="activity" key={index}>
-                        <p>
-                          {activity.tool}
-                          {(activity.count ?? 1) > 1 ? ` ×${activity.count}` : ""} ·{" "}
-                          {activity.target || activity.path || activity.cmd || activity.query || activity.url || activity.task || "Target not retained"} ·{" "}
-                          {activity.outcome || activity.status || "Outcome unknown"}
-                        </p>
-                        {activity.item_ids.map((item_id) => (
-                          <EvidenceLink
-                            key={item_id}
-                            reference={{
-                              session_id: string(session.session_id),
-                              turn_id: string(turn.turn_id),
-                              item_id,
-                            }}
-                          >
-                            Item {short(item_id)}
-                          </EvidenceLink>
-                        ))}
-                      </div>
+                    {entry.truncated && (
+                      <p className="muted small">
+                        Preview shortened; inspect item details for full content.
+                      </p>
+                    )}
+                    {entry.item_ids.map((item_id) => (
+                      <EvidenceLink
+                        key={item_id}
+                        reference={{
+                          session_id: reference.session_id,
+                          turn_id: turn.turn_id,
+                          item_id,
+                        }}
+                      >
+                        Item {short(item_id)}
+                      </EvidenceLink>
                     ))}
-                    <EvidenceLink
-                      reference={{
-                        session_id: string(session.session_id),
-                        turn_id: string(turn.turn_id),
-                      }}
-                    >
-                      Inspect turn items
-                    </EvidenceLink>
-                  </article>
+                  </div>
                 ))}
-              </div>
+                <EvidenceLink
+                  reference={{
+                    session_id: reference.session_id,
+                    turn_id: turn.turn_id,
+                  }}
+                >
+                  Inspect turn items
+                </EvidenceLink>
+              </article>
             ))}
+            {overview.data?.result.coverage.selection_trimmed && (
+              <p className="muted small">Showing selected latest turns.</p>
+            )}
             {overview.data && !overviewTurns.length && (
               <p className="muted small">No turns in this session.</p>
             )}

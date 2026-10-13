@@ -24,7 +24,7 @@ The log file to analyze is at: {log_file}
 Use this sequence to explore the log through enriched, post-processed structure:
 1. `ct project list --output json`  → list all known projects; find the project for the log above
 2. `ct project sessions <PROJECT_NAME> --output json`  → list sessions for the project and choose a session ID
-3. `ct session overview <SESSION_ID> --output json`  → session structure, item types, user requests — start here
+3. `ct session overview <SESSION_ID> --output json`  → ordered turns, assistant/activity entries, user requests — start here
 4. `ct session items <SESSION_ID> [<ITEM_ID> ...] --output json`  → full detail for one session or specific items (returns JSON array)
 
 ## Raw View

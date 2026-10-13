@@ -9,7 +9,10 @@ from uuid import UUID
 from pydantic import Field, field_validator, model_validator
 
 from coding_trajectory.contracts.base import ContractModel, RequestModel
-from coding_trajectory.contracts.overview import OverviewResponse
+from coding_trajectory.contracts.overview import (
+    OverviewResponse,
+    SessionNarrativeResponse,
+)
 from coding_trajectory.ingestion.execution_models import (
     ExecutionComposition,
     TurnExecutionLayer,
@@ -201,7 +204,7 @@ class ProjectSessionsResponse(CollectionResponse):
     items: list[SessionGraphSummary]
 
 
-class SessionOverviewResponse(OverviewResponse):
+class SessionOverviewResponse(SessionNarrativeResponse):
     pass
 
 
@@ -630,9 +633,8 @@ class CliProjectSessionsResponse(ContractModel):
     items: list[CliSessionGraphSummary]
 
 
-class CliSessionOverviewResponse(ContractModel):
-    id: str
-    sessions: list[dict[str, Any]] = Field(default_factory=list)
+class CliSessionOverviewResponse(SessionOverviewResponse):
+    pass
 
 
 class CliSessionStatsResponse(ContractModel):

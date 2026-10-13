@@ -144,6 +144,16 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
 - `session.overview` owns chronological turns and activity. Summary does not
   duplicate its recent-activity view, and graph overview does not duplicate its
   narrative.
+- Session overview selects exactly one session and returns `session_id`, `title`,
+  ordered `turns`, and selection coverage. Each turn carries its stable identity,
+  source sequence, start timestamp, observed status, recorded request preview,
+  and one ordered collection of assistant/activity entries. Previews carry their
+  own truncation flags and supporting item or event IDs. Script lifecycle is
+  separate from nested call outcomes; wrapper completion never proves nested
+  success. Tool types retain recorded identities rather than inferred categories.
+- Session overview does not embed graph topology, session metadata inventories,
+  metric totals, or execution evidence. Consumers use graph/tree queries for
+  topology and item/event queries for expanded evidence.
 - `session.search` owns retrieval over complete available normalized session evidence.
 
 ### Metric query ownership

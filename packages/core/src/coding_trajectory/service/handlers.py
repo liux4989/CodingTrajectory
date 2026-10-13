@@ -222,11 +222,10 @@ def _handle_living_sessions(
 
 
 def _handle_session_overview(params: dict[str, Any], context: ServiceContext) -> Any:
-    from coding_trajectory.analysis.overview import build_overview
+    from coding_trajectory.analysis.overview import build_session_overview
 
-    return build_overview(
+    return build_session_overview(
         _resolve_session_graph(context.store, params["session_id"]),
-        method="session.overview",
         params=params,
     )
 

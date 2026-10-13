@@ -65,3 +65,18 @@ These additive assertions derive from committed timestamps, not command output. 
 ## Recorded cost and net cache savings
 
 The committed usage counts at `source/session.jsonl:2-3,5` and the pinned pricing artifact produce `total_cost = 0.1122136` USD (estimated). Repricing the same input without cache reads yields `0.1658392` USD, with output and separately counted reasoning unchanged. There are no cache writes in this case. Net savings is `0.1658392 - 0.1122136 = 0.0536256` USD. The summary includes 3 recorded usage entries; repeated Claude stream records remain repeated recorded evidence. Existing expected metrics are unchanged.
+
+
+## Session narrative v8
+
+The approved session overview refactor selects the exact session and exposes
+`session_id`, `title`, ordered `turns`, and selection coverage. The committed
+header identifies the same session as before. Session metadata assertions
+(vendor, status, or root relationship) move unchanged to `graph.overview` in
+`expected/structure.json`; they are no longer session-narrative properties.
+The first source turn has canonical sequence 0 under the shared transcript
+projector's zero-based turn counter. Its observed completion is unchanged.
+Requests and assistant/activity entries retain bounded previews, truncation
+flags, and stable evidence references; item details own execution evidence.
+
+No usage, cost, runtime, throughput, or canonical membership value changes.

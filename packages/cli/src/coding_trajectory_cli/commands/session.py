@@ -168,6 +168,43 @@ def _overview_activity_label(activity: dict[str, Any]) -> str:
 
 
 def _render_session_overview_text(payload: dict[str, Any]) -> str:
+    turns = payload["turns"]
+    lines = [f"# Session `{payload['session_id']}`", ""]
+    if payload.get("title"):
+        lines.extend([payload["title"], ""])
+    lines.append(f"{len(turns)} visible turn{'s' if len(turns) != 1 else ''}")
+    shortened = False
+    for turn in turns:
+        request = turn["user_request"]
+        lines.extend(
+            [
+                "",
+                f"### Turn {turn['source_sequence'] + 1} · {turn['status']}",
+                request["preview"] if request else "Request unavailable",
+            ]
+        )
+        shortened = shortened or bool(request and request["truncated"])
+        for entry in turn["entries"]:
+            shortened = shortened or entry["truncated"]
+            if entry["kind"] == "assistant":
+                lines.append(f"Assistant: {entry['preview']}")
+            else:
+                state = entry["outcome"] or entry["status"]
+                annotation = f" [{state}]" if state else ""
+                refs = ", ".join(f"`{identity}`" for identity in entry["item_ids"])
+                lines.append(
+                    f"- {entry['activity_type']}{annotation}: {entry['preview']} (items {refs})"
+                )
+    if payload["coverage"]["selection_trimmed"]:
+        lines.extend(["", "Showing selected latest turns · source order"])
+    if shortened:
+        lines.extend(
+            ["", "Text previews shortened; use item or event details for full content."]
+        )
+    return "\n".join(lines).rstrip()
+
+
+def _render_graph_narrative_text(payload: dict[str, Any]) -> str:
     sessions = payload.get("sessions") or []
     turns = payload.get("turns") or []
     turn_count = len(turns)
@@ -1441,10 +1478,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     session_overview = session_sub.add_parser(
         "overview",
         prog="ct session overview",
-        help="Show a compact session hierarchy.",
+        help="Show chronological turns and activity for one session.",
         formatter_class=GhFormatter,
     )
-    add_session_source(session_overview)
+    session_overview.add_argument(
+        "session_id", metavar="SESSION_ID", help="Exact canonical session ID."
+    )
     add_turn_window_flags(session_overview, view_name="projection")
     add_output_flags(session_overview)
     session_overview.set_defaults(

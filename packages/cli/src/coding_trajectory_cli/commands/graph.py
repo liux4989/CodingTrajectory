@@ -12,7 +12,7 @@ from coding_trajectory_cli._shared import (
     add_turn_window_flags,
 )
 from coding_trajectory_cli.commands.session import (
-    _render_session_overview_text,
+    _render_graph_narrative_text,
     _render_session_stats_text,
     _render_session_usage_text,
 )
@@ -33,7 +33,7 @@ def _graph_usage_params(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _render_graph_overview_text(payload: dict[str, Any]) -> str:
-    body = _render_session_overview_text(payload).replace("# Session `", "# Graph `", 1)
+    body = _render_graph_narrative_text(payload).replace("# Session `", "# Graph `", 1)
     orchestration = payload.get("orchestration") or {}
     if orchestration:
         kind = orchestration.get("kind") or "-"

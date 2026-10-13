@@ -5,7 +5,120 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from coding_trajectory.contracts.overview import OverviewSession, OverviewTurn
+from coding_trajectory.contracts.overview import (
+    NarrativeActivity,
+    NarrativeAssistant,
+    NarrativeTurn,
+    OverviewSession,
+    OverviewTurn,
+    SessionNarrativeResponse,
+)
+
+
+def _narrative_entries(turn: Any) -> list[NarrativeAssistant | NarrativeActivity]:
+    from coding_trajectory.analysis.activity_flow import (
+        build_flows,
+        public_activity_outcome,
+    )
+    from coding_trajectory.analysis.projection_utils import truncate_text_preview
+
+    items = {str(item.item_id): item for item in turn.items}
+    entries = []
+    for flow in build_flows(turn.items, execution_units=turn.execution_units):
+        item = items[flow["item_id"]]
+        if flow["type"] == "assistant_response":
+            text = flow["text"]
+            entries.append(
+                NarrativeAssistant(
+                    preview=truncate_text_preview(text, max_len=280),
+                    item_ids=[flow["item_id"]],
+                    truncated=len(" ".join(text.split())) > 280
+                    or bool(item.measurements and item.measurements.text_chars > 280),
+                )
+            )
+            continue
+        script = flow.get("script")
+        if script:
+            preview = script.get("source_preview") or flow.get("name") or "Tool script"
+            activity_type = "tool_script"
+            status = script["result"]["lifecycle"]
+            # Script lifecycle describes its wrapper, not nested call outcomes.
+            outcome = None
+            truncated = script["source_preview_truncated"]
+            item_ids = script["item_ids"]
+        else:
+            activity_type = flow["name"]
+            preview = flow.get("description") or activity_type
+            status = getattr(item, "status", None)
+            outcome = public_activity_outcome(flow.get("activity_outcome"))
+            truncated = bool(flow.get("description_truncated"))
+            item_ids = [flow["item_id"]]
+            if flow.get("activity_wrapper_status") == "failed":
+                preview = f"[wrapper failed] {preview}"
+        entries.append(
+            NarrativeActivity(
+                activity_type=activity_type,
+                preview=truncate_text_preview(preview, max_len=280),
+                status=status,
+                outcome=outcome,
+                item_ids=item_ids,
+                truncated=truncated or len(" ".join(preview.split())) > 280,
+            )
+        )
+    return entries
+
+
+def build_session_overview(graph: Any, *, params: dict[str, Any]) -> dict[str, Any]:
+    """One session's ordered narrative, with detail kept behind stable references."""
+    from coding_trajectory.analysis.projection_utils import truncate_text_preview
+    from coding_trajectory.analysis.request_lineage import (
+        extract_user_request,
+        is_low_value_turn,
+    )
+    from coding_trajectory.analysis.session_stats import session_title
+    from coding_trajectory.ingestion.indexes import (
+        build_session_graph_index,
+        event_for_turn_user_request,
+    )
+    from coding_trajectory.service.selection import select_rows
+
+    index = build_session_graph_index(graph)
+    session = index.sessions_by_id[UUID(params["session_id"])]
+    rows = []
+    for turn in sorted(session.turns, key=lambda t: (t.sequence, str(t.turn_id))):
+        request = extract_user_request(index, turn, session=session)
+        if is_low_value_turn(turn.items, request):
+            continue
+        event = event_for_turn_user_request(index, turn)
+        rows.append(
+            NarrativeTurn(
+                turn_id=str(turn.turn_id),
+                source_sequence=turn.sequence,
+                started_at=turn.started_at,
+                status=turn.status,
+                user_request={
+                    "preview": truncate_text_preview(request["content"], max_len=280),
+                    "event_id": str(event.event_id) if event else None,
+                    "truncated": len(" ".join(request["content"].split())) > 280
+                    or bool(event and event.payload.get("preview_truncated")),
+                }
+                if request
+                else None,
+                entries=_narrative_entries(turn),
+            ).model_dump(mode="json")
+        )
+    selected = select_rows(
+        rows,
+        limit=params.get("limit"),
+        key=lambda row: (row["source_sequence"], row["turn_id"]),
+        latest=True,
+    )
+    return SessionNarrativeResponse(
+        session_id=str(session.session_id),
+        title=session_title(session),
+        turns=selected,
+        coverage={"selection_trimmed": len(selected) < len(rows)},
+    ).model_dump(mode="json")
 
 
 def overview_rows(

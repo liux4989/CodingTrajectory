@@ -55,6 +55,30 @@ Shared `$defs` and compact schema serialization reduce file size, not constraint
 
 Never update the snapshot only to make CI pass.
 
+## Session narrative revision
+
+`session.overview` advances from method version 7 to 8. Its request is unchanged;
+its result now contains only `session_id`, `title`, `turns`, and `coverage`.
+The session is the exact requested thread, including when selecting a child.
+Turns retain `turn_id`, `source_sequence`, `started_at`, `status`, `user_request`,
+and ordered `entries`. Request previews carry an event reference; assistant and
+activity previews carry item references. Each preview declares `truncated`.
+Activity entries retain recorded tool identity, observed status, and an outcome
+only when evidence supports it. Script wrapper lifecycle does not imply nested
+call success. Recorded requests are shown with their own event evidence instead
+of substituting a parent's human request under a child event reference.
+
+Consumers migrate from joining `assistant_responses`, `activities`, and
+`execution_units` to reading `entries` in returned source order. Topology and
+session metadata remain on graph/tree/inventory surfaces; execution detail is
+available through `session.items`. The old ordinals, duplicate references,
+graph fields, and embedded execution evidence are removed. Selection coverage
+remains explicit; array lengths provide returned counts. The CLI migrates with
+the contract, while `graph.overview` retains its existing version and shape.
+Qualification includes the protocol gate, local source-selection workflow,
+Loop consumer check, and source-audited metric baselines. No metric formula or
+expected metric value changes.
+
 ## Complete local living revision
 
 Living result identifiers advance alongside the common method/envelope revision:

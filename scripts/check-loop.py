@@ -157,7 +157,7 @@ def main():
                 == "Synthetic example: verify command failure handling."
             )
             assert brief["coverage"]["retention"] == "complete"
-            assert core("session.overview", {**scope, "limit": 1})["sessions"]
+            assert core("session.overview", {**scope, "limit": 1})["turns"]
             first = core("session.items", {**scope, "limit": 1})
             assert first["returned"] == 1 and "next_cursor" not in first
             complete_items = core("session.items", scope)

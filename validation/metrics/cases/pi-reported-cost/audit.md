@@ -111,3 +111,24 @@ The two obsolete counter assertions are replaced by display-completeness checks:
 reasoning and tool content (lines 4–13) are individually shorter than the retained
 280-character display preview limit. These expectations follow the committed
 fixture and approved contract, rather than current metric command output.
+
+
+## Session narrative v8
+
+The approved session overview refactor selects the exact session and exposes
+`session_id`, `title`, ordered `turns`, and selection coverage. The committed
+header identifies the same session as before. Session metadata assertions
+(vendor, status, or root relationship) move unchanged to `graph.overview` in
+`expected/structure.json`; they are no longer session-narrative properties.
+The first source turn has canonical sequence 0 under the shared transcript
+projector's zero-based turn counter. Its observed completion is unchanged.
+Requests and assistant/activity entries retain bounded previews, truncation
+flags, and stable evidence references; item details own execution evidence.
+
+For Pi, committed source/session.jsonl lines 5-12 prove four ordered bash
+call/result pairs before the final assistant text on line 13. Their names and
+`succeeded` outcomes move unchanged from activities[0-3] to entries[0-3].
+The short request on line 4 proves user_request.truncated is false; the
+unlimited single-turn selection remains complete. These expectations derive
+from the committed evidence and normalization rules, not current CLI output.
+No usage, cost, runtime, throughput, or canonical membership value changes.

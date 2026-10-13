@@ -97,7 +97,7 @@ def qualify() -> None:
         empty = success(runtime, "project.sessions", project_name="absent-project")
         assert empty["items"] == [] and empty["total"] == 0
         overview = success(runtime, "session.overview", session_id=parent[2:])
-        assert overview["root_session_id"] == parent[2:]
+        assert overview["session_id"] == parent[2:]
         assert "page" not in overview
         complete = success(runtime, "session.items", session_id=parent[2:])
         assert complete["returned"] == complete["total"] == len(complete["items"])
@@ -960,10 +960,21 @@ def qualify_living() -> None:
             )
         overview = read("session.overview", session_id=parent[2:])
         large_turn = next(
-            turn for turn in overview["turns"] if len(turn["activities"]) >= 105
+            turn
+            for turn in overview["turns"]
+            if sum(entry["kind"] == "activity" for entry in turn["entries"]) >= 105
         )
-        assert len(large_turn["refs"]["item_ids"]) > 100
-        assert len(large_turn["execution_units"]) > 100
+        assert (
+            len(
+                {
+                    identity
+                    for entry in large_turn["entries"]
+                    for identity in entry["item_ids"]
+                }
+            )
+            > 100
+        )
+        assert "execution_units" not in large_turn
         assert "execution_units" not in overview, "overview duplicated execution layers"
         items = read("session.items", session_id=parent[2:])
         assert items["returned"] == items["total"] == len(items["items"])

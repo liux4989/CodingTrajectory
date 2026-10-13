@@ -71,6 +71,13 @@ by default. Optional `--limit N` selects results; `--turns N` selects the latest
 overview turns. Positive limits have no hard maximum. `--cursor` is removed.
 Ordering is deterministic per call, and logs can change between calls.
 
+`session overview --output json` returns `session_id`, `title`, `turns`, and
+`coverage.selection_trimmed`. Each turn contains its ID, source sequence, start
+timestamp, status, request preview, and ordered `entries` of assistant text and
+tool activity. Previews are bounded to 280 characters and declare `truncated`;
+entries retain item IDs for drill-down. Read graph/tree views for topology and
+`session items` for script execution evidence.
+
 `project sessions` returns discovery cards: session identity, project, title and
 preview, vendors, member session IDs, and modification time. Read session usage
 or stats separately for measurements; cards do not include usage, runtime, or
