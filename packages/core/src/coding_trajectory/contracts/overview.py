@@ -10,6 +10,7 @@ from pydantic import Field, field_serializer
 from coding_trajectory.contracts.base import ContractModel, RequestModel
 from coding_trajectory.ingestion.execution_models import (
     ExecutionUnit,
+    ProcessTrace,
 )
 
 
@@ -33,6 +34,8 @@ class NarrativeToolCall(RequestModel):
     observation: Literal["observed", "source_only"]
     item_id: str | None
     truncated: bool
+    process: ProcessTrace | None = None
+    summary_basis: Literal["process_command", "process_id"] | None = None
 
 
 class NarrativeActivity(RequestModel):

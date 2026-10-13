@@ -24,6 +24,19 @@ class SourceReference(BaseModel):
     local_only: bool = True
 
 
+class ProcessTrace(BaseModel):
+    process_id: str
+    resolution: Literal["resolved", "unresolved", "ambiguous"]
+    poll_arguments: dict[str, Any]
+    command: str | list[str] | None = None
+    arguments: dict[str, Any] | None = None
+    launch_ref: dict[str, Any] | None = None
+    command_ref: dict[str, Any] | None = None
+    poll_ref: dict[str, Any]
+    poll_output_ref: dict[str, Any] | None = None
+    output_ref: dict[str, Any] | None = None
+
+
 class ExternalCall(BaseModel):
     observation: Literal["observed", "source_only"]
     tool_name: str
@@ -44,6 +57,7 @@ class ExternalCall(BaseModel):
     result_ref: dict[str, Any] | None = None
     result_coverage: Literal["recorded", "not_recorded"] = "not_recorded"
     failure: str | None = None
+    process: ProcessTrace | None = None
 
 
 class ContextReferences(BaseModel):

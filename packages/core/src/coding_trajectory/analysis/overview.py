@@ -22,9 +22,11 @@ def _narrative_items(turn: Any) -> list[NarrativeAssistant | NarrativeActivity]:
         build_flows,
         public_activity_outcome,
     )
+    from coding_trajectory.analysis.process_summary import process_summary
     from coding_trajectory.analysis.projection_utils import truncate_text_preview
     from coding_trajectory.analysis.tool_arguments import tool_argument_detail
     from coding_trajectory.analysis.tool_summary import summarize_tool_call
+    from coding_trajectory.ingestion.execution_models import ProcessTrace
 
     items = {str(item.item_id): item for item in turn.items}
     entries = []
@@ -61,6 +63,14 @@ def _narrative_items(turn: Any) -> list[NarrativeAssistant | NarrativeActivity]:
                     text = detail.description if detail else ""
                 else:
                     detail = None
+                process = (
+                    ProcessTrace.model_validate(call["process"])
+                    if call.get("process")
+                    else None
+                )
+                summary_basis = None
+                if process:
+                    text, summary_basis = process_summary(process)
                 tool_calls.append(
                     NarrativeToolCall(
                         tool=call["tool_name"],
@@ -73,6 +83,8 @@ def _narrative_items(turn: Any) -> list[NarrativeAssistant | NarrativeActivity]:
                         truncated=bool((summary or {}).get("description_truncated"))
                         or bool(detail and detail.truncated)
                         or call.get("arguments_coverage") == "truncated",
+                        process=process,
+                        summary_basis=summary_basis,
                     )
                 )
             preview = flow.get("name") or "Tool script"

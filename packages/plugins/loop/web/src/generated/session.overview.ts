@@ -13,7 +13,26 @@ export type Type = "assistant";
 export type Calls = NarrativeToolCall[] | null;
 export type ItemId = string | null;
 export type Observation = "observed" | "source_only";
+export type Arguments = {
+  [k: string]: unknown;
+} | null;
+export type Command = string | string[] | null;
+export type CommandRef = {
+  [k: string]: unknown;
+} | null;
+export type LaunchRef = {
+  [k: string]: unknown;
+} | null;
+export type OutputRef = {
+  [k: string]: unknown;
+} | null;
+export type PollOutputRef = {
+  [k: string]: unknown;
+} | null;
+export type ProcessId = string;
+export type Resolution = "resolved" | "unresolved" | "ambiguous";
 export type Status = ("succeeded" | "failed" | "unfinished") | null;
+export type SummaryBasis = ("process_command" | "process_id") | null;
 export type Text1 = string;
 export type Tool = string;
 export type Truncated2 = boolean;
@@ -74,10 +93,30 @@ export interface NarrativeActivity {
 export interface NarrativeToolCall {
   item_id: ItemId;
   observation: Observation;
+  process?: ProcessTrace | null;
   status: Status;
+  summary_basis?: SummaryBasis;
   text: Text1;
   tool: Tool;
   truncated: Truncated2;
+}
+export interface ProcessTrace {
+  arguments?: Arguments;
+  command?: Command;
+  command_ref?: CommandRef;
+  launch_ref?: LaunchRef;
+  output_ref?: OutputRef;
+  poll_arguments: PollArguments;
+  poll_output_ref?: PollOutputRef;
+  poll_ref: PollRef;
+  process_id: ProcessId;
+  resolution: Resolution;
+}
+export interface PollArguments {
+  [k: string]: unknown;
+}
+export interface PollRef {
+  [k: string]: unknown;
 }
 export interface NarrativeRequest {
   event_id: EventId;

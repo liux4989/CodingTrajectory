@@ -88,6 +88,23 @@ expected metric value changes.
 
 ## Overview property names revision
 
+The polling evidence revision advances `session.overview` from 10 to 11.
+Narrative calls add optional `process` and `summary_basis`; the latter distinguishes
+a derived command summary from a process-ID fallback. `ExternalCall` adds the
+same optional process evidence, so methods exposing that shared definition also
+advance: `session.summary` 5 to 6, `session.search` 4 to 5, `graph.overview` 7 to 8,
+`session.usage`, `graph.usage`, and `session.model_usage` 6 to 7,
+`session.request_usage` 8 to 9, `session.tool_usage` and `session.events` 7 to 8,
+and `session.items` 8 to 9. Requests and metric calculations are unchanged.
+Explicit old method versions must migrate; the CLI uses current versions.
+
+Process links use static polling arguments, recorded launch results, and native
+command identity when available. Only preceding launches within the same source
+snapshot are eligible. Missing or ambiguous origins retain the process-ID
+fallback. Full command arguments and source record indices/digests remain in
+JSON, with a separately scoped script-output reference for the polling wrapper.
+Resolving the target never promotes a source-only call to an observed execution.
+
 The subsequent `session.overview` method version 10 adds optional activity
 `calls` for scripts. Each call declares `tool`, bounded `text`, recorded `status`,
 `observation` (`observed` or `source_only`), optional `item_id`, and `truncated`.

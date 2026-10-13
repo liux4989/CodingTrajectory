@@ -193,7 +193,9 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                 annotation = f" [{state}]" if state else ""
                 if entry["tool"] == "tool_script":
                     calls = entry.get("calls") or []
-                    lines.append(f"- Tool script{annotation} · {len(calls)} listed calls")
+                    lines.append(
+                        f"- Tool script{annotation} · {len(calls)} listed calls"
+                    )
                     for call in calls:
                         call_state = (
                             "source only"
@@ -201,7 +203,13 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
                             else call["status"] or "unknown"
                         )
                         detail = f": {call['text']}" if call["text"] else ""
-                        lines.append(f"  - {call['tool']} [{call_state}]{detail}")
+                        call_annotation = (
+                            ""
+                            if call.get("process")
+                            and call["observation"] == "source_only"
+                            else f" [{call_state}]"
+                        )
+                        lines.append(f"  - {call['tool']}{call_annotation}{detail}")
                         shortened = shortened or call["truncated"]
                 else:
                     detail = (

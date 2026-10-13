@@ -207,6 +207,17 @@ or queries. Script lifecycle is labeled separately; source-only calls are marked
 `source only` and do not imply execution. JSON retains item IDs for inspection
 through `session items` and exposes the structured list as activity `calls`.
 
+Polling calls such as `write_stdin` resolve their process ID to a preceding
+execution result and its originating command when the records provide an
+unambiguous link. Markdown shows a derived job description, such as
+`write_stdin: Collect overview and graph validation results`, or falls back to
+`Poll process 30525`. Sending nonempty input is labeled separately. JSON keeps
+`process` with original command arguments and launch, command, polling, and
+output source references, plus `summary_basis`. A derived description does not
+establish that the poll executed or that validation passed; JSON retains the
+call's observation and outcome. Described polling entries omit the source-only
+badge in Markdown, while other source-only call sites retain it.
+
 Stats separates external tool observations from the resident-content tree.
 Script IDs do not become categories: script source and unassigned emitted output
 retain content custody, while independently measured tool content aggregates by

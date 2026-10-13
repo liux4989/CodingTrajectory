@@ -88,6 +88,24 @@ export type ItemId4 = string | null;
 export type Observation = "observed" | "source_only";
 export type Outcome = ("succeeded" | "failed" | "unfinished") | null;
 export type OwnershipBasis = string;
+export type Arguments = {
+  [k: string]: unknown;
+} | null;
+export type Command = string | string[] | null;
+export type CommandRef = {
+  [k: string]: unknown;
+} | null;
+export type LaunchRef = {
+  [k: string]: unknown;
+} | null;
+export type OutputRef = {
+  [k: string]: unknown;
+} | null;
+export type PollOutputRef = {
+  [k: string]: unknown;
+} | null;
+export type ProcessId = string;
+export type Resolution = "resolved" | "unresolved" | "ambiguous";
 export type ProviderCallId1 = string | null;
 export type ResultCoverage = "recorded" | "not_recorded";
 export type ResultRef = {
@@ -296,6 +314,7 @@ export interface ExternalCall {
   observation: Observation;
   outcome?: Outcome;
   ownership_basis: OwnershipBasis;
+  process?: ProcessTrace | null;
   provider_call_id?: ProviderCallId1;
   result_coverage?: ResultCoverage;
   result_ref?: ResultRef;
@@ -304,6 +323,24 @@ export interface ExternalCall {
   tool_name: ToolName2;
 }
 export interface EvidenceRef {
+  [k: string]: unknown;
+}
+export interface ProcessTrace {
+  arguments?: Arguments;
+  command?: Command;
+  command_ref?: CommandRef;
+  launch_ref?: LaunchRef;
+  output_ref?: OutputRef;
+  poll_arguments: PollArguments;
+  poll_output_ref?: PollOutputRef;
+  poll_ref: PollRef;
+  process_id: ProcessId;
+  resolution: Resolution;
+}
+export interface PollArguments {
+  [k: string]: unknown;
+}
+export interface PollRef {
   [k: string]: unknown;
 }
 export interface ExecutionResult {

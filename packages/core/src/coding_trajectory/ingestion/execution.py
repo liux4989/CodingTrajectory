@@ -29,6 +29,10 @@ from coding_trajectory.ingestion.execution_sources import (
     source_reference,
 )
 from coding_trajectory.ingestion.models import Item, Session
+from coding_trajectory.ingestion.process_tracing import (
+    attach_process_traces,
+    process_origins,
+)
 from coding_trajectory.ingestion.source_calls import (
     SourceCall,
     argument_strings,
@@ -905,6 +909,17 @@ def build_session_execution_layer(
                     if i
                 )
     snapshot_digest = hashlib.sha256(snapshot).hexdigest()
+    native_parents = {}
+    for turn in session.turns:
+        for item in turn.items:
+            _, provenance = _activity(item)
+            if provenance.get("native_command_id") and provenance.get(
+                "parent_tool_call_id"
+            ):
+                native_parents[provenance["native_command_id"]] = provenance[
+                    "parent_tool_call_id"
+                ]
+    origins = process_origins(records, source, snapshot_digest, native_parents)
     scripts: dict[str, ToolScriptExecution] = {}
     direct_sources: dict[str, SourceReference] = {}
     owned: set[str] = set()
@@ -980,6 +995,8 @@ def build_session_execution_layer(
                 direct_sources[str(item.item_id)] = reference
                 continue
             script = build_tool_script(evidence, reference)
+            if language == "javascript":
+                attach_process_traces(script, text, origins)
             scripts[str(item.item_id)] = script
             owned.update(script.item_ids)
     for turn in session.turns:
