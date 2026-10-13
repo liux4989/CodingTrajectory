@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
 from coding_trajectory.contracts.overview import (
     NarrativeActivity,
     NarrativeAssistant,
+    NarrativeToolCall,
     NarrativeTurn,
     OverviewSession,
     OverviewTurn,
@@ -21,6 +23,8 @@ def _narrative_items(turn: Any) -> list[NarrativeAssistant | NarrativeActivity]:
         public_activity_outcome,
     )
     from coding_trajectory.analysis.projection_utils import truncate_text_preview
+    from coding_trajectory.analysis.tool_arguments import tool_argument_detail
+    from coding_trajectory.analysis.tool_summary import summarize_tool_call
 
     items = {str(item.item_id): item for item in turn.items}
     entries = []
@@ -38,19 +42,40 @@ def _narrative_items(turn: Any) -> list[NarrativeAssistant | NarrativeActivity]:
             )
             continue
         script = flow.get("script")
+        tool_calls = None
         if script:
-            calls = script["observed_external_calls"]
-            labels = [
-                f"{call['tool_name']} [{call.get('outcome') or 'unknown'}]"
-                for call in calls
-            ]
-            labels.extend(
-                f"{call['tool_name']} [source only]"
-                for call in script["source_only_calls"]
-            )
-            preview = "; ".join(labels) or flow.get("name") or "Tool script"
-            if not calls:
-                preview += f" (script {script['result']['lifecycle']})"
+            tool_calls = []
+            for call in [
+                *script["observed_external_calls"],
+                *script["source_only_calls"],
+            ]:
+                child = items.get(call.get("item_id"))
+                summary = summarize_tool_call(child) if child else None
+                text = (summary or {}).get("description") or ""
+                if not text and call["observation"] == "observed":
+                    detail = tool_argument_detail(
+                        SimpleNamespace(
+                            kind="tool_call", input=call.get("arguments_preview")
+                        )
+                    )
+                    text = detail.description if detail else ""
+                else:
+                    detail = None
+                tool_calls.append(
+                    NarrativeToolCall(
+                        tool=call["tool_name"],
+                        text=truncate_text_preview(text, max_len=280),
+                        status=call.get("outcome")
+                        if call["observation"] == "observed"
+                        else None,
+                        observation=call["observation"],
+                        item_id=call.get("item_id"),
+                        truncated=bool((summary or {}).get("description_truncated"))
+                        or bool(detail and detail.truncated)
+                        or call.get("arguments_coverage") == "truncated",
+                    )
+                )
+            preview = flow.get("name") or "Tool script"
             activity_type = "tool_script"
             status = script["result"]["lifecycle"]
             # Script lifecycle describes its wrapper, not nested call outcomes.
@@ -74,6 +99,7 @@ def _narrative_items(turn: Any) -> list[NarrativeAssistant | NarrativeActivity]:
                 outcome=outcome,
                 item_ids=item_ids,
                 truncated=truncated or len(" ".join(preview.split())) > 280,
+                calls=tool_calls,
             )
         )
     return entries

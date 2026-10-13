@@ -88,6 +88,15 @@ expected metric value changes.
 
 ## Overview property names revision
 
+The subsequent `session.overview` method version 10 adds optional activity
+`calls` for scripts. Each call declares `tool`, bounded `text`, recorded `status`,
+`observation` (`observed` or `source_only`), optional `item_id`, and `truncated`.
+Script lifecycle remains the enclosing activity's status and never supplies a
+nested call outcome. Markdown groups the calls beneath the script; JSON keeps
+their inspection references. Requests and metric values are unchanged. Consumers
+can read `calls` instead of parsing the former combined script summary text;
+explicit version 9 requests must migrate to version 10.
+
 `session.overview` method version 9 uses familiar property names throughout its
 result. Version 8 is rejected when explicitly requested. Requests are unchanged.
 

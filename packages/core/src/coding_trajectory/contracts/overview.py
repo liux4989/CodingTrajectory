@@ -26,6 +26,15 @@ class NarrativeAssistant(RequestModel):
     truncated: bool
 
 
+class NarrativeToolCall(RequestModel):
+    tool: str
+    text: str = Field(max_length=280)
+    status: Literal["succeeded", "failed", "unfinished"] | None
+    observation: Literal["observed", "source_only"]
+    item_id: str | None
+    truncated: bool
+
+
 class NarrativeActivity(RequestModel):
     type: Literal["activity"] = "activity"
     tool: str
@@ -34,6 +43,7 @@ class NarrativeActivity(RequestModel):
     outcome: Literal["succeeded", "failed"] | None
     item_ids: list[str] = Field(min_length=1)
     truncated: bool
+    calls: list[NarrativeToolCall] | None = None
 
 
 NarrativeItem = Annotated[

@@ -111,7 +111,7 @@ SERVICE_CONTRACTS = {
         ),
         ServiceContract(
             "session.overview",
-            9,
+            10,
             SessionOverviewRequest,
             SessionOverviewResponse,
         ),
