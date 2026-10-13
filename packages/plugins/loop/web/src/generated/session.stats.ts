@@ -3,6 +3,12 @@
 export type BilledTokenUsage = {
   [k: string]: unknown;
 } | null;
+export type Compaction = {
+  [k: string]: unknown;
+} | null;
+export type CostSummary = {
+  [k: string]: unknown;
+} | null;
 export type Attribution = "membership_does_not_allocate_content_or_usage";
 export type Count = number;
 export type ToolName = string;
@@ -105,7 +111,9 @@ export type Warnings = string[];
 
 export interface SessionStatsResponse {
   billed_token_usage?: BilledTokenUsage;
+  compaction?: Compaction;
   context_window?: ContextWindow;
+  cost_summary?: CostSummary;
   execution_composition?: ExecutionComposition | null;
   execution_units?: ExecutionUnits;
   messages?: Messages;

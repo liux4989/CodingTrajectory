@@ -329,8 +329,10 @@ class SessionStatsResponse(ContractModel):
     model: dict[str, Any] = Field(default_factory=dict)
     context_window: dict[str, Any] = Field(default_factory=dict)
     runtime: dict[str, Any] = Field(default_factory=dict)
+    compaction: dict[str, Any] | None = None
     messages: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
+    cost_summary: dict[str, Any] | None = None
     billed_token_usage: dict[str, Any] | None = None
     provider_usage_buckets: list[dict[str, Any]] = Field(default_factory=list)
     sessions: list[dict[str, Any]] | None = None
@@ -641,14 +643,22 @@ class CliSessionStatsResponse(ContractModel):
     execution_units: list[TurnExecutionLayer] = Field(default_factory=list)
     execution_composition: ExecutionComposition | None = None
     id: str
+    session_id: str | None = None
+    role: str | None = None
+    relationship: str | None = None
+    parent: str | None = None
+    agent_name: str | None = None
+    title: str | None = None
     scope: str | None = None
     vendor: str | None = None
     model: dict[str, Any] | None = None
-    context_window: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     provider_usage_buckets: list[dict[str, Any]] | None = None
     runtime: dict[str, Any] | None = None
+    compaction: dict[str, Any] | None = None
     messages: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
+    cost_summary: dict[str, Any] | None = None
     billed_token_usage: dict[str, Any] | None = None
     sessions: list[dict[str, Any]] | None = None
     warnings: list[str] = Field(default_factory=list)

@@ -8,6 +8,13 @@ JSON Schemas, and the local API envelopes. The retired published-facts schema
 is not a public dependency of local canonical queries.
 CLI projections and plugin protocols are separate consumer contracts.
 
+Stats schemas declare the existing `compaction` and `cost_summary` output fields.
+The CLI stats projection uses `context`, while Core uses `context_window`; CLI
+per-session identity fields are declared alongside `id`. This declaration repair
+retains existing populated fields and metric values without changing method
+versions. CLI validation no longer inserts an unused `context_window: null`;
+newly declared optional fields use the contract's usual null defaults.
+
 The approved complete-local revision uses `ct.api.v2` and increments every
 method version by one. Success envelopes contain `result`; constant transport
 metadata is removed. Old explicit API and method versions are rejected.
