@@ -132,3 +132,15 @@ The short request on line 4 proves user_request.truncated is false; the
 unlimited single-turn selection remains complete. These expectations derive
 from the committed evidence and normalization rules, not current CLI output.
 No usage, cost, runtime, throughput, or canonical membership value changes.
+
+
+## Overview property names v9
+
+This is a naming-only migration of session.overview v8: source_sequence becomes
+sequence, user_request becomes request, entries becomes items, kind becomes
+type, activity_type becomes tool, preview becomes text, and
+coverage.selection_trimmed becomes coverage.truncated. Stable session, turn,
+item, and event reference names remain explicit. Text remains a bounded preview.
+All assertion values and source references remain unchanged. The evidence and
+normalization audited under Session narrative v8 still apply; no metric value,
+source ordering, outcome, or coverage semantics changes.

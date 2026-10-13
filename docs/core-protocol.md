@@ -86,6 +86,27 @@ Qualification includes the protocol gate, local source-selection workflow,
 Loop consumer check, and source-audited metric baselines. No metric formula or
 expected metric value changes.
 
+## Overview property names revision
+
+`session.overview` method version 9 uses familiar property names throughout its
+result. Version 8 is rejected when explicitly requested. Requests are unchanged.
+
+| Version 8 | Version 9 |
+| --- | --- |
+| `source_sequence` | `sequence` |
+| `user_request` | `request` |
+| `entries` | `items` |
+| `kind` | `type` |
+| `activity_type` | `tool` |
+| `preview` | `text` |
+| `coverage.selection_trimmed` | `coverage.truncated` |
+
+`text` remains a bounded 280-character preview, with its own `truncated` flag.
+`coverage.truncated` describes turn selection only. Identity/reference names,
+ordering, outcomes, and coverage semantics are unchanged. The CLI, Loop consumer
+types and rendering, and source-audited assertions migrate together. Graph and
+canonical item/event schemas retain their existing names and versions.
+
 ## Complete local living revision
 
 Living result identifiers advance alongside the common method/envelope revision:

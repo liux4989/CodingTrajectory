@@ -2,17 +2,17 @@
   "schema_version": 1,
   "method": "session.overview",
   "assertions": [
-    {"path": "$.session_id", "expected": "019f1862-7c7e-7b61-b0f2-be002e4d5922", "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].status", "expected": "completed", "source_refs": ["source/session.jsonl:4", "source/session.jsonl:13"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.coverage.selection_trimmed", "expected": false, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].user_request.truncated", "expected": false, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[0].activity_type", "expected": "bash", "source_refs": ["source/session.jsonl:5-6"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[0].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:5-6"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[1].activity_type", "expected": "bash", "source_refs": ["source/session.jsonl:7-8"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[1].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:7-8"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[2].activity_type", "expected": "bash", "source_refs": ["source/session.jsonl:9-10"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[2].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:9-10"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[3].activity_type", "expected": "bash", "source_refs": ["source/session.jsonl:11-12"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].entries[3].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:11-12"], "audit_ref": "audit.md#session-narrative-v8"}
+    {"path": "$.session_id", "expected": "019f1862-7c7e-7b61-b0f2-be002e4d5922", "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].status", "expected": "completed", "source_refs": ["source/session.jsonl:4", "source/session.jsonl:13"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.coverage.truncated", "expected": false, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].request.truncated", "expected": false, "source_refs": ["source/session.jsonl:4-13"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[0].tool", "expected": "bash", "source_refs": ["source/session.jsonl:5-6"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[0].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:5-6"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[1].tool", "expected": "bash", "source_refs": ["source/session.jsonl:7-8"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[1].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:7-8"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[2].tool", "expected": "bash", "source_refs": ["source/session.jsonl:9-10"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[2].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:9-10"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[3].tool", "expected": "bash", "source_refs": ["source/session.jsonl:11-12"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].items[3].outcome", "expected": "succeeded", "source_refs": ["source/session.jsonl:11-12"], "audit_ref": "audit.md#overview-property-names-v9"}
   ]
 }

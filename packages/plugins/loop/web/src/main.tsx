@@ -657,25 +657,25 @@ function InvestigationView({
             {overviewTurns.map((turn) => (
               <article className="turn" key={turn.turn_id}>
                 <div className="section-heading">
-                  <h3>Turn {turn.source_sequence + 1}</h3>
+                  <h3>Turn {turn.sequence + 1}</h3>
                   <Badge variant="outline">
                     {turn.status || "Unknown status"}
                   </Badge>
                 </div>
                 <p className="muted small">{date(turn.started_at)}</p>
-                <p>{turn.user_request?.preview || "Request content unavailable"}</p>
-                {turn.user_request?.truncated && (
-                  <p className="muted small">Request preview shortened.</p>
+                <p>{turn.request?.text || "Request content unavailable"}</p>
+                {turn.request?.truncated && (
+                  <p className="muted small">Request text shortened.</p>
                 )}
-                {turn.entries.map((entry) => (
+                {turn.items.map((entry) => (
                   <div
-                    className={entry.kind === "activity" ? "activity" : undefined}
+                    className={entry.type === "activity" ? "activity" : undefined}
                     key={entry.item_ids[0]}
                   >
                     <p>
-                      {entry.kind === "activity" && <>{entry.activity_type} · </>}
-                      {entry.preview}
-                      {entry.kind === "activity" && (
+                      {entry.type === "activity" && <>{entry.tool} · </>}
+                      {entry.text}
+                      {entry.type === "activity" && (
                         <> · {entry.outcome || entry.status || "Outcome unknown"}</>
                       )}
                     </p>
@@ -708,7 +708,7 @@ function InvestigationView({
                 </EvidenceLink>
               </article>
             ))}
-            {overview.data?.result.coverage.selection_trimmed && (
+            {overview.data?.result.coverage.truncated && (
               <p className="muted small">Showing selected latest turns.</p>
             )}
             {overview.data && !overviewTurns.length && (

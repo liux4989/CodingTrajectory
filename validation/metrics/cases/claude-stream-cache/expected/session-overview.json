@@ -2,7 +2,7 @@
   "schema_version": 1,
   "method": "session.overview",
   "assertions": [
-    {"path": "$.session_id", "expected": "49852109-2333-42d2-8abb-bd55d812ee2d", "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].status", "expected": "completed", "source_refs": ["source/session.jsonl:1", "source/session.jsonl:5"], "audit_ref": "audit.md#session-narrative-v8"}
+    {"path": "$.session_id", "expected": "49852109-2333-42d2-8abb-bd55d812ee2d", "source_refs": ["source/session.jsonl:1"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].status", "expected": "completed", "source_refs": ["source/session.jsonl:1", "source/session.jsonl:5"], "audit_ref": "audit.md#overview-property-names-v9"}
   ]
 }

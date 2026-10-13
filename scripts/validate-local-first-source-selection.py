@@ -962,13 +962,13 @@ def qualify_living() -> None:
         large_turn = next(
             turn
             for turn in overview["turns"]
-            if sum(entry["kind"] == "activity" for entry in turn["entries"]) >= 105
+            if sum(entry["type"] == "activity" for entry in turn["items"]) >= 105
         )
         assert (
             len(
                 {
                     identity
-                    for entry in large_turn["entries"]
+                    for entry in large_turn["items"]
                     for identity in entry["item_ids"]
                 }
             )
@@ -1036,10 +1036,10 @@ def qualify_living() -> None:
                     stream.write(json.dumps(record) + "\n")
         many = read("session.overview", session_id=parent[2:])
         assert len(many["turns"]) > 200
-        assert not many["coverage"]["selection_trimmed"]
+        assert not many["coverage"]["truncated"]
         one = read("session.overview", session_id=parent[2:], limit=1)
         assert one["turns"] == many["turns"][-1:]
-        assert one["coverage"]["selection_trimmed"]
+        assert one["coverage"]["truncated"]
         beyond = read("session.overview", session_id=parent[2:], limit=201)
         assert len(beyond["turns"]) == 201
         assert beyond["turns"] == many["turns"][-201:]

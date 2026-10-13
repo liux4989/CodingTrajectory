@@ -2,8 +2,8 @@
   "schema_version": 1,
   "method": "session.overview",
   "assertions": [
-    {"path": "$.session_id", "expected": "019f17c0-0000-7000-8000-000000000001", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].status", "expected": "completed", "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#session-narrative-v8"},
-    {"path": "$.turns[0].source_sequence", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#session-narrative-v8"}
+    {"path": "$.session_id", "expected": "019f17c0-0000-7000-8000-000000000001", "source_refs": ["source/parent.jsonl:1"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].status", "expected": "completed", "source_refs": ["source/parent.jsonl:6"], "audit_ref": "audit.md#overview-property-names-v9"},
+    {"path": "$.turns[0].sequence", "expected": 0, "source_refs": ["source/parent.jsonl:2-6"], "audit_ref": "audit.md#overview-property-names-v9"}
   ]
 }

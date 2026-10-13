@@ -175,32 +175,32 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
     lines.append(f"{len(turns)} visible turn{'s' if len(turns) != 1 else ''}")
     shortened = False
     for turn in turns:
-        request = turn["user_request"]
+        request = turn["request"]
         lines.extend(
             [
                 "",
-                f"### Turn {turn['source_sequence'] + 1} · {turn['status']}",
-                request["preview"] if request else "Request unavailable",
+                f"### Turn {turn['sequence'] + 1} · {turn['status']}",
+                request["text"] if request else "Request unavailable",
             ]
         )
         shortened = shortened or bool(request and request["truncated"])
-        for entry in turn["entries"]:
+        for entry in turn["items"]:
             shortened = shortened or entry["truncated"]
-            if entry["kind"] == "assistant":
-                lines.append(f"Assistant: {entry['preview']}")
+            if entry["type"] == "assistant":
+                lines.append(f"Assistant: {entry['text']}")
             else:
                 state = entry["outcome"] or entry["status"]
                 annotation = f" [{state}]" if state else ""
-                if entry["activity_type"] == "tool_script":
-                    lines.append(f"- {entry['preview']}")
+                if entry["tool"] == "tool_script":
+                    lines.append(f"- {entry['text']}")
                 else:
                     detail = (
-                        f": {entry['preview']}"
-                        if entry["preview"] != entry["activity_type"]
+                        f": {entry['text']}"
+                        if entry["text"] != entry["tool"]
                         else ""
                     )
-                    lines.append(f"- {entry['activity_type']}{annotation}{detail}")
-    if payload["coverage"]["selection_trimmed"]:
+                    lines.append(f"- {entry['tool']}{annotation}{detail}")
+    if payload["coverage"]["truncated"]:
         lines.extend(["", "Showing selected latest turns · source order"])
     if shortened:
         lines.extend(

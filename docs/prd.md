@@ -151,6 +151,10 @@ and enrichment ownership is defined in [`loop-design.md`](loop-design.md).
   own truncation flags and supporting item or event IDs. Script lifecycle is
   separate from nested call outcomes; wrapper completion never proves nested
   success. Tool types retain recorded identities rather than inferred categories.
+- The overview uses `sequence`, `request`, `items`, `type`, `tool`, and `text` for
+  its display properties. Each text preview declares `truncated`;
+  `coverage.truncated` separately declares limited turn selection. Stable
+  `session_id`, `turn_id`, `item_ids`, and `event_id` references stay explicit.
 - Session overview does not embed graph topology, session metadata inventories,
   metric totals, or execution evidence. Consumers use graph/tree queries for
   topology and item/event queries for expanded evidence.

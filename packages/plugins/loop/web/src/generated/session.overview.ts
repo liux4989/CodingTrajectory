@@ -1,33 +1,33 @@
 /* Generated from Core freeze / Loop Pydantic. Do not edit. */
 
-export type SelectionTrimmed = boolean;
+export type Truncated = boolean;
 export type SessionId = string;
 export type Title = string | null;
 /**
  * @minItems 1
  */
 export type ItemIds = [string, ...string[]];
-export type Kind = "assistant";
-export type Preview = string;
-export type Truncated = boolean;
-export type ActivityType = string;
+export type Text = string;
+export type Truncated1 = boolean;
+export type Type = "assistant";
 /**
  * @minItems 1
  */
 export type ItemIds1 = [string, ...string[]];
-export type Kind1 = "activity";
 export type Outcome = ("succeeded" | "failed") | null;
-export type Preview1 = string;
 export type Status = string | null;
-export type Truncated1 = boolean;
-export type Entries = (NarrativeAssistant | NarrativeActivity)[];
-export type SourceSequence = number;
+export type Text1 = string;
+export type Tool = string;
+export type Truncated2 = boolean;
+export type Type1 = "activity";
+export type Items = (NarrativeAssistant | NarrativeActivity)[];
+export type EventId = string | null;
+export type Text2 = string;
+export type Truncated3 = boolean;
+export type Sequence = number;
 export type StartedAt = string | null;
 export type Status1 = string;
 export type TurnId = string;
-export type EventId = string | null;
-export type Preview2 = string;
-export type Truncated2 = boolean;
 export type Turns = NarrativeTurn[];
 
 export interface SessionOverviewResponse {
@@ -38,33 +38,33 @@ export interface SessionOverviewResponse {
   [k: string]: unknown;
 }
 export interface NarrativeCoverage {
-  selection_trimmed: SelectionTrimmed;
+  truncated: Truncated;
 }
 export interface NarrativeTurn {
-  entries: Entries;
-  source_sequence: SourceSequence;
+  items: Items;
+  request: NarrativeRequest | null;
+  sequence: Sequence;
   started_at: StartedAt;
   status: Status1;
   turn_id: TurnId;
-  user_request: NarrativeRequest | null;
 }
 export interface NarrativeAssistant {
   item_ids: ItemIds;
-  kind?: Kind;
-  preview: Preview;
-  truncated: Truncated;
+  text: Text;
+  truncated: Truncated1;
+  type?: Type;
 }
 export interface NarrativeActivity {
-  activity_type: ActivityType;
   item_ids: ItemIds1;
-  kind?: Kind1;
   outcome: Outcome;
-  preview: Preview1;
   status: Status;
-  truncated: Truncated1;
+  text: Text1;
+  tool: Tool;
+  truncated: Truncated2;
+  type?: Type1;
 }
 export interface NarrativeRequest {
   event_id: EventId;
-  preview: Preview2;
-  truncated: Truncated2;
+  text: Text2;
+  truncated: Truncated3;
 }

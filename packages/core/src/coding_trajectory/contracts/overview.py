@@ -14,44 +14,44 @@ from coding_trajectory.ingestion.execution_models import (
 
 
 class NarrativeRequest(RequestModel):
-    preview: str = Field(max_length=280)
+    text: str = Field(max_length=280)
     event_id: str | None
     truncated: bool
 
 
 class NarrativeAssistant(RequestModel):
-    kind: Literal["assistant"] = "assistant"
-    preview: str = Field(max_length=280)
+    type: Literal["assistant"] = "assistant"
+    text: str = Field(max_length=280)
     item_ids: list[str] = Field(min_length=1)
     truncated: bool
 
 
 class NarrativeActivity(RequestModel):
-    kind: Literal["activity"] = "activity"
-    activity_type: str
-    preview: str = Field(max_length=280)
+    type: Literal["activity"] = "activity"
+    tool: str
+    text: str = Field(max_length=280)
     status: str | None
     outcome: Literal["succeeded", "failed"] | None
     item_ids: list[str] = Field(min_length=1)
     truncated: bool
 
 
-NarrativeEntry = Annotated[
-    NarrativeAssistant | NarrativeActivity, Field(discriminator="kind")
+NarrativeItem = Annotated[
+    NarrativeAssistant | NarrativeActivity, Field(discriminator="type")
 ]
 
 
 class NarrativeTurn(RequestModel):
     turn_id: str
-    source_sequence: int = Field(ge=0)
+    sequence: int = Field(ge=0)
     started_at: datetime | None
     status: str
-    user_request: NarrativeRequest | None
-    entries: list[NarrativeEntry]
+    request: NarrativeRequest | None
+    items: list[NarrativeItem]
 
 
 class NarrativeCoverage(RequestModel):
-    selection_trimmed: bool
+    truncated: bool
 
 
 class SessionNarrativeResponse(ContractModel):
