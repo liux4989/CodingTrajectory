@@ -191,10 +191,15 @@ def _render_session_overview_text(payload: dict[str, Any]) -> str:
             else:
                 state = entry["outcome"] or entry["status"]
                 annotation = f" [{state}]" if state else ""
-                refs = ", ".join(f"`{identity}`" for identity in entry["item_ids"])
-                lines.append(
-                    f"- {entry['activity_type']}{annotation}: {entry['preview']} (items {refs})"
-                )
+                if entry["activity_type"] == "tool_script":
+                    lines.append(f"- {entry['preview']}")
+                else:
+                    detail = (
+                        f": {entry['preview']}"
+                        if entry["preview"] != entry["activity_type"]
+                        else ""
+                    )
+                    lines.append(f"- {entry['activity_type']}{annotation}{detail}")
     if payload["coverage"]["selection_trimmed"]:
         lines.extend(["", "Showing selected latest turns · source order"])
     if shortened:

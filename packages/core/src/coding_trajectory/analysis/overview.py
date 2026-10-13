@@ -39,12 +39,23 @@ def _narrative_entries(turn: Any) -> list[NarrativeAssistant | NarrativeActivity
             continue
         script = flow.get("script")
         if script:
-            preview = script.get("source_preview") or flow.get("name") or "Tool script"
+            calls = script["observed_external_calls"]
+            labels = [
+                f"{call['tool_name']} [{call.get('outcome') or 'unknown'}]"
+                for call in calls
+            ]
+            labels.extend(
+                f"{call['tool_name']} [source only]"
+                for call in script["source_only_calls"]
+            )
+            preview = "; ".join(labels) or flow.get("name") or "Tool script"
+            if not calls:
+                preview += f" (script {script['result']['lifecycle']})"
             activity_type = "tool_script"
             status = script["result"]["lifecycle"]
             # Script lifecycle describes its wrapper, not nested call outcomes.
             outcome = None
-            truncated = script["source_preview_truncated"]
+            truncated = False
             item_ids = script["item_ids"]
         else:
             activity_type = flow["name"]

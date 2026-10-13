@@ -195,6 +195,11 @@ coverage. All matching activities and references are included. Items/events/sear
 `script_id` and resolve returned children's parents without adding ledger rows.
 Direct tools remain direct items, with source references where available.
 
+Session overview Markdown shows script tool names and recorded call outcomes,
+rather than script source snippets or raw item IDs. Script lifecycle is labeled
+separately; source-only calls are marked `source only` and do not imply execution.
+JSON retains item IDs for inspection through `session items`.
+
 Stats separates external tool observations from the resident-content tree.
 Script IDs do not become categories: script source and unassigned emitted output
 retain content custody, while independently measured tool content aggregates by
